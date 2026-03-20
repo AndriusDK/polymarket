@@ -9,7 +9,6 @@ const state = {
   running: false,
   autoLoop: false,
   abortCtrl: null,
-  priceTicker: null,   // setInterval handle for live PnL refresh
   stats: {
     fetched: 0, analyzed: 0, opps: 0, trades: 0,
     spent: 0, cycle: 0,
@@ -272,11 +271,14 @@ async function runCycle() {
 
     // Record position for PnL tracking
     const entryPrice = a.signal === "BUY_YES" ? a.market.yesPrice : (1 - a.market.yesPrice);
+    // tokenId is the specific token we're holding (for WS subscription)
+    const tokenId = a.signal === "BUY_YES" ? a.market.yesTokenId : a.market.noTokenId;
     const trade = {
       id: Date.now() + state.stats.trades,
       time: new Date().toUTCString().slice(-12, -4),
       question: a.market.question,
       conditionId: a.market.conditionId,
+      tokenId,
       signal: a.signal,
       entryPrice: entryPrice,
       amount: amount,
@@ -289,7 +291,7 @@ async function runCycle() {
     };
     state.trades.push(trade);
     addTradeRow(trade);
-    startPriceTicker(); // begin live PnL refresh if not already running
+    priceStream.subscribe(tokenId); // subscribe to real-time WS feed
 
     dailySpent += amount;
     state.stats.trades++;
@@ -551,6 +553,10 @@ function closePosition(trade, reason) {
   if (idx === -1) return;
   state.trades.splice(idx, 1);
 
+  // Unsubscribe from WS if no other position uses this token
+  const stillNeeded = state.trades.some(t => t.tokenId === trade.tokenId);
+  if (!stillNeeded) priceStream.unsubscribe(trade.tokenId);
+
   const realized = trade.unrealizedPnl;
   state.realizedPnl = (state.realizedPnl || 0) + realized;
 
@@ -570,26 +576,116 @@ function closePosition(trade, reason) {
 
 // ── Live price ticker (30s refresh for open positions) ────────────
 
-function startPriceTicker() {
-  if (state.priceTicker) return; // already running
-  state.priceTicker = setInterval(async () => {
-    if (state.trades.length === 0) return;
-    try {
-      const ids = [...new Set(state.trades.map(t => t.conditionId))];
-      const markets = await fetchMarketPrices(ids);
-      if (markets.length) updatePositionPrices(markets);
-    } catch {
-      // silent — ticker will retry next interval
-    }
-  }, 30_000);
-}
+// ── Real-time price stream via Polymarket WebSocket ──────────────
 
-function stopPriceTicker() {
-  if (state.priceTicker) {
-    clearInterval(state.priceTicker);
-    state.priceTicker = null;
+const POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+
+const priceStream = (() => {
+  let ws = null;
+  let pingTimer = null;
+  let reconnectTimer = null;
+  const subscribed = new Set(); // tokenIds currently subscribed
+
+  function onMessage(evt) {
+    // Server sends PONG or JSON array
+    if (evt.data === "PONG") return;
+    let msgs;
+    try { msgs = JSON.parse(evt.data); } catch { return; }
+    if (!Array.isArray(msgs)) msgs = [msgs];
+    for (const msg of msgs) {
+      if (msg.event_type === "best_bid_ask" || msg.type === "best_bid_ask") {
+        const tokenId = msg.asset_id;
+        const bid = parseFloat(msg.best_bid ?? msg.bid ?? 0);
+        if (!tokenId || !bid) continue;
+        // Update all trades holding this token
+        let changed = false;
+        for (const t of state.trades) {
+          if (t.tokenId !== tokenId) continue;
+          t.currentPrice = bid;
+          t.unrealizedPnl = t.shares * bid - t.amount;
+          changed = true;
+        }
+        if (changed) {
+          // Take-profit check
+          const toClose = state.trades.filter(
+            t => t.tokenId === tokenId && t.unrealizedPnl >= t.amount * ((state.config?.takeProfitPct ?? 50) / 100)
+          );
+          for (const t of toClose) closePosition(t, "TAKE PROFIT");
+          refreshTradesTable();
+          updatePnlStat();
+        }
+      }
+    }
   }
-}
+
+  function sendSub(tokenIds, operation = null) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const msg = {
+      assets_ids: tokenIds,
+      type: "market",
+      custom_feature_enabled: true,
+    };
+    if (operation) msg.operation = operation;
+    ws.send(JSON.stringify(msg));
+  }
+
+  function connect() {
+    if (ws && ws.readyState <= WebSocket.OPEN) return;
+    ws = new WebSocket(POLY_WS_URL);
+
+    ws.onopen = () => {
+      logEntry("info", "  ◈ Price stream connected (WebSocket)");
+      // Re-subscribe to all tracked tokens
+      if (subscribed.size) sendSub([...subscribed]);
+      // Ping every 10s
+      pingTimer = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send("PING");
+      }, 10_000);
+    };
+
+    ws.onmessage = onMessage;
+
+    ws.onclose = () => {
+      clearInterval(pingTimer);
+      pingTimer = null;
+      if (subscribed.size > 0) {
+        // Reconnect after 3s if we still have positions
+        reconnectTimer = setTimeout(connect, 3_000);
+      }
+    };
+
+    ws.onerror = () => ws.close();
+  }
+
+  function disconnect() {
+    clearInterval(pingTimer);
+    clearTimeout(reconnectTimer);
+    pingTimer = null;
+    reconnectTimer = null;
+    subscribed.clear();
+    if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  }
+
+  return {
+    subscribe(tokenId) {
+      if (subscribed.has(tokenId)) return;
+      subscribed.add(tokenId);
+      if (!ws || ws.readyState > WebSocket.OPEN) {
+        connect(); // will subscribe all on open
+      } else {
+        sendSub([tokenId], "subscribe");
+      }
+    },
+    unsubscribe(tokenId) {
+      subscribed.delete(tokenId);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ assets_ids: [tokenId], operation: "unsubscribe" }));
+      }
+      if (subscribed.size === 0) disconnect();
+    },
+    disconnect,
+  };
+})();
 
 function refreshTradesTable() {
   for (const t of state.trades) {
@@ -602,11 +698,10 @@ function refreshTradesTable() {
       pnlEl.className   = isPos ? "green" : "red";
     }
   }
-  // Show last refresh time
   const tsEl = $("#positions-updated");
   if (tsEl) {
     const t = new Date();
-    tsEl.textContent = `prices updated ${t.getUTCHours().toString().padStart(2,"0")}:${t.getUTCMinutes().toString().padStart(2,"0")}:${t.getUTCSeconds().toString().padStart(2,"0")} UTC`;
+    tsEl.textContent = `live · ${t.getUTCHours().toString().padStart(2,"0")}:${t.getUTCMinutes().toString().padStart(2,"0")}:${t.getUTCSeconds().toString().padStart(2,"0")} UTC`;
   }
 }
 
