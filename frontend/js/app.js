@@ -16,6 +16,7 @@ const state = {
   },
   trades: [],          // open positions for session PnL
   sessionPnl: 0,
+  realizedPnl: 0,
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -75,6 +76,7 @@ function initSetup() {
       maxDaily:        parseFloat($("#max-daily").value) || 100,
       marketsToScan:   parseInt($("#markets-count").value) || 20,
       dryRun:          $("#dry-run-toggle").checked,
+      takeProfitPct:   parseFloat($("#take-profit-pct")?.value) || 50,
     };
 
     initDashboard();
@@ -516,6 +518,9 @@ function updatePositionPrices(markets) {
     marketMap[m.conditionId] = m;
   }
 
+  const tpMultiplier = parseFloat(state.config?.takeProfitPct ?? 50) / 100;
+  const toClose = [];
+
   let totalPnl = 0;
   for (const t of state.trades) {
     const m = marketMap[t.conditionId];
@@ -523,11 +528,43 @@ function updatePositionPrices(markets) {
       t.currentPrice = t.signal === "BUY_YES" ? m.yesPrice : (1 - m.yesPrice);
       t.unrealizedPnl = t.shares * t.currentPrice - t.amount;
     }
-    totalPnl += t.unrealizedPnl;
+    // Take-profit check
+    if (t.unrealizedPnl >= t.amount * tpMultiplier) {
+      toClose.push(t);
+    } else {
+      totalPnl += t.unrealizedPnl;
+    }
   }
 
-  state.sessionPnl = totalPnl;
+  // Close take-profit positions
+  for (const t of toClose) {
+    closePosition(t, "TAKE PROFIT");
+  }
+
+  state.sessionPnl = totalPnl + state.realizedPnl;
   refreshTradesTable();
+  updatePnlStat();
+}
+
+function closePosition(trade, reason) {
+  const idx = state.trades.indexOf(trade);
+  if (idx === -1) return;
+  state.trades.splice(idx, 1);
+
+  const realized = trade.unrealizedPnl;
+  state.realizedPnl = (state.realizedPnl || 0) + realized;
+
+  // Remove row from table
+  const row = $(`#trade-${trade.id}`);
+  if (row) row.remove();
+
+  const sign = realized >= 0 ? "+" : "";
+  logEntry("info",
+    `  ✓ [${trade.mode}] CLOSE ${reason} — ${trade.question.slice(0, 60)}` +
+    ` | Realized: <span class="${realized >= 0 ? "green" : "red"}">${sign}$${realized.toFixed(2)}</span>`
+  );
+
+  setStat("positions", String(state.trades.length));
   updatePnlStat();
 }
 
@@ -574,7 +611,10 @@ function refreshTradesTable() {
 }
 
 function updatePnlStat() {
-  const pnl = state.sessionPnl;
+  const unrealized = state.trades.reduce((s, t) => s + t.unrealizedPnl, 0);
+  const realized   = state.realizedPnl || 0;
+  const pnl        = unrealized + realized;
+  state.sessionPnl = pnl;
   const pnlEl = $("#stat-pnl");
   if (pnlEl) {
     pnlEl.textContent = (pnl >= 0 ? "+" : "") + "$" + pnl.toFixed(2);
