@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""
+Local dev server for the Polymarket AI frontend.
+
+Serves static files from frontend/ and proxies Gamma API requests
+to avoid CORS issues in the browser.
+
+Usage:
+    python server.py [port]   (default port: 8080)
+"""
+
+import sys
+import os
+import urllib.request
+import urllib.parse
+import urllib.error
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+
+GAMMA_API = "https://gamma-api.polymarket.com"
+PROXY_PREFIX = "/api/gamma"
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend")
+
+
+class ProxyHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=FRONTEND_DIR, **kwargs)
+
+    def do_GET(self):
+        if self.path.startswith(PROXY_PREFIX):
+            self._proxy_gamma()
+        else:
+            super().do_GET()
+
+    def _proxy_gamma(self):
+        # Strip /api/gamma prefix and forward to Gamma API
+        suffix = self.path[len(PROXY_PREFIX):]
+        upstream_url = GAMMA_API + suffix
+
+        try:
+            req = urllib.request.Request(
+                upstream_url,
+                headers={"User-Agent": "polymarket-ai-bot/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = resp.read()
+                self.send_response(200)
+                self.send_header("Content-Type", resp.headers.get("Content-Type", "application/json"))
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
+        except urllib.error.HTTPError as e:
+            body = e.read()
+            self.send_response(e.code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as e:
+            msg = str(e).encode()
+            self.send_response(502)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(msg)
+
+    def log_message(self, fmt, *args):
+        # Suppress noisy access logs for static assets
+        path = args[0] if args else ""
+        if not any(path.endswith(ext) for ext in (".css", ".js", ".ico", ".png")):
+            super().log_message(fmt, *args)
+
+
+def main():
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+    server = HTTPServer(("127.0.0.1", port), ProxyHandler)
+    print(f"Server running at http://127.0.0.1:{port}/")
+    print(f"Serving frontend from: {FRONTEND_DIR}")
+    print(f"Proxying /api/gamma/* → {GAMMA_API}/*")
+    print("Press Ctrl+C to stop.")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.")
+
+
+if __name__ == "__main__":
+    main()
