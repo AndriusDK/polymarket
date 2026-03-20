@@ -32,15 +32,24 @@ async function fetchMarkets({ limit = 50, minVolume = 10000, minLiquidity = 1000
 }
 
 function parseGammaMarket(raw) {
-  const tokens = raw.tokens || [];
-  if (tokens.length < 2) return null;
+  // API returns outcomes/outcomePrices/clobTokenIds as stringified JSON arrays
+  let outcomes, prices, tokenIds;
+  try {
+    outcomes = JSON.parse(raw.outcomes   || "[]");
+    prices   = JSON.parse(raw.outcomePrices || "[]");
+    tokenIds = JSON.parse(raw.clobTokenIds  || "[]");
+  } catch {
+    return null;
+  }
 
-  const yes = tokens.find(t => (t.outcome || "").toUpperCase() === "YES");
-  const no  = tokens.find(t => (t.outcome || "").toUpperCase() === "NO");
-  if (!yes || !no) return null;
+  if (outcomes.length < 2 || prices.length < 2 || tokenIds.length < 2) return null;
 
-  const yesPrice = parseFloat(yes.price || 0);
-  const noPrice  = parseFloat(no.price || 0);
+  const yesIdx = outcomes.findIndex(o => o.toUpperCase() === "YES");
+  const noIdx  = outcomes.findIndex(o => o.toUpperCase() === "NO");
+  if (yesIdx === -1 || noIdx === -1) return null;
+
+  const yesPrice = parseFloat(prices[yesIdx] || 0);
+  const noPrice  = parseFloat(prices[noIdx]  || 0);
   if (yesPrice === 0 && noPrice === 0) return null;
 
   return {
@@ -48,8 +57,8 @@ function parseGammaMarket(raw) {
     question:    raw.question || "",
     description: raw.description || "",
     endDate:     raw.endDate || raw.endDateIso || "",
-    yesTokenId:  yes.token_id || yes.tokenId || "",
-    noTokenId:   no.token_id || no.tokenId || "",
+    yesTokenId:  tokenIds[yesIdx] || "",
+    noTokenId:   tokenIds[noIdx]  || "",
     yesPrice,
     noPrice,
     volume:    parseFloat(raw.volumeNum || raw.volume || 0),
