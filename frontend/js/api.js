@@ -2,13 +2,13 @@
    API Layer — Polymarket (Gamma) + Anthropic (Claude)
    ═══════════════════════════════════════════════════════════════════ */
 
-const GAMMA_API = "/polymarket/api/gamma";
+const PROXY_URL = "proxy.php";
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 
 // ── Polymarket Gamma API ─────────────────────────────────────────
 
 async function fetchMarkets({ limit = 50, minVolume = 10000, minLiquidity = 1000 } = {}) {
-  const params = new URLSearchParams({
+  const query = new URLSearchParams({
     active: "true",
     closed: "false",
     limit: String(Math.min(limit * 3, 300)),
@@ -16,7 +16,8 @@ async function fetchMarkets({ limit = 50, minVolume = 10000, minLiquidity = 1000
     volume_num_min: String(minVolume),
   });
 
-  const resp = await fetch(`${GAMMA_API}/markets?${params}`);
+  const params = new URLSearchParams({ path: "/markets", query: query.toString() });
+  const resp = await fetch(`${PROXY_URL}?${params}`);
   if (!resp.ok) throw new Error(`Gamma API error: ${resp.status}`);
   const raw = await resp.json();
 
