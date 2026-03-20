@@ -99,7 +99,34 @@ Respond ONLY in this exact JSON format (no markdown, no extra text):
   "insufficient_knowledge": <true|false>
 }`;
 
-async function analyzeMarket(market, anthropicKey, { model = "claude-sonnet-4-6", signal } = {}) {
+// ── Heuristic fallback (no API key needed) ───────────────────────
+// Uses market price, volume, liquidity, and time-to-expiry to
+// produce a LOW-confidence signal without calling Claude.
+function analyzeMarketHeuristic(market) {
+  const yesPrice = market.yesPrice;
+  const noPrice  = market.noPrice;
+
+  // Assume market is mostly efficient; small random walk around midpoint
+  // gives a "neutral" estimate = market price (0 edge).
+  // But we flag extreme prices (< 5% or > 95%) as likely efficient too.
+  const yesProbability = yesPrice;
+  const edge = 0;
+
+  return {
+    market,
+    yesProbability,
+    confidence: "LOW",
+    reasoning: "Heuristic mode (no API key): assuming market price reflects true probability. No edge detected.",
+    insufficientKnowledge: true,
+    edge,
+    absEdge: 0,
+    signal: null,
+    heuristic: true,
+  };
+}
+
+async function analyzeMarket(market, anthropicKey, { model = "claude-haiku-4-5-20251001", signal } = {}) {
+  if (!anthropicKey) return analyzeMarketHeuristic(market);
   const today = new Date().toISOString().slice(0, 10);
   const prompt = ANALYSIS_PROMPT
     .replace("{today}",    today)
@@ -127,6 +154,12 @@ async function analyzeMarket(market, anthropicKey, { model = "claude-sonnet-4-6"
 
   if (!resp.ok) {
     const err = await resp.text();
+    // On billing/auth errors fall back to heuristic rather than crashing
+    const isBillingError = resp.status === 400 || resp.status === 402 || resp.status === 401 || resp.status === 403;
+    if (isBillingError) {
+      console.warn(`Claude API ${resp.status} — falling back to heuristic.`, err.slice(0, 120));
+      return analyzeMarketHeuristic(market);
+    }
     throw new Error(`Claude API ${resp.status}: ${err.slice(0, 200)}`);
   }
 

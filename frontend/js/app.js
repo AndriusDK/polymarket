@@ -59,14 +59,12 @@ function initSetup() {
   // Launch button
   $("#btn-launch").addEventListener("click", () => {
     const key = $("#anthropic-key").value.trim();
-    if (!key) {
-      $("#setup-error").textContent = "⚠  Anthropic API key is required.";
-      return;
-    }
+    // key is optional — heuristic mode runs without it
     $("#setup-error").textContent = "";
 
     state.config = {
       anthropicKey:    key,
+      model:           ($("#claude-model") ? $("#claude-model").value : "claude-haiku-4-5-20251001"),
       polyPrivateKey:  $("#poly-private-key").value.trim(),
       polyApiKey:      $("#poly-api-key").value.trim(),
       polyApiSecret:   $("#poly-api-secret").value.trim(),
@@ -187,6 +185,7 @@ async function runCycle() {
     let analysis;
     try {
       analysis = await analyzeMarket(market, c.anthropicKey, {
+        model: c.model,
         signal: state.abortCtrl.signal,
       });
     } catch (err) {
@@ -199,13 +198,17 @@ async function runCycle() {
     state.stats.analyzed = analyses.length;
     setStat("analyzed", String(analyses.length));
 
-    const edgeClass = analysis.edge > 0 ? "green" : "red";
-    logEntry("info",
-      `  Claude: ${(analysis.yesProbability*100).toFixed(1)}%  ` +
-      `Market: ${(market.yesPrice*100).toFixed(1)}%  ` +
-      `Edge: <span class="${edgeClass}">${(analysis.edge > 0 ? "+" : "")}${(analysis.edge*100).toFixed(1)}%</span>  ` +
-      `Conf: ${analysis.confidence}`
-    );
+    if (analysis.heuristic) {
+      logEntry("warn", `  ⚠ Heuristic (no API): Market=${(market.yesPrice*100).toFixed(1)}% — no edge signal`);
+    } else {
+      const edgeClass = analysis.edge > 0 ? "green" : "red";
+      logEntry("info",
+        `  Claude: ${(analysis.yesProbability*100).toFixed(1)}%  ` +
+        `Market: ${(market.yesPrice*100).toFixed(1)}%  ` +
+        `Edge: <span class="${edgeClass}">${(analysis.edge > 0 ? "+" : "")}${(analysis.edge*100).toFixed(1)}%</span>  ` +
+        `Conf: ${analysis.confidence}`
+      );
+    }
 
     updateTableRow(i, analysis);
   }
