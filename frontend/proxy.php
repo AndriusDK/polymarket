@@ -1,26 +1,14 @@
 <?php
 // Proxy for Polymarket Gamma API — avoids CORS issues in the browser.
-// Place this file anywhere on your web server and point GAMMA_API in api.js to its URL.
+// Forwards all GET params directly to the /markets endpoint.
 
-$GAMMA_API = "https://gamma-api.polymarket.com";
-
-// Only allow GET requests
 if ($_SERVER["REQUEST_METHOD"] !== "GET") {
     http_response_code(405);
     exit("Method Not Allowed");
 }
 
-// Forward the path and query string
-$path  = isset($_GET["path"])  ? $_GET["path"]  : "/markets";
-$query = isset($_GET["query"]) ? $_GET["query"] : "";
-
-// Whitelist allowed paths to prevent open proxy abuse
-if (!preg_match('#^/markets(/|$)#', $path) && $path !== "/markets") {
-    http_response_code(403);
-    exit("Forbidden");
-}
-
-$url = $GAMMA_API . $path . ($query ? "?" . $query : "");
+$query = http_build_query($_GET);
+$url   = "https://gamma-api.polymarket.com/markets" . ($query ? "?$query" : "");
 
 $ch = curl_init($url);
 curl_setopt_array($ch, [
@@ -30,7 +18,7 @@ curl_setopt_array($ch, [
     CURLOPT_SSL_VERIFYPEER => true,
 ]);
 
-$body = curl_exec($ch);
+$body   = curl_exec($ch);
 $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 $error  = curl_error($ch);
 curl_close($ch);

@@ -8,7 +8,7 @@ const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 // ── Polymarket Gamma API ─────────────────────────────────────────
 
 async function fetchMarkets({ limit = 50, minVolume = 10000, minLiquidity = 1000 } = {}) {
-  const query = new URLSearchParams({
+  const params = new URLSearchParams({
     active: "true",
     closed: "false",
     limit: String(Math.min(limit * 3, 300)),
@@ -16,7 +16,6 @@ async function fetchMarkets({ limit = 50, minVolume = 10000, minLiquidity = 1000
     volume_num_min: String(minVolume),
   });
 
-  const params = new URLSearchParams({ path: "/markets", query: query.toString() });
   const resp = await fetch(`${PROXY_URL}?${params}`);
   if (!resp.ok) throw new Error(`Gamma API error: ${resp.status}`);
   const raw = await resp.json();
