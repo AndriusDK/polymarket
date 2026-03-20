@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polymarket AI Trading System</title>
+  <link rel="stylesheet" href="css/theme.css" />
+  <link rel="stylesheet" href="css/setup.css" />
+  <link rel="stylesheet" href="css/dashboard.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+</head>
+<body>
+  <!-- ═══ Scanline overlay ═══ -->
+  <div class="scanlines"></div>
+
+  <!-- ═══ SETUP SCREEN ═══ -->
+  <div id="setup-screen" class="screen active">
+    <div class="setup-container">
+      <pre class="ascii-logo">
+ ██████╗  ██████╗ ██╗  ██╗   ██╗███╗   ███╗ █████╗ ██████╗ ██╗  ██╗███████╗████████╗
+ ██╔══██╗██╔═══██╗██║  ╚██╗ ██╔╝████╗ ████║██╔══██╗██╔══██╗██║ ██╔╝██╔════╝╚══██╔══╝
+ ██████╔╝██║   ██║██║   ╚████╔╝ ██╔████╔██║███████║██████╔╝█████╔╝ █████╗     ██║
+ ██╔═══╝ ██║   ██║██║    ╚██╔╝  ██║╚██╔╝██║██╔══██║██╔══██╗██╔═██╗ ██╔══╝     ██║
+ ██║     ╚██████╔╝███████╗██║   ██║ ╚═╝ ██║██║  ██║██║  ██║██║  ██╗███████╗   ██║
+ ╚═╝      ╚═════╝ ╚══════╝╚═╝   ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝   ╚═╝
+      </pre>
+      <div class="subtitle">AI TRADING SYSTEM v2.0 &nbsp;—&nbsp; <span class="magenta">"More human than human"</span></div>
+      <div class="divider"></div>
+
+      <!-- Anthropic -->
+      <div class="section-title"><span class="diamond">◈</span> ANTHROPIC</div>
+      <label class="field-label">API Key <span class="hint">(required)</span></label>
+      <input type="password" id="anthropic-key" class="neon-input" placeholder="sk-ant-api03-..." spellcheck="false" />
+
+      <!-- Polymarket -->
+      <div class="section-title"><span class="diamond">◈</span> POLYMARKET <span class="hint">(leave blank for scan-only mode)</span></div>
+      <label class="field-label">Wallet Private Key</label>
+      <input type="password" id="poly-private-key" class="neon-input" placeholder="0x... (required for live trading)" spellcheck="false" />
+      <div class="row-2">
+        <div>
+          <label class="field-label">API Key</label>
+          <input type="password" id="poly-api-key" class="neon-input" placeholder="key" spellcheck="false" />
+        </div>
+        <div>
+          <label class="field-label">API Secret</label>
+          <input type="password" id="poly-api-secret" class="neon-input" placeholder="secret" spellcheck="false" />
+        </div>
+      </div>
+      <label class="field-label">API Passphrase</label>
+      <input type="password" id="poly-passphrase" class="neon-input" placeholder="passphrase" spellcheck="false" />
+
+      <!-- Bot Config -->
+      <div class="section-title"><span class="diamond">◈</span> BOT CONFIG</div>
+      <div class="row-2">
+        <div>
+          <label class="field-label">Max Bet (USDC)</label>
+          <input type="number" id="max-bet" class="neon-input" value="10" min="1" step="1" />
+        </div>
+        <div>
+          <label class="field-label">Min Edge (e.g. 0.05 = 5%)</label>
+          <input type="number" id="min-edge" class="neon-input" value="0.05" min="0.01" max="0.50" step="0.01" />
+        </div>
+      </div>
+      <div class="row-2">
+        <div>
+          <label class="field-label">Daily Budget (USDC)</label>
+          <input type="number" id="max-daily" class="neon-input" value="100" min="1" step="1" />
+        </div>
+        <div>
+          <label class="field-label">Markets to Scan</label>
+          <input type="number" id="markets-count" class="neon-input" value="20" min="1" max="100" step="1" />
+        </div>
+      </div>
+
+      <div class="switch-row">
+        <span class="field-label">Dry Run (simulate trades)</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="dry-run-toggle" checked />
+          <span class="toggle-slider"></span>
+        </label>
+        <span id="dry-run-label" class="toggle-status amber">ON</span>
+      </div>
+
+      <div class="divider"></div>
+      <button id="btn-launch" class="neon-btn launch-btn">▶ &nbsp; INITIATE SYSTEM</button>
+      <div id="setup-error" class="error-msg"></div>
+    </div>
+  </div>
+
+  <!-- ═══ DASHBOARD SCREEN ═══ -->
+  <div id="dashboard-screen" class="screen">
+    <!-- Header -->
+    <header id="dash-header">
+      <div class="header-left">
+        <span class="header-logo">◈ POLYMARKET AI</span>
+        <span id="header-clock" class="header-clock">00:00:00</span>
+      </div>
+      <div class="header-right">
+        <span id="header-config" class="header-config"></span>
+        <span id="header-mode" class="header-mode">◎ DRY RUN</span>
+      </div>
+    </header>
+
+    <!-- Main grid -->
+    <div class="dash-grid">
+      <!-- Markets table -->
+      <section class="panel" id="markets-panel">
+        <div class="panel-title">MARKET ANALYSIS</div>
+        <div class="table-wrap">
+          <table id="markets-table">
+            <thead>
+              <tr>
+                <th class="col-q">Question</th>
+                <th>Volume</th>
+                <th>Market</th>
+                <th>Claude</th>
+                <th>Edge</th>
+                <th>Conf</th>
+                <th>Signal</th>
+              </tr>
+            </thead>
+            <tbody id="markets-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Stats panel -->
+      <aside class="panel" id="stats-panel">
+        <div class="panel-title">SYSTEM STATUS</div>
+        <div class="stat"><span class="stat-key">Status</span><span id="stat-status" class="stat-val dim">IDLE</span></div>
+        <div class="stat-divider"></div>
+        <div class="stat"><span class="stat-key">Markets fetched</span><span id="stat-fetched" class="stat-val cyan">0</span></div>
+        <div class="stat"><span class="stat-key">Analyzed</span><span id="stat-analyzed" class="stat-val cyan">0</span></div>
+        <div class="stat"><span class="stat-key">Opportunities</span><span id="stat-opps" class="stat-val amber">0</span></div>
+        <div class="stat"><span class="stat-key">Trades placed</span><span id="stat-trades" class="stat-val magenta">0</span></div>
+        <div class="stat-divider"></div>
+        <div class="stat"><span class="stat-key">Total spent</span><span id="stat-spent" class="stat-val green">$0.00</span></div>
+        <div class="stat"><span class="stat-key">Budget left</span><span id="stat-budget" class="stat-val green">$0.00</span></div>
+        <div class="stat-divider"></div>
+        <div class="stat"><span class="stat-key">Cycle</span><span id="stat-cycle" class="stat-val dim">—</span></div>
+
+        <!-- Progress bar -->
+        <div id="progress-wrap" class="progress-wrap hidden">
+          <div class="progress-label"><span id="progress-text">Scanning...</span></div>
+          <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+        </div>
+      </aside>
+
+      <!-- Activity log -->
+      <section class="panel" id="log-panel">
+        <div class="panel-title">ACTIVITY LOG</div>
+        <div id="log-content" class="log-content"></div>
+      </section>
+    </div>
+
+    <!-- Toolbar -->
+    <footer id="toolbar">
+      <button id="btn-run" class="toolbar-btn">▶ RUN CYCLE</button>
+      <button id="btn-auto" class="toolbar-btn">⟳ AUTO 5min</button>
+      <button id="btn-stop" class="toolbar-btn" disabled>■ STOP</button>
+      <button id="btn-settings" class="toolbar-btn danger">◀ SETTINGS</button>
+      <div class="toolbar-spacer"></div>
+      <span class="toolbar-hint">Scroll log ↑↓</span>
+    </footer>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

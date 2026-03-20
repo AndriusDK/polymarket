@@ -1,73 +1,75 @@
 # Polymarket AI Trading Bot
 
-An AI-powered trading bot for [Polymarket](https://polymarket.com) with a **Blade Runner cyberpunk TUI** — no config files, everything entered in the UI.
+An AI-powered trading bot for [Polymarket](https://polymarket.com) with a **Blade Runner cyberpunk UI** — runs entirely in your browser, no installs required.
 
-## What It Does
+## Quick Start
 
-1. **Setup screen** — enter your API keys and bot config directly in the terminal UI
-2. **Dashboard** — scan markets, watch Claude analyze each one live, and see trade signals
-3. **AI analysis** — Claude estimates the true probability for each market; if it differs from the market price by more than your threshold, it flags a trade
-4. **Risk management** — Kelly-inspired position sizing, daily budget cap, dry-run mode
-
-## Setup
-
-```bash
-pip install -r requirements.txt
-python main.py
+```
+1. Open  frontend/index.html  in your browser
+2. Paste your Anthropic API key
+3. Click INITIATE SYSTEM
+4. Click RUN CYCLE on the dashboard
 ```
 
-That's it. No `.env` file needed.
+No Python. No Node. No terminal. Just a browser.
 
 ## Screens
 
 ### Setup Screen
-Enter your credentials once per session:
-
-| Field | Description |
-|---|---|
-| **Anthropic API Key** | Required — powers the AI analysis |
-| **Wallet Private Key** | Optional — only needed for live trading |
-| **Poly API Key/Secret/Passphrase** | Optional — only needed for live trading |
-| **Max Bet (USDC)** | Maximum per trade |
-| **Min Edge** | Minimum probability gap to trigger a trade (e.g. `0.05` = 5%) |
-| **Daily Budget** | Max total spend per session |
-| **Dry Run** | Toggle — ON = simulate only, OFF = real orders |
+- Blade Runner ASCII art header with scanline overlay
+- Enter your Anthropic API key (required for AI analysis)
+- Optionally enter Polymarket wallet credentials (only needed for live trading)
+- Configure: max bet, min edge, daily budget, markets to scan
+- Dry Run toggle (ON by default — safe mode)
 
 ### Dashboard
-- **Markets table** — live-updated as Claude analyzes each market
-- **Stats panel** — fetched, analyzed, opportunities, trades placed, budget remaining
-- **Log** — full reasoning from Claude for every market
-- **Toolbar buttons**:
+- **Markets table** — populates live as Claude analyzes each market (click any row to expand reasoning)
+- **Stats panel** — markets fetched / analyzed / opportunities / trades / budget remaining
+- **Progress bar** — shows scan progress during analysis
+- **Activity log** — full Claude reasoning, trade signals, errors
+- **Toolbar**:
   - `RUN CYCLE` — single scan-and-trade pass
-  - `AUTO 5 min` — loop every 5 minutes automatically
-  - `STOP` — gracefully stop the auto-loop
-  - `SETTINGS` — return to setup screen
+  - `AUTO 5min` — loop every 5 minutes automatically
+  - `STOP` — gracefully cancel
+  - `SETTINGS` — return to setup
+
+## How It Works
+
+1. **Fetches markets** from the Polymarket Gamma API (public, no auth needed)
+2. **Sends each market** to Claude, which estimates the true probability
+3. **Compares** Claude's estimate vs market price — flags edge opportunities
+4. **Sizes bets** using Kelly-inspired formula (proportional to edge + confidence)
+5. **Simulates trades** (dry run) or shows what it would do
 
 ## Getting API Keys
 
-| Key | Where to get it |
+| Key | Where |
 |---|---|
 | Anthropic | [console.anthropic.com](https://console.anthropic.com) |
-| Polymarket | Connect wallet at [polymarket.com](https://polymarket.com) → API section |
-
-## Risk Warnings
-
-- **Always test in Dry Run first** before enabling live trading.
-- Claude has a knowledge cutoff — it may lack data on very recent events.
-- Prediction markets are inherently risky. This is for educational purposes.
-- Start with small values: Max Bet $2–5, Daily Budget $20.
+| Polymarket | Connect wallet at [polymarket.com](https://polymarket.com) |
 
 ## Project Structure
 
 ```
-main.py              # Launcher
-tui/
-  app.py             # Textual app root
-  setup_screen.py    # Credential + config entry screen
-  dashboard_screen.py# Live trading dashboard
-  blade_runner.tcss  # Cyberpunk CSS theme
-bot/
-  market_client.py   # Polymarket Gamma + CLOB API wrapper
-  analyzer.py        # Claude probability estimator
-  trader.py          # Bot config + risk management
+frontend/
+  index.html              # Open this in your browser
+  css/
+    theme.css             # Core Blade Runner theme
+    setup.css             # Setup screen styles
+    dashboard.css         # Dashboard styles
+  js/
+    api.js                # Polymarket Gamma + Claude API calls
+    app.js                # Screen logic, bot cycle, UI updates
+bot/                      # Python backend (optional, needs Python)
+  market_client.py
+  analyzer.py
+  trader.py
+tui/                      # Terminal UI (optional, needs Python)
 ```
+
+## Risk Warnings
+
+- Always test in **Dry Run** first
+- Claude has a knowledge cutoff — may miss recent events
+- Prediction markets are risky — this is for educational purposes
+- Start small: $2–5 max bet, $20 daily budget
