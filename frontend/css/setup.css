@@ -151,6 +151,36 @@
   min-width: 60px;
 }
 
+/* ── Generate API Keys button ── */
+.generate-keys-btn {
+  width: 100%;
+  padding: 9px;
+  font-size: 12px;
+  letter-spacing: 2px;
+  margin: 8px 0 4px;
+  background: transparent;
+  border-color: var(--amber);
+  color: var(--amber);
+}
+.generate-keys-btn:hover:not(:disabled) {
+  background: rgba(255, 176, 0, 0.12);
+  box-shadow: 0 0 16px rgba(255, 176, 0, 0.3);
+}
+.generate-keys-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gen-keys-status {
+  font-size: 11px;
+  min-height: 16px;
+  margin-bottom: 4px;
+  letter-spacing: 0.5px;
+}
+.gen-keys-status.loading { color: var(--cyan); }
+.gen-keys-status.success { color: var(--green); }
+.gen-keys-status.error   { color: var(--red); }
+
 /* ── Launch button ── */
 .launch-btn {
   width: 100%;

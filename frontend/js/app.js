@@ -567,6 +567,85 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// ── Generate Polymarket API Keys ─────────────────────────────────
+
+async function generatePolyApiKey() {
+  const privateKey = $("#poly-private-key").value.trim();
+  const btn        = $("#btn-gen-keys");
+  const status     = $("#gen-keys-status");
+
+  if (!privateKey) {
+    status.className = "gen-keys-status error";
+    status.textContent = "⚠  Enter your wallet private key first.";
+    return;
+  }
+
+  btn.disabled = true;
+  status.className = "gen-keys-status loading";
+  status.textContent = "⟳  Connecting to Polymarket CLOB API…";
+
+  try {
+    const wallet    = new ethers.Wallet(privateKey);
+    const address   = wallet.address;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const nonce     = 0;
+
+    // EIP-712 typed data — matches py-clob-client L1 auth
+    const domain = { name: "ClobAuthDomain", version: "1", chainId: 137 };
+    const types  = {
+      ClobAuth: [
+        { name: "address",   type: "address" },
+        { name: "timestamp", type: "string"  },
+        { name: "nonce",     type: "uint256" },
+        { name: "message",   type: "string"  },
+      ],
+    };
+    const value = {
+      address,
+      timestamp,
+      nonce,
+      message: "This message attests that I control the given wallet",
+    };
+
+    status.textContent = "⟳  Signing authentication message…";
+    const sig = await wallet.signTypedData(domain, types, value);
+
+    status.textContent = "⟳  Requesting API keys from Polymarket…";
+    const resp = await fetch("https://clob.polymarket.com/auth/api-key", {
+      method: "POST",
+      headers: {
+        "POLY_ADDRESS":   address,
+        "POLY_SIGNATURE": sig,
+        "POLY_TIMESTAMP": timestamp,
+        "POLY_NONCE":     String(nonce),
+        "Content-Type":  "application/json",
+      },
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`CLOB API ${resp.status}: ${text.slice(0, 120)}`);
+    }
+
+    const data = await resp.json();
+    if (!data.apiKey || !data.secret || !data.passphrase) {
+      throw new Error("Unexpected response: " + JSON.stringify(data).slice(0, 120));
+    }
+
+    $("#poly-api-key").value    = data.apiKey;
+    $("#poly-api-secret").value = data.secret;
+    $("#poly-passphrase").value = data.passphrase;
+
+    status.className  = "gen-keys-status success";
+    status.textContent = `✓  API keys generated for ${address.slice(0, 6)}…${address.slice(-4)}`;
+  } catch (err) {
+    status.className  = "gen-keys-status error";
+    status.textContent = `✗  ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ── Boot ─────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
