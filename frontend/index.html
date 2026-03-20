@@ -138,6 +138,9 @@
         <div class="stat"><span class="stat-key">Budget left</span><span id="stat-budget" class="stat-val green">$0.00</span></div>
         <div class="stat-divider"></div>
         <div class="stat"><span class="stat-key">Cycle</span><span id="stat-cycle" class="stat-val dim">—</span></div>
+        <div class="stat-divider"></div>
+        <div class="stat"><span class="stat-key">Session PnL</span><span id="stat-pnl" class="stat-val dim">$0.00</span></div>
+        <div class="stat"><span class="stat-key">Open positions</span><span id="stat-positions" class="stat-val dim">0</span></div>
 
         <!-- Progress bar -->
         <div id="progress-wrap" class="progress-wrap hidden">
@@ -146,10 +149,32 @@
         </div>
       </aside>
 
-      <!-- Activity log -->
+      <!-- Activity log / Trades -->
       <section class="panel" id="log-panel">
-        <div class="panel-title">ACTIVITY LOG</div>
+        <div class="panel-tab-bar">
+          <button class="panel-tab active" id="tab-log" onclick="switchTab('log')">ACTIVITY LOG</button>
+          <button class="panel-tab" id="tab-trades" onclick="switchTab('trades')">TRADES</button>
+        </div>
         <div id="log-content" class="log-content"></div>
+        <div id="trades-content" class="trades-content hidden">
+          <table id="trades-table">
+            <thead>
+              <tr>
+                <th>Mode</th>
+                <th class="col-q-trade">Market</th>
+                <th>Signal</th>
+                <th>Size</th>
+                <th>Entry</th>
+                <th>Current</th>
+                <th>Unr. PnL</th>
+                <th>Conf</th>
+              </tr>
+            </thead>
+            <tbody id="trades-tbody">
+              <tr id="trades-empty-row"><td colspan="8" class="trades-empty">No trades yet this session.</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
 

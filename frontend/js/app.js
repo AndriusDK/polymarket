@@ -13,6 +13,8 @@ const state = {
     fetched: 0, analyzed: 0, opps: 0, trades: 0,
     spent: 0, cycle: 0,
   },
+  trades: [],          // open positions for session PnL
+  sessionPnl: 0,
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -210,6 +212,9 @@ async function runCycle() {
 
   showProgress(false);
 
+  // Update PnL for existing positions using fresh prices
+  updatePositionPrices(markets);
+
   // 3. Find opportunities
   const opportunities = analyses
     .filter(a =>
@@ -246,7 +251,7 @@ async function runCycle() {
     const amount = sizeBet(a, c.maxBet, c.maxDaily - dailySpent);
     if (amount < 1) continue;
 
-    const tag = c.dryRun ? "[DRY]" : "[LIVE]";
+    const tag = c.dryRun ? "[SIM]" : "[LIVE]";
     const sigClass = a.signal === "BUY_YES" ? "green" : "red";
 
     logEntry("trade",
@@ -258,6 +263,26 @@ async function runCycle() {
       `Conf: ${a.confidence}`
     );
     logEntry("info", `  ${a.reasoning}`);
+
+    // Record position for PnL tracking
+    const entryPrice = a.signal === "BUY_YES" ? a.market.yesPrice : (1 - a.market.yesPrice);
+    const trade = {
+      id: Date.now() + state.stats.trades,
+      time: new Date().toUTCString().slice(-12, -4),
+      question: a.market.question,
+      conditionId: a.market.conditionId,
+      signal: a.signal,
+      entryPrice: entryPrice,
+      amount: amount,
+      shares: amount / entryPrice,
+      currentPrice: entryPrice,
+      edge: a.edge,
+      confidence: a.confidence,
+      unrealizedPnl: 0,
+      mode: c.dryRun ? "SIM" : "LIVE",
+    };
+    state.trades.push(trade);
+    addTradeRow(trade);
 
     dailySpent += amount;
     state.stats.trades++;
@@ -434,6 +459,94 @@ function toggleRowDetail(idx) {
   `;
   detailTr.appendChild(td);
   tr.after(detailTr);
+}
+
+// ── Tab switching ────────────────────────────────────────────────
+
+function switchTab(tab) {
+  const isLog = tab === "log";
+  $("#log-content").classList.toggle("hidden", !isLog);
+  $("#trades-content").classList.toggle("hidden", isLog);
+  $("#tab-log").classList.toggle("active", isLog);
+  $("#tab-trades").classList.toggle("active", !isLog);
+}
+
+// ── Trades table ─────────────────────────────────────────────────
+
+function addTradeRow(trade) {
+  // Remove "no trades" placeholder if present
+  const empty = $("#trades-empty-row");
+  if (empty) empty.remove();
+
+  const tbody = $("#trades-tbody");
+  const tr = document.createElement("tr");
+  tr.id = `trade-${trade.id}`;
+  tr.className = "trade-row";
+
+  const modeClass = trade.mode === "SIM" ? "amber" : "live-mode";
+  const sigClass  = trade.signal === "BUY_YES" ? "signal-buy-yes" : "signal-buy-no";
+  const confClass = `conf-${trade.confidence.toLowerCase()}`;
+  const pnlStr    = "+$0.00";
+
+  tr.innerHTML = `
+    <td class="${modeClass}">${trade.mode}</td>
+    <td class="col-q-trade" title="${escHtml(trade.question)}">${escHtml(trade.question.slice(0, 45))}${trade.question.length > 45 ? "…" : ""}</td>
+    <td class="${sigClass}">${trade.signal}</td>
+    <td>$${trade.amount.toFixed(2)}</td>
+    <td>${(trade.entryPrice * 100).toFixed(1)}%</td>
+    <td id="tp-${trade.id}">${(trade.currentPrice * 100).toFixed(1)}%</td>
+    <td id="pnl-${trade.id}" class="dim">${pnlStr}</td>
+    <td class="${confClass}">${trade.confidence}</td>
+  `;
+
+  // Newest on top
+  tbody.insertBefore(tr, tbody.firstChild);
+}
+
+function updatePositionPrices(markets) {
+  if (state.trades.length === 0) return;
+
+  const marketMap = {};
+  for (const m of markets) {
+    marketMap[m.conditionId] = m;
+  }
+
+  let totalPnl = 0;
+  for (const t of state.trades) {
+    const m = marketMap[t.conditionId];
+    if (m) {
+      t.currentPrice = t.signal === "BUY_YES" ? m.yesPrice : (1 - m.yesPrice);
+      t.unrealizedPnl = t.shares * t.currentPrice - t.amount;
+    }
+    totalPnl += t.unrealizedPnl;
+  }
+
+  state.sessionPnl = totalPnl;
+  refreshTradesTable();
+  updatePnlStat();
+}
+
+function refreshTradesTable() {
+  for (const t of state.trades) {
+    const tpEl  = $(`#tp-${t.id}`);
+    const pnlEl = $(`#pnl-${t.id}`);
+    if (tpEl)  tpEl.textContent  = (t.currentPrice * 100).toFixed(1) + "%";
+    if (pnlEl) {
+      const isPos = t.unrealizedPnl >= 0;
+      pnlEl.textContent = (isPos ? "+" : "") + "$" + t.unrealizedPnl.toFixed(2);
+      pnlEl.className   = isPos ? "green" : "red";
+    }
+  }
+}
+
+function updatePnlStat() {
+  const pnl = state.sessionPnl;
+  const pnlEl = $("#stat-pnl");
+  if (pnlEl) {
+    pnlEl.textContent = (pnl >= 0 ? "+" : "") + "$" + pnl.toFixed(2);
+    pnlEl.className = `stat-val ${pnl > 0 ? "green" : pnl < 0 ? "red" : "dim"}`;
+  }
+  setStat("positions", String(state.trades.length));
 }
 
 // ── Util ─────────────────────────────────────────────────────────
