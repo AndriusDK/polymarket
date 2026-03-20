@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Local dev server for the Polymarket AI frontend.
+Server for the Polymarket AI frontend.
 
 Serves static files from frontend/ and proxies Gamma API requests
 to avoid CORS issues in the browser.
 
 Usage:
-    python server.py [port]   (default port: 8080)
+    python server.py [port]           (default port: 8080)
+    PORT=3000 python server.py        (env var, used by cloud platforms)
 """
 
 import sys
@@ -70,9 +71,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
 
 def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-    server = HTTPServer(("127.0.0.1", port), ProxyHandler)
-    print(f"Server running at http://127.0.0.1:{port}/")
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), ProxyHandler)
+    print(f"Server running on port {port}")
     print(f"Serving frontend from: {FRONTEND_DIR}")
     print(f"Proxying /api/gamma/* → {GAMMA_API}/*")
     print("Press Ctrl+C to stop.")
