@@ -31,6 +31,17 @@ async function fetchMarkets({ limit = 50, minVolume = 10000, minLiquidity = 1000
   return markets;
 }
 
+// Fetch prices for specific markets by conditionId (for live PnL refresh)
+async function fetchMarketPrices(conditionIds) {
+  if (!conditionIds.length) return [];
+  const params = new URLSearchParams();
+  for (const id of conditionIds) params.append("condition_ids", id);
+  const resp = await fetch(`${PROXY_URL}?${params}`);
+  if (!resp.ok) throw new Error(`Gamma price refresh error: ${resp.status}`);
+  const raw = await resp.json();
+  return raw.map(parseGammaMarket).filter(Boolean);
+}
+
 function parseGammaMarket(raw) {
   // API returns outcomes/outcomePrices/clobTokenIds as stringified JSON arrays
   let outcomes, prices, tokenIds;

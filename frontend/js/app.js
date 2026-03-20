@@ -9,6 +9,7 @@ const state = {
   running: false,
   autoLoop: false,
   abortCtrl: null,
+  priceTicker: null,   // setInterval handle for live PnL refresh
   stats: {
     fetched: 0, analyzed: 0, opps: 0, trades: 0,
     spent: 0, cycle: 0,
@@ -286,6 +287,7 @@ async function runCycle() {
     };
     state.trades.push(trade);
     addTradeRow(trade);
+    startPriceTicker(); // begin live PnL refresh if not already running
 
     dailySpent += amount;
     state.stats.trades++;
@@ -529,6 +531,29 @@ function updatePositionPrices(markets) {
   updatePnlStat();
 }
 
+// ── Live price ticker (30s refresh for open positions) ────────────
+
+function startPriceTicker() {
+  if (state.priceTicker) return; // already running
+  state.priceTicker = setInterval(async () => {
+    if (state.trades.length === 0) return;
+    try {
+      const ids = [...new Set(state.trades.map(t => t.conditionId))];
+      const markets = await fetchMarketPrices(ids);
+      if (markets.length) updatePositionPrices(markets);
+    } catch {
+      // silent — ticker will retry next interval
+    }
+  }, 30_000);
+}
+
+function stopPriceTicker() {
+  if (state.priceTicker) {
+    clearInterval(state.priceTicker);
+    state.priceTicker = null;
+  }
+}
+
 function refreshTradesTable() {
   for (const t of state.trades) {
     const tpEl  = $(`#tp-${t.id}`);
@@ -539,6 +564,12 @@ function refreshTradesTable() {
       pnlEl.textContent = (isPos ? "+" : "") + "$" + t.unrealizedPnl.toFixed(2);
       pnlEl.className   = isPos ? "green" : "red";
     }
+  }
+  // Show last refresh time
+  const tsEl = $("#positions-updated");
+  if (tsEl) {
+    const t = new Date();
+    tsEl.textContent = `prices updated ${t.getUTCHours().toString().padStart(2,"0")}:${t.getUTCMinutes().toString().padStart(2,"0")}:${t.getUTCSeconds().toString().padStart(2,"0")} UTC`;
   }
 }
 
