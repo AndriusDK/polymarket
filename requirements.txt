@@ -1,5 +1,4 @@
 anthropic>=0.40.0
 py-clob-client>=0.15.0
-python-dotenv>=1.0.0
 requests>=2.31.0
-rich>=13.0.0
+textual>=0.80.0

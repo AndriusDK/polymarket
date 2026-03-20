@@ -1,96 +1,73 @@
 # Polymarket AI Trading Bot
 
-An AI-powered trading bot for [Polymarket](https://polymarket.com) that uses **Claude** to analyze prediction markets and identify mispriced probabilities.
+An AI-powered trading bot for [Polymarket](https://polymarket.com) with a **Blade Runner cyberpunk TUI** — no config files, everything entered in the UI.
 
-## How It Works
+## What It Does
 
-1. **Fetch markets** — pulls the top active markets from Polymarket by volume
-2. **AI analysis** — sends each market question to Claude, which estimates the true probability and confidence level
-3. **Edge detection** — compares Claude's estimate to the market price; if the difference (edge) exceeds a threshold, it flags a trade
-4. **Risk management** — sizes each bet using a Kelly-inspired formula, respects daily budget limits
-5. **Execute** — places a market order (or simulates it in dry-run mode)
+1. **Setup screen** — enter your API keys and bot config directly in the terminal UI
+2. **Dashboard** — scan markets, watch Claude analyze each one live, and see trade signals
+3. **AI analysis** — Claude estimates the true probability for each market; if it differs from the market price by more than your threshold, it flags a trade
+4. **Risk management** — Kelly-inspired position sizing, daily budget cap, dry-run mode
 
 ## Setup
 
-### 1. Install dependencies
-
 ```bash
 pip install -r requirements.txt
-```
-
-### 2. Configure environment
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your keys:
-
-| Variable | Description |
-|---|---|
-| `ANTHROPIC_API_KEY` | Your Anthropic API key ([get one here](https://console.anthropic.com)) |
-| `POLY_PRIVATE_KEY` | Your wallet private key (for live trading) |
-| `POLY_API_KEY` | Polymarket CLOB API key |
-| `POLY_API_SECRET` | Polymarket CLOB API secret |
-| `POLY_API_PASSPHRASE` | Polymarket CLOB API passphrase |
-| `MAX_BET_USDC` | Max USDC per trade (default: `10`) |
-| `MIN_EDGE` | Minimum edge % to trigger a trade (default: `0.05` = 5%) |
-| `MAX_DAILY_SPEND_USDC` | Daily budget cap (default: `100`) |
-| `DRY_RUN` | Set to `false` for live trading (default: `true`) |
-
-To get Polymarket API keys, connect your wallet at [polymarket.com](https://polymarket.com) and follow the CLOB API docs.
-
-## Usage
-
-### Scan markets (no trading)
-
-```bash
-python main.py --scan
-```
-
-Analyzes the top markets and prints a table of Claude's probability estimates vs. market prices — no orders placed.
-
-### Single run (dry-run by default)
-
-```bash
 python main.py
 ```
 
-### Single run with real trades
+That's it. No `.env` file needed.
 
-```bash
-python main.py --live
-```
+## Screens
 
-### Continuous loop (every 5 minutes)
+### Setup Screen
+Enter your credentials once per session:
 
-```bash
-python main.py --loop 300
-```
+| Field | Description |
+|---|---|
+| **Anthropic API Key** | Required — powers the AI analysis |
+| **Wallet Private Key** | Optional — only needed for live trading |
+| **Poly API Key/Secret/Passphrase** | Optional — only needed for live trading |
+| **Max Bet (USDC)** | Maximum per trade |
+| **Min Edge** | Minimum probability gap to trigger a trade (e.g. `0.05` = 5%) |
+| **Daily Budget** | Max total spend per session |
+| **Dry Run** | Toggle — ON = simulate only, OFF = real orders |
 
-## Architecture
+### Dashboard
+- **Markets table** — live-updated as Claude analyzes each market
+- **Stats panel** — fetched, analyzed, opportunities, trades placed, budget remaining
+- **Log** — full reasoning from Claude for every market
+- **Toolbar buttons**:
+  - `RUN CYCLE` — single scan-and-trade pass
+  - `AUTO 5 min` — loop every 5 minutes automatically
+  - `STOP` — gracefully stop the auto-loop
+  - `SETTINGS` — return to setup screen
 
-```
-main.py                  # CLI entry point
-bot/
-  market_client.py       # Polymarket API wrapper (Gamma + CLOB)
-  analyzer.py            # Claude AI probability estimator
-  trader.py              # Bot orchestration + risk management
-```
+## Getting API Keys
+
+| Key | Where to get it |
+|---|---|
+| Anthropic | [console.anthropic.com](https://console.anthropic.com) |
+| Polymarket | Connect wallet at [polymarket.com](https://polymarket.com) → API section |
 
 ## Risk Warnings
 
-- **Prediction markets are risky.** Claude's analysis may be wrong, outdated, or incomplete.
-- **Always test in dry-run mode first** before enabling live trading.
-- **Start with small bet sizes** (e.g., $1–$5) and a low daily budget.
-- **Claude has a knowledge cutoff** — it may lack recent information about fast-moving events.
-- This bot is for educational purposes. Trading on prediction markets involves financial risk.
+- **Always test in Dry Run first** before enabling live trading.
+- Claude has a knowledge cutoff — it may lack data on very recent events.
+- Prediction markets are inherently risky. This is for educational purposes.
+- Start with small values: Max Bet $2–5, Daily Budget $20.
 
-## Configuration Tuning
+## Project Structure
 
-| Setting | Conservative | Moderate | Aggressive |
-|---|---|---|---|
-| `MIN_EDGE` | 15% | 8% | 4% |
-| `MAX_BET_USDC` | $2 | $10 | $25 |
-| `MIN_CONFIDENCE` | HIGH | MEDIUM | LOW |
-| `MAX_DAILY_SPEND_USDC` | $20 | $100 | $500 |
+```
+main.py              # Launcher
+tui/
+  app.py             # Textual app root
+  setup_screen.py    # Credential + config entry screen
+  dashboard_screen.py# Live trading dashboard
+  blade_runner.tcss  # Cyberpunk CSS theme
+bot/
+  market_client.py   # Polymarket Gamma + CLOB API wrapper
+  analyzer.py        # Claude probability estimator
+  trader.py          # Bot config + risk management
+```

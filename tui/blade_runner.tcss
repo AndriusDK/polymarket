@@ -1,0 +1,324 @@
+/* ═══════════════════════════════════════════════════════════
+   BLADE RUNNER 2049  —  Polymarket AI Bot Theme
+   ═══════════════════════════════════════════════════════════ */
+
+$bg:        #05050f;
+$bg-panel:  #0a0a1a;
+$bg-input:  #0d0d22;
+$border:    #1a1a3a;
+
+$cyan:      #00d4ff;
+$cyan-dim:  #006688;
+$magenta:   #ff2d78;
+$amber:     #ffb300;
+$green:     #00ff9f;
+$red:       #ff2d2d;
+$dim:       #3a3a5a;
+$text:      #c8c8e8;
+$text-dim:  #6868a8;
+
+/* ── App shell ── */
+Screen {
+    background: $bg;
+    color: $text;
+}
+
+/* ── Scanlines overlay effect via border title ── */
+.panel {
+    background: $bg-panel;
+    border: tall $border;
+    border-title-color: $cyan;
+    border-title-style: bold;
+    border-subtitle-color: $text-dim;
+    padding: 0 1;
+}
+
+/* ── Setup Screen ── */
+#setup-screen {
+    align: center middle;
+}
+
+#setup-box {
+    width: 72;
+    height: auto;
+    background: $bg-panel;
+    border: tall $cyan-dim;
+    border-title-color: $cyan;
+    border-title-style: bold;
+    padding: 1 2;
+}
+
+#ascii-art {
+    color: $cyan;
+    text-align: center;
+    text-style: bold;
+    padding: 0 0 1 0;
+}
+
+#setup-subtitle {
+    color: $magenta;
+    text-align: center;
+    text-style: italic;
+    padding: 0 0 1 0;
+}
+
+.section-label {
+    color: $amber;
+    text-style: bold;
+    margin-top: 1;
+    padding: 0;
+}
+
+.field-label {
+    color: $text-dim;
+    margin-bottom: 0;
+}
+
+Input {
+    background: $bg-input;
+    border: tall $border;
+    color: $cyan;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+Input:focus {
+    border: tall $cyan;
+    background: #0a0a2a;
+}
+
+Input.-valid {
+    border: tall $cyan-dim;
+}
+
+Input.secret {
+    color: $magenta;
+}
+
+.row-2 {
+    layout: horizontal;
+    height: auto;
+}
+
+.row-2 > * {
+    width: 1fr;
+}
+
+.row-2 > *:first-child {
+    margin-right: 1;
+}
+
+Switch {
+    margin: 0 0 1 0;
+}
+
+Switch:focus {
+    border: none;
+}
+
+.switch-row {
+    layout: horizontal;
+    height: 3;
+    align: left middle;
+}
+
+.switch-label {
+    color: $text-dim;
+    width: 1fr;
+    padding-top: 1;
+}
+
+.switch-value {
+    color: $amber;
+    width: auto;
+    padding: 1 1 0 1;
+    text-style: bold;
+}
+
+#divider {
+    color: $border;
+    text-align: center;
+    padding: 1 0;
+}
+
+#btn-launch {
+    dock: bottom;
+    width: 100%;
+    background: $magenta;
+    color: #ffffff;
+    text-style: bold;
+    margin-top: 1;
+    height: 3;
+    border: none;
+}
+
+#btn-launch:hover {
+    background: $cyan;
+    color: $bg;
+}
+
+#btn-launch:focus {
+    background: $cyan;
+    color: $bg;
+    border: none;
+}
+
+/* ── Dashboard Screen ── */
+#dashboard {
+    layout: grid;
+    grid-size: 2 3;
+    grid-columns: 2fr 1fr;
+    grid-rows: auto 1fr 6;
+    padding: 0;
+}
+
+#header-bar {
+    column-span: 2;
+    layout: horizontal;
+    height: 3;
+    background: $bg-panel;
+    border-bottom: tall $border;
+    padding: 0 2;
+    align: left middle;
+}
+
+#header-title {
+    color: $cyan;
+    text-style: bold;
+    width: 1fr;
+}
+
+#header-status {
+    color: $amber;
+    text-align: right;
+    width: auto;
+}
+
+#header-mode {
+    color: $magenta;
+    text-style: bold;
+    text-align: right;
+    width: auto;
+    margin-left: 2;
+}
+
+/* ── Markets panel ── */
+#markets-panel {
+    row-span: 1;
+    background: $bg-panel;
+    border: tall $border;
+    border-title-color: $cyan;
+    border-title-style: bold;
+    padding: 0;
+}
+
+DataTable {
+    background: $bg-panel;
+    color: $text;
+    height: 1fr;
+}
+
+DataTable > .datatable--header {
+    background: #0d0d2a;
+    color: $cyan;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: #1a1a3a;
+    color: $cyan;
+}
+
+DataTable > .datatable--even-row {
+    background: $bg;
+}
+
+/* ── Stats panel ── */
+#stats-panel {
+    background: $bg-panel;
+    border: tall $border;
+    border-title-color: $amber;
+    border-title-style: bold;
+    padding: 1 2;
+}
+
+.stat-row {
+    layout: horizontal;
+    height: 1;
+    margin-bottom: 1;
+}
+
+.stat-key {
+    color: $text-dim;
+    width: 1fr;
+}
+
+.stat-val {
+    color: $cyan;
+    text-style: bold;
+    width: auto;
+    text-align: right;
+}
+
+.stat-val.green  { color: $green; }
+.stat-val.red    { color: $red; }
+.stat-val.amber  { color: $amber; }
+.stat-val.magenta { color: $magenta; }
+
+/* ── Log panel ── */
+#log-panel {
+    column-span: 2;
+    background: $bg-panel;
+    border: tall $border;
+    border-title-color: $magenta;
+    border-title-style: bold;
+    padding: 0 1;
+    height: 100%;
+}
+
+RichLog {
+    background: $bg-panel;
+    color: $text;
+    scrollbar-color: $dim;
+    scrollbar-color-hover: $cyan-dim;
+}
+
+/* ── Bottom toolbar ── */
+#toolbar {
+    column-span: 2;
+    layout: horizontal;
+    height: 3;
+    background: $bg-panel;
+    border-top: tall $border;
+    align: left middle;
+    padding: 0 2;
+}
+
+.toolbar-btn {
+    background: $bg-input;
+    color: $text-dim;
+    border: tall $border;
+    margin-right: 1;
+    min-width: 16;
+    height: 3;
+}
+
+.toolbar-btn:hover {
+    background: $border;
+    color: $cyan;
+    border: tall $cyan-dim;
+}
+
+.toolbar-btn.danger:hover {
+    background: $red;
+    color: #ffffff;
+}
+
+#toolbar-spacer {
+    width: 1fr;
+}
+
+#toolbar-hint {
+    color: $dim;
+    text-align: right;
+}
