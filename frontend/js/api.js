@@ -2,7 +2,7 @@
    API Layer — Polymarket (Gamma) + Anthropic (Claude)
    ═══════════════════════════════════════════════════════════════════ */
 
-const GAMMA_API = "/api/gamma";
+const GAMMA_API = "/polymarket/api/gamma";
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 
 // ── Polymarket Gamma API ─────────────────────────────────────────
