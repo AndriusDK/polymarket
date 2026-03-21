@@ -537,6 +537,7 @@ async function runBtcCycle() {
         reasons.push("daily budget exhausted");
       logEntry("info", `  ↳ <span class="amber">no trade</span> — ${reasons.join(", ")}`);
     }
+  }   // end for (const market of fresh)
 
   setStat("btc-status", "WATCHING", "dim");
 }
