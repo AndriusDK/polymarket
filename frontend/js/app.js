@@ -542,19 +542,9 @@ async function _runCryptoCycleInner(asset) {
     const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
     const gap = spot - priceToBeat;
 
-    // Pre-analysis guard: skip if gap is physically impossible to close in time.
-    // Uses recent candle range as a proxy for max movement rate per minute.
+    // Precompute maxMovement for post-analysis crossing check.
     const recentRange = candles.slice(-3).reduce((mx, c) => Math.max(mx, c.high - c.low), 0);
     const maxMovement = Math.max(recentRange, 1) * Math.max(timeRemaining / 60, 0.25) * 3;
-    if (Math.abs(gap) > maxMovement) {
-      logEntry("info",
-        `${cfg.ticker}: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
-        `[${timeRemaining}s left]  ${cfg.ticker} $${spot.toFixed(pd)} vs target $${priceToBeat.toFixed(pd)}  ` +
-        `<span class="${gap >= 0 ? "green" : "red"}">${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)}</span>  ` +
-        `<span class="dim">⊘ gap too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})</span>`
-      );
-      continue;
-    }
 
     logEntry("info",
       `${cfg.ticker}: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
@@ -589,9 +579,16 @@ async function _runCryptoCycleInner(asset) {
     const entryOdds   = analysis.signal === "BUY_UP" ? market.upPrice : market.downPrice;
     const oddsOk      = analysis.signal === "SKIP" || entryOdds >= minOdds;
 
+    // Gap-crossing guard: only applies when signal bets AGAINST the current gap direction.
+    // (BUY_UP when price is below target, or BUY_DOWN when price is above target)
+    const signalAgainstGap = analysis.signal === "BUY_UP" && gap < 0 ||
+                             analysis.signal === "BUY_DOWN" && gap > 0;
+    const crossable = !signalAgainstGap || Math.abs(gap) <= maxMovement;
+
     const qualifies =
       analysis.signal !== "SKIP" &&
       oddsOk &&
+      crossable &&
       (analysis.confidence === "HIGH" ||
        (analysis.confidence === "MEDIUM" && analysis.absEdge >= 0.10)) &&
       analysis.absEdge >= minEdge &&
@@ -602,6 +599,7 @@ async function _runCryptoCycleInner(asset) {
     } else if (analysis.signal !== "SKIP") {
       const reasons = [];
       if (!oddsOk) reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% < min ${(minOdds * 100).toFixed(0)}%`);
+      if (!crossable) reasons.push(`gap $${Math.abs(gap).toFixed(pd)} too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < 0.10)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < 10% required for MEDIUM`);
