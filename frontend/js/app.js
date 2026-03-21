@@ -294,6 +294,10 @@ function addCryptoCard(trade) {
           <span class="btc-v" id="tp-${trade.id}">${(trade.currentPrice * 100).toFixed(1)}%</span>
         </div>
         <div class="btc-kv">
+          <span class="btc-k">PEAK</span>
+          <span class="btc-v dim" id="peak-${trade.id}">${(trade.peakPrice * 100).toFixed(1)}%</span>
+        </div>
+        <div class="btc-kv">
           <span class="btc-k">UNREAL. PnL</span>
           <span class="btc-v dim" id="pnl-${trade.id}">+$0.00</span>
         </div>
@@ -321,9 +325,15 @@ const addBtcCard = addCryptoCard;
 
 function refreshBtcCards() {
   for (const t of state.trades) {
-    const tpEl  = $(`#tp-${t.id}`);
-    const pnlEl = $(`#pnl-${t.id}`);
-    if (tpEl)  tpEl.textContent = (t.currentPrice * 100).toFixed(1) + "%";
+    const tpEl   = $(`#tp-${t.id}`);
+    const peakEl = $(`#peak-${t.id}`);
+    const pnlEl  = $(`#pnl-${t.id}`);
+    if (tpEl)   tpEl.textContent = (t.currentPrice * 100).toFixed(1) + "%";
+    if (peakEl) {
+      peakEl.textContent = (t.peakPrice * 100).toFixed(1) + "%";
+      // Color peak green if it meaningfully exceeded entry, dim if flat
+      peakEl.className = t.peakPrice > t.entryPrice + 0.005 ? "btc-v green" : "btc-v dim";
+    }
     if (pnlEl) {
       const isPos = t.unrealizedPnl >= 0;
       pnlEl.textContent = (isPos ? "+" : "") + "$" + t.unrealizedPnl.toFixed(2);
@@ -357,6 +367,7 @@ const priceStream = (() => {
           if (t.tokenId !== tokenId) continue;
           t.currentPrice  = bid;
           t.unrealizedPnl = t.shares * bid - t.amount;
+          if (bid > t.peakPrice) t.peakPrice = bid;
           changed = true;
         }
         if (changed) {
@@ -740,6 +751,7 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     amount,
     shares:        amount / entryPrice,
     currentPrice:  entryPrice,
+    peakPrice:     entryPrice,
     confidence:    analysis.confidence,
     unrealizedPnl: 0,
     mode:          c.dryRun ? "SIM" : "LIVE",
