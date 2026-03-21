@@ -362,8 +362,8 @@ const priceStream = (() => {
           const takeProfitPct = (state.config?.takeProfitPct ?? 50) / 100;
           const toStopLoss = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
-            // Never stop-loss near-resolution entries — position resolves in seconds
-            if (t.totalSecs < 120) return false;
+            // Never stop-loss truly last-second entries — position resolves in seconds
+            if (t.totalSecs < 45) return false;
             // For high-priced tokens (>0.70 entry), stop-loss in dollar terms only:
             // don't trigger on normal spread noise — require a real directional move
             const stopThreshold = t.entryPrice > 0.70
