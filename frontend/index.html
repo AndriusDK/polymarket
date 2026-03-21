@@ -138,24 +138,16 @@
 
     <!-- Main grid -->
     <div class="dash-grid">
-      <!-- Markets table -->
-      <section class="panel" id="markets-panel">
-        <div class="panel-title">MARKET ANALYSIS</div>
-        <div class="table-wrap">
-          <table id="markets-table">
-            <thead>
-              <tr>
-                <th class="col-q">Question</th>
-                <th>Volume</th>
-                <th>Market</th>
-                <th>Claude</th>
-                <th>Edge</th>
-                <th>Conf</th>
-                <th>Signal</th>
-              </tr>
-            </thead>
-            <tbody id="markets-tbody"></tbody>
-          </table>
+
+      <!-- BTC Positions panel -->
+      <section class="panel" id="btc-panel">
+        <div class="panel-title">⚡ ACTIVE BTC POSITIONS</div>
+        <div id="btc-cards">
+          <div id="btc-empty" class="btc-empty">
+            <div class="btc-empty-icon">⚡</div>
+            <div class="btc-empty-msg">NO ACTIVE BTC POSITIONS</div>
+            <div class="btc-empty-hint">Press [⚡ BTC MODE] to start scanning for opportunities</div>
+          </div>
         </div>
       </section>
 
@@ -164,15 +156,8 @@
         <div class="panel-title">SYSTEM STATUS</div>
         <div class="stat"><span class="stat-key">Status</span><span id="stat-status" class="stat-val dim">IDLE</span></div>
         <div class="stat-divider"></div>
-        <div class="stat"><span class="stat-key">Markets fetched</span><span id="stat-fetched" class="stat-val cyan">0</span></div>
-        <div class="stat"><span class="stat-key">Analyzed</span><span id="stat-analyzed" class="stat-val cyan">0</span></div>
-        <div class="stat"><span class="stat-key">Opportunities</span><span id="stat-opps" class="stat-val amber">0</span></div>
-        <div class="stat"><span class="stat-key">Trades placed</span><span id="stat-trades" class="stat-val magenta">0</span></div>
-        <div class="stat-divider"></div>
         <div class="stat"><span class="stat-key">Total spent</span><span id="stat-spent" class="stat-val green">$0.00</span></div>
         <div class="stat"><span class="stat-key">Budget left</span><span id="stat-budget" class="stat-val green">$0.00</span></div>
-        <div class="stat-divider"></div>
-        <div class="stat"><span class="stat-key">Cycle</span><span id="stat-cycle" class="stat-val dim">—</span></div>
         <div class="stat-divider"></div>
         <div class="stat"><span class="stat-key">Session PnL</span><span id="stat-pnl" class="stat-val dim">$0.00</span></div>
         <div class="stat"><span class="stat-key">Open positions</span><span id="stat-positions" class="stat-val dim">0</span></div>
@@ -180,48 +165,22 @@
         <div class="stat"><span class="stat-key">BTC mode</span><span id="stat-btc-status" class="stat-val dim">OFF</span></div>
         <div class="stat"><span class="stat-key">BTC signals</span><span id="stat-btc-signals" class="stat-val cyan">0</span></div>
         <div class="stat"><span class="stat-key">BTC trades</span><span id="stat-btc-trades" class="stat-val amber">0</span></div>
-
-        <!-- Progress bar -->
+        <!-- Progress bar (used during BTC scan) -->
         <div id="progress-wrap" class="progress-wrap hidden">
           <div class="progress-label"><span id="progress-text">Scanning...</span></div>
           <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
         </div>
       </aside>
 
-      <!-- Activity log / Trades -->
+      <!-- Activity log -->
       <section class="panel" id="log-panel">
-        <div class="panel-tab-bar">
-          <button class="panel-tab active" id="tab-log" onclick="switchTab('log')">ACTIVITY LOG</button>
-          <button class="panel-tab" id="tab-trades" onclick="switchTab('trades')">TRADES</button>
-        </div>
+        <div class="panel-title">ACTIVITY LOG</div>
         <div id="log-content" class="log-content"></div>
-        <div id="trades-content" class="trades-content hidden">
-          <div style="text-align:right;font-size:10px;color:#00ffe740;padding:2px 6px;"><span id="positions-updated"></span></div>
-          <table id="trades-table">
-            <thead>
-              <tr>
-                <th>Mode</th>
-                <th class="col-q-trade">Market</th>
-                <th>Signal</th>
-                <th>Size</th>
-                <th>Entry</th>
-                <th>Current</th>
-                <th>Unr. PnL</th>
-                <th>Conf</th>
-              </tr>
-            </thead>
-            <tbody id="trades-tbody">
-              <tr id="trades-empty-row"><td colspan="8" class="trades-empty">No trades yet this session.</td></tr>
-            </tbody>
-          </table>
-        </div>
       </section>
     </div>
 
     <!-- Toolbar -->
     <footer id="toolbar">
-      <button id="btn-run" class="toolbar-btn">▶ RUN CYCLE</button>
-      <button id="btn-auto" class="toolbar-btn">⟳ AUTO 5min</button>
       <button id="btn-btc" class="toolbar-btn btc-btn">⚡ BTC MODE</button>
       <button id="btn-stop" class="toolbar-btn" disabled>■ STOP</button>
       <button id="btn-settings" class="toolbar-btn danger">◀ SETTINGS</button>
@@ -231,11 +190,8 @@
   </div>
 
   <style>
-    /* BTC mode */
     .btc-btn { color: #ffb347 !important; border-color: #ffb34780 !important; }
     .btc-btn.active { background: #ffb34718 !important; }
-    .btc-trade-row { border-left: 2px solid #ffb347; }
-    .btc-countdown { font-size: 10px; color: #ffb347; margin-left: 4px; }
     #stat-btc-status.amber { color: #ffb347; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
