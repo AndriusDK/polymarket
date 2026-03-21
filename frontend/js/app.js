@@ -68,7 +68,8 @@ function initSetup() {
       minEdge:       parseFloat($("#min-edge").value) || 0.05,
       maxDaily:      parseFloat($("#max-daily").value) || 100,
       dryRun:        $("#dry-run-toggle").checked,
-      takeProfitPct: parseFloat($("#take-profit-pct")?.value) || 50,
+      takeProfitPct:    parseFloat($("#take-profit-pct")?.value) || 50,
+      minMarketVolume:  parseFloat($("#min-market-volume")?.value) || 1000,
       btcMode:       $("#btc-mode-toggle")?.checked ?? false,
       btcMaxBet:     parseFloat($("#btc-max-bet")?.value) || 5,
       btcMinEdge:    parseFloat($("#btc-min-edge")?.value) || 0.06,
@@ -493,7 +494,7 @@ async function _runCryptoCycleInner(asset) {
 
   let markets, debug;
   try {
-    ({ markets, debug } = await fetchCryptoMarkets(asset, { maxMinutes: 20 }));
+    ({ markets, debug } = await fetchCryptoMarkets(asset, { maxMinutes: 20, minVolume: c.minMarketVolume }));
   } catch (err) {
     logEntry("error", `${cfg.ticker}: market fetch failed — ${err.message}`);
     setStat(`${asset}-status`, "ERROR", "red");
@@ -503,7 +504,7 @@ async function _runCryptoCycleInner(asset) {
   const freshCount = markets.filter(m => !state[asset].analyzed.has(m.conditionId)).length;
   logEntry("info",
     `${cfg.ticker} scan: ${debug.total} total markets → ${debug.asset} ${cfg.ticker} → ` +
-    `${debug.inWindow} in window → ${debug.parsed} valid (${freshCount} fresh)`
+    `${debug.inWindow} in window → ${debug.parsed} valid → ${debug.filtered} vol≥$${c.minMarketVolume} (${freshCount} fresh)`
   );
 
   const fresh = markets.filter(m => !state[asset].analyzed.has(m.conditionId));

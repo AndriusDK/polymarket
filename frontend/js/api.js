@@ -306,7 +306,7 @@ function parseCryptoMarket(raw) {
   };
 }
 
-async function fetchCryptoMarkets(asset, { maxMinutes = 20 } = {}) {
+async function fetchCryptoMarkets(asset, { maxMinutes = 20, minVolume = 1000 } = {}) {
   const cfg    = CRYPTO_CONFIG[asset];
   const now    = Date.now();
   const maxEnd = new Date(now + maxMinutes * 60_000).toISOString();
@@ -340,12 +340,13 @@ async function fetchCryptoMarkets(asset, { maxMinutes = 20 } = {}) {
     const parsed = parseCryptoMarket(m);
     if (!parsed) continue;
     nParsed++;
+    if (parsed.volume < minVolume) continue;
     markets.push(parsed);
   }
 
   return {
     markets: markets.sort((a, b) => new Date(a.endDate) - new Date(b.endDate)),
-    debug: { total: raw.length, asset: nAsset, inWindow: nAsset, parsed: nParsed },
+    debug: { total: raw.length, asset: nAsset, inWindow: nAsset, parsed: nParsed, filtered: markets.length },
   };
 }
 

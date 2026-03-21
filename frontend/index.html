@@ -83,7 +83,10 @@
           <label class="field-label">Take Profit (%)</label>
           <input type="number" id="take-profit-pct" class="neon-input" value="50" min="5" max="500" step="5" title="Close position when gain ≥ this % of amount risked" />
         </div>
-        <div></div>
+        <div>
+          <label class="field-label">Min Market Volume ($)</label>
+          <input type="number" id="min-market-volume" class="neon-input" value="1000" min="0" step="100" title="Skip markets with total volume below this threshold" />
+        </div>
       </div>
 
       <div class="switch-row">
