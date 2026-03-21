@@ -12,9 +12,9 @@ const state = {
   trades: [],          // open positions
   sessionPnl: 0,
   realizedPnl: 0,
-  btc: { timer: null, analyzed: new Map() },  // conditionId → endDateMs
-  eth: { timer: null, analyzed: new Map() },
-  sol: { timer: null, analyzed: new Map() },
+  btc: { timer: null, analyzed: new Map(), running: false },  // conditionId → endDateMs
+  eth: { timer: null, analyzed: new Map(), running: false },
+  sol: { timer: null, analyzed: new Map(), running: false },
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -477,6 +477,16 @@ const startBtcMode = () => startCryptoMode("btc");
 const stopBtcMode  = () => stopCryptoMode("btc");
 
 async function runCryptoCycle(asset) {
+  if (state[asset].running) return;  // prevent concurrent cycles
+  state[asset].running = true;
+  try {
+    await _runCryptoCycleInner(asset);
+  } finally {
+    state[asset].running = false;
+  }
+}
+
+async function _runCryptoCycleInner(asset) {
   const c   = state.config;
   const cfg = CRYPTO_CONFIG[asset];
   setStat(`${asset}-status`, "SCANNING…", "cyan");
