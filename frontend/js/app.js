@@ -373,6 +373,10 @@ function closePosition(trade, reason) {
     const cd = $(`#cd-${trade.id}`);
     if (cd) { cd.textContent = "[CLOSED]"; cd.className = "btc-card-cd resolved"; }
 
+    // Clear unrealized PnL — position is settled
+    const pnlEl = $(`#pnl-${trade.id}`);
+    if (pnlEl) { pnlEl.textContent = "+$0.00"; pnlEl.className = "btc-v dim"; }
+
     // Mark card as closed + move to bottom of container (below active positions)
     card.classList.add(isWin ? "closed-win" : "closed-loss");
     const container = card.parentNode;
