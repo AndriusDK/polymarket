@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════
-   App Controller — BTC 5-min trading
+   App Controller — BTC / ETH / SOL 5-min & 15-min trading
    ═══════════════════════════════════════════════════════════════════ */
 
 // ── State ────────────────────────────────────────────────────────
@@ -12,10 +12,9 @@ const state = {
   trades: [],          // open positions
   sessionPnl: 0,
   realizedPnl: 0,
-  btc: {
-    timer:    null,    // setInterval handle for 30s scan
-    analyzed: new Set(),
-  },
+  btc: { timer: null, analyzed: new Set() },
+  eth: { timer: null, analyzed: new Set() },
+  sol: { timer: null, analyzed: new Set() },
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -73,6 +72,12 @@ function initSetup() {
       btcMode:       $("#btc-mode-toggle")?.checked ?? false,
       btcMaxBet:     parseFloat($("#btc-max-bet")?.value) || 5,
       btcMinEdge:    parseFloat($("#btc-min-edge")?.value) || 0.06,
+      ethMode:       $("#eth-mode-toggle")?.checked ?? false,
+      ethMaxBet:     parseFloat($("#eth-max-bet")?.value) || 5,
+      ethMinEdge:    parseFloat($("#eth-min-edge")?.value) || 0.06,
+      solMode:       $("#sol-mode-toggle")?.checked ?? false,
+      solMaxBet:     parseFloat($("#sol-max-bet")?.value) || 5,
+      solMinEdge:    parseFloat($("#sol-min-edge")?.value) || 0.06,
     };
 
     initDashboard();
@@ -85,7 +90,11 @@ function initSetup() {
 function initDashboard() {
   const c = state.config;
 
-  $("#header-config").textContent = `BTC MODE  |  MAX $${c.btcMaxBet}/trade`;
+  const activeAssets = ["BTC","ETH","SOL"]
+    .filter(a => c[`${a.toLowerCase()}Mode`])
+    .map(a => `${a} $${c[`${a.toLowerCase()}MaxBet`]}/trade`)
+    .join(" | ");
+  $("#header-config").textContent = activeAssets || "BTC / ETH / SOL MODE";
 
   const modeEl = $("#header-mode");
   modeEl.textContent = c.dryRun ? "◎ DRY RUN" : "⚡ LIVE";
@@ -98,23 +107,27 @@ function initDashboard() {
     stopBot();
     showScreen("setup-screen");
   });
-  $("#btn-btc")?.addEventListener("click", () => {
-    if (state.btc.timer) stopBtcMode();
-    else startBtcMode();
-  });
+  for (const asset of ["btc", "eth", "sol"]) {
+    $(`#btn-${asset}`)?.addEventListener("click", () => {
+      if (state[asset].timer) stopCryptoMode(asset);
+      else startCryptoMode(asset);
+    });
+  }
 
   startClock();
   logEntry("cyan", "POLYMARKET AI TRADING SYSTEM — ONLINE");
   logEntry("info",
-    `Mode: ${c.dryRun ? "DRY RUN" : "⚡ LIVE"}  |  BTC 5-min  |  ` +
-    `Max $${c.btcMaxBet}/trade  |  Budget $${c.maxDaily}`
+    `Mode: ${c.dryRun ? "DRY RUN" : "⚡ LIVE"}  |  BTC/ETH/SOL 5-min & 15-min  |  Budget $${c.maxDaily}`
   );
 
-  if (c.btcMode) {
-    logEntry("info", "BTC 5-min mode: auto-starting…");
-    startBtcMode();
-  } else {
-    logEntry("info", "Press [⚡ BTC MODE] to start scanning for Bitcoin 5-min markets.");
+  for (const asset of ["btc", "eth", "sol"]) {
+    if (c[`${asset}Mode`]) {
+      logEntry("info", `${asset.toUpperCase()} mode: auto-starting…`);
+      startCryptoMode(asset);
+    }
+  }
+  if (!c.btcMode && !c.ethMode && !c.solMode) {
+    logEntry("info", "Press [⚡ BTC / ETH / SOL MODE] to start scanning for markets.");
   }
 }
 
@@ -122,7 +135,7 @@ function initDashboard() {
 
 function stopBot() {
   if (state.abortCtrl) state.abortCtrl.abort();
-  stopBtcMode();
+  for (const asset of ["btc", "eth", "sol"]) stopCryptoMode(asset);
   setStat("status", "STOPPED", "amber");
   logEntry("warning", "Bot stopped.");
   setRunning(false);
@@ -157,9 +170,9 @@ function showProgress(visible) {
   $("#progress-wrap")?.classList.toggle("hidden", !visible);
 }
 
-// ── BTC Position Cards ────────────────────────────────────────────
+// ── Crypto Position Cards ─────────────────────────────────────────
 
-function addBtcCard(trade) {
+function addCryptoCard(trade) {
   const emptyEl = $("#btc-empty");
   if (emptyEl) emptyEl.style.display = "none";
 
@@ -168,8 +181,10 @@ function addBtcCard(trade) {
   div.id        = `card-${trade.id}`;
   div.className = "btc-card";
 
+  const cfg       = (typeof CRYPTO_CONFIG !== "undefined" && CRYPTO_CONFIG[trade.type]) || { ticker: trade.type.toUpperCase() };
+  const ticker    = cfg.ticker;
   const isUp      = trade.signal === "BUY_UP";
-  const sigLabel  = isUp ? "▲ BTC UP" : "▼ BTC DOWN";
+  const sigLabel  = isUp ? `▲ ${ticker} UP` : `▼ ${ticker} DOWN`;
   const sigClass  = isUp ? "sig-up" : "sig-down";
   const modeClass = trade.mode === "SIM" ? "amber" : "red";
   const confClass = `conf-${trade.confidence.toLowerCase()}`;
@@ -178,12 +193,18 @@ function addBtcCard(trade) {
   const gap       = trade.gap ?? 0;
   const gapSign   = gap >= 0 ? "+" : "";
   const gapClass  = gap >= 0 ? "green" : "red";
+  const spot      = trade.spot ?? 0;
+  const priceFmt  = spot >= 1000 ? spot.toFixed(0) : spot.toFixed(2);
+  const targetFmt = (trade.priceToBeat ?? 0) >= 1000 ? (trade.priceToBeat ?? 0).toFixed(0) : (trade.priceToBeat ?? 0).toFixed(2);
+  const gapFmt    = spot >= 1000 ? Math.abs(gap).toFixed(0) : Math.abs(gap).toFixed(2);
+  const assetClass = `asset-${trade.type}`;
 
   div.innerHTML = `
     <div class="btc-card-scan"></div>
     <div class="btc-card-head">
       <span class="btc-card-q">${escHtml(trade.question)}</span>
       <div class="btc-card-badges">
+        <span class="btc-badge ${assetClass}">${ticker}</span>
         <span class="btc-badge ${modeClass}">${trade.mode}</span>
         <span class="btc-card-cd ${secsLeft < 60 ? "urgent" : ""}" id="cd-${trade.id}">[${secsLeft}s]</span>
       </div>
@@ -218,14 +239,16 @@ function addBtcCard(trade) {
       </div>
     </div>
     <div class="btc-card-foot">
-      <span>BTC $${(trade.spot ?? 0).toFixed(0)}&nbsp; vs &nbsp;target $${(trade.priceToBeat ?? 0).toFixed(0)}
-      &nbsp;|&nbsp; Gap: <span class="${gapClass}">${gapSign}$${Math.abs(gap).toFixed(0)}</span></span>
+      <span>${ticker} $${priceFmt}&nbsp; vs &nbsp;target $${targetFmt}
+      &nbsp;|&nbsp; Gap: <span class="${gapClass}">${gapSign}$${gapFmt}</span></span>
       <a href="${trade.marketUrl}" target="_blank" rel="noopener" class="btc-market-link">↗ POLYMARKET</a>
     </div>
   `;
 
   cards.insertBefore(div, cards.firstChild);
 }
+
+const addBtcCard = addCryptoCard;
 
 function refreshBtcCards() {
   for (const t of state.trades) {
@@ -384,7 +407,7 @@ function closePosition(trade, reason) {
   }
 
   // Only show empty state if no active trades AND no closed cards in DOM
-  if (state.trades.filter(t => t.type === "btc").length === 0) {
+  if (state.trades.length === 0) {
     const hasClosed = document.querySelectorAll("#btc-cards .closed-win, #btc-cards .closed-loss").length > 0;
     const empty = $("#btc-empty");
     if (empty) empty.style.display = hasClosed ? "none" : "";
@@ -412,75 +435,89 @@ function updatePnlStat() {
   setStat("positions", String(state.trades.length));
 }
 
-// ── BTC 5-min mode ───────────────────────────────────────────────
+// ── Crypto mode (BTC / ETH / SOL) ────────────────────────────────
 
-function startBtcMode() {
-  if (state.btc.timer) return;
-  state.btc.analyzed.clear();
+const ASSET_COLORS = { btc: "amber", eth: "eth", sol: "sol" };
 
-  const btn = $("#btn-btc");
-  if (btn) { btn.textContent = "■ BTC STOP"; btn.classList.add("active"); }
-  setStat("btc-status", "ACTIVE", "amber");
+function startCryptoMode(asset) {
+  if (state[asset].timer) return;
+  state[asset].analyzed.clear();
+
+  const cfg = CRYPTO_CONFIG[asset];
+  const btn = $(`#btn-${asset}`);
+  if (btn) { btn.textContent = `■ ${cfg.ticker} STOP`; btn.classList.add("active"); }
+  setStat(`${asset}-status`, "ACTIVE", ASSET_COLORS[asset]);
   setRunning(true);
-  logEntry("cyan", "⚡ BTC MODE ON — scanning every 10s for high-volume 5-min markets");
+  logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — scanning every 10s for 5-min & 15-min markets`);
 
-  runBtcCycle();
-  state.btc.timer = setInterval(runBtcCycle, 10_000);
+  runCryptoCycle(asset);
+  state[asset].timer = setInterval(() => runCryptoCycle(asset), 10_000);
 }
 
-function stopBtcMode() {
-  if (!state.btc.timer) return;
-  clearInterval(state.btc.timer);
-  state.btc.timer = null;
+function stopCryptoMode(asset) {
+  if (!state[asset]?.timer) return;
+  clearInterval(state[asset].timer);
+  state[asset].timer = null;
 
-  const btn = $("#btn-btc");
-  if (btn) { btn.textContent = "⚡ BTC MODE"; btn.classList.remove("active"); }
-  setStat("btc-status", "OFF", "dim");
-  setRunning(false);
-  logEntry("warning", "BTC mode stopped.");
+  const cfg = CRYPTO_CONFIG[asset];
+  const btn = $(`#btn-${asset}`);
+  if (btn) { btn.textContent = `⚡ ${cfg.ticker} MODE`; btn.classList.remove("active"); }
+  setStat(`${asset}-status`, "OFF", "dim");
+  if (!["btc","eth","sol"].some(a => state[a].timer)) setRunning(false);
+  logEntry("warning", `${cfg.ticker} mode stopped.`);
 }
 
-async function runBtcCycle() {
-  const c = state.config;
-  setStat("btc-status", "SCANNING…", "cyan");
+// Keep backward-compat names
+const startBtcMode = () => startCryptoMode("btc");
+const stopBtcMode  = () => stopCryptoMode("btc");
+
+async function runCryptoCycle(asset) {
+  const c   = state.config;
+  const cfg = CRYPTO_CONFIG[asset];
+  setStat(`${asset}-status`, "SCANNING…", "cyan");
 
   let markets, debug;
   try {
-    ({ markets, debug } = await fetchBtcMarkets({ maxMinutes: 10 }));
+    ({ markets, debug } = await fetchCryptoMarkets(asset, { maxMinutes: 20 }));
   } catch (err) {
-    logEntry("error", `BTC: market fetch failed — ${err.message}`);
-    setStat("btc-status", "ERROR", "red");
+    logEntry("error", `${cfg.ticker}: market fetch failed — ${err.message}`);
+    setStat(`${asset}-status`, "ERROR", "red");
     return;
   }
 
+  const freshCount = markets.filter(m => !state[asset].analyzed.has(m.conditionId)).length;
   logEntry("info",
-    `BTC scan: ${debug.total} total markets → ${debug.btc} BTC → ` +
-    `${debug.inWindow} in window → ${debug.parsed} valid ` +
-    `(${markets.filter(m => !state.btc.analyzed.has(m.conditionId)).length} fresh)`
+    `${cfg.ticker} scan: ${debug.total} total markets → ${debug.asset} ${cfg.ticker} → ` +
+    `${debug.inWindow} in window → ${debug.parsed} valid (${freshCount} fresh)`
   );
 
-  const fresh = markets.filter(m => !state.btc.analyzed.has(m.conditionId));
+  const fresh = markets.filter(m => !state[asset].analyzed.has(m.conditionId));
   if (!fresh.length) {
-    setStat("btc-status", "WATCHING", "dim");
+    setStat(`${asset}-status`, "WATCHING", "dim");
     return;
   }
 
   let spot, candles;
   try {
-    [spot, candles] = await Promise.all([fetchBtcSpot(), fetchBtcCandles(6)]);
+    [spot, candles] = await Promise.all([
+      fetchCryptoSpot(cfg.symbol),
+      fetchCryptoCandles(cfg.symbol, 6),
+    ]);
   } catch (err) {
-    logEntry("error", `BTC: Binance data failed — ${err.message}`);
-    setStat("btc-status", "ERROR", "red");
+    logEntry("error", `${cfg.ticker}: Binance data failed — ${err.message}`);
+    setStat(`${asset}-status`, "ERROR", "red");
     return;
   }
 
+  const pd = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
+
   for (const market of fresh) {
-    state.btc.analyzed.add(market.conditionId);
+    state[asset].analyzed.add(market.conditionId);
 
     let priceToBeat = null;
     if (market.startDate) {
       try {
-        priceToBeat = await fetchBtcOpenAtTime(new Date(market.startDate).getTime());
+        priceToBeat = await fetchCryptoOpenAtTime(cfg.symbol, new Date(market.startDate).getTime());
       } catch { /* fall through */ }
     }
     if (!priceToBeat) priceToBeat = candles[candles.length - 1]?.open ?? spot;
@@ -489,18 +526,18 @@ async function runBtcCycle() {
     const gap = spot - priceToBeat;
 
     logEntry("info",
-      `BTC: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
-      `[${timeRemaining}s left]  BTC $${spot.toFixed(0)} vs target $${priceToBeat.toFixed(0)}  ` +
-      `<span class="${gap >= 0 ? "green" : "red"}">${gap >= 0 ? "+" : ""}$${gap.toFixed(0)}</span>`
+      `${cfg.ticker}: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
+      `[${timeRemaining}s left]  ${cfg.ticker} $${spot.toFixed(pd)} vs target $${priceToBeat.toFixed(pd)}  ` +
+      `<span class="${gap >= 0 ? "green" : "red"}">${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)}</span>`
     );
 
     let analysis;
     try {
-      analysis = await analyzeBtcMarket(
-        market, { spot, candles, priceToBeat }, c.anthropicKey, { model: c.model }
+      analysis = await analyzeCryptoMarket(
+        market, { spot, candles, priceToBeat }, c.anthropicKey, { model: c.model }, asset
       );
     } catch (err) {
-      logEntry("error", `  BTC analysis failed: ${err.message}`);
+      logEntry("error", `  ${cfg.ticker} analysis failed: ${err.message}`);
       continue;
     }
 
@@ -513,37 +550,40 @@ async function runBtcCycle() {
       `| ${analysis.reasoning}`
     );
 
-    const sigEl = $("#stat-btc-signals");
+    const sigEl = $(`#stat-${asset}-signals`);
     if (sigEl) sigEl.textContent = String(parseInt(sigEl.textContent || "0") + 1);
 
+    const minEdge = c[`${asset}MinEdge`] ?? 0.06;
     const qualifies =
       analysis.signal !== "SKIP" &&
       (analysis.confidence === "HIGH" ||
        (analysis.confidence === "MEDIUM" && analysis.absEdge >= 0.10)) &&
-      analysis.absEdge >= c.btcMinEdge &&
+      analysis.absEdge >= minEdge &&
       state.stats.spent < c.maxDaily;
 
     if (qualifies) {
-      placeBtcTrade(analysis, { spot, priceToBeat });
+      placeCryptoTrade(asset, analysis, { spot, priceToBeat });
     } else if (analysis.signal !== "SKIP") {
-      // Signal fired but didn't pass the qualifies filter — explain why
       const reasons = [];
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < 0.10)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < 10% required for MEDIUM`);
-      if (analysis.absEdge < c.btcMinEdge)
-        reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < btcMinEdge ${(c.btcMinEdge * 100).toFixed(1)}%`);
+      if (analysis.absEdge < minEdge)
+        reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < minEdge ${(minEdge * 100).toFixed(1)}%`);
       if (state.stats.spent >= c.maxDaily)
         reasons.push("daily budget exhausted");
       logEntry("info", `  ↳ <span class="amber">no trade</span> — ${reasons.join(", ")}`);
     }
-  }   // end for (const market of fresh)
+  }
 
-  setStat("btc-status", "WATCHING", "dim");
+  setStat(`${asset}-status`, "WATCHING", "dim");
 }
 
-function placeBtcTrade(analysis, { spot, priceToBeat }) {
+const runBtcCycle = () => runCryptoCycle("btc");
+
+function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   const c      = state.config;
+  const cfg    = CRYPTO_CONFIG[asset];
   const market = analysis.market;
   const isUp   = analysis.signal === "BUY_UP";
 
@@ -552,83 +592,87 @@ function placeBtcTrade(analysis, { spot, priceToBeat }) {
 
   // Scale bet size by time remaining — more time = more uncertainty = smaller bet
   const secsForSizing = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
-  const timeFraction  = secsForSizing > 400 ? 0.40
-                      : secsForSizing > 200 ? 0.65
+  const timeFraction  = secsForSizing > 800 ? 0.40
+                      : secsForSizing > 400 ? 0.65
                       : 1.0;
-  const amount = Math.min(c.btcMaxBet * timeFraction, c.maxDaily - state.stats.spent);
+  const maxBet = c[`${asset}MaxBet`] ?? c.btcMaxBet ?? 5;
+  const amount = Math.min(maxBet * timeFraction, c.maxDaily - state.stats.spent);
   if (amount < 0.50) return;
 
   const tag      = c.dryRun ? "[SIM]" : "[LIVE]";
   const sigClass = isUp ? "green" : "red";
+  const pd       = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
 
   logEntry("trade",
-    `${tag} BTC <span class="${sigClass}">${analysis.signal}</span>  ` +
+    `${tag} ${cfg.ticker} <span class="${sigClass}">${analysis.signal}</span>  ` +
     `$${amount.toFixed(2)}  —  ${market.question.slice(0, 50)}`
   );
   logEntry("info",
     `  Entry: ${(entryPrice * 100).toFixed(1)}%  ` +
-    `BTC $${spot.toFixed(0)} vs target $${priceToBeat.toFixed(0)}  ` +
-    `Gap: ${analysis.gap >= 0 ? "+" : ""}$${analysis.gap.toFixed(2)}`
+    `${cfg.ticker} $${spot.toFixed(pd)} vs target $${priceToBeat.toFixed(pd)}  ` +
+    `Gap: ${analysis.gap >= 0 ? "+" : ""}$${analysis.gap.toFixed(pd)}`
   );
 
   const secsLeft  = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
+  const searchQ   = cfg.keywords[0].replace(/ /g, "+");
   const marketUrl = market.slug
     ? `https://polymarket.com/event/${market.slug}`
-    : `https://polymarket.com/markets?q=bitcoin+up+or+down`;
+    : `https://polymarket.com/markets?q=${searchQ}`;
 
   const trade = {
-    id:           Date.now() + state.stats.trades,
-    time:         new Date().toUTCString().slice(-12, -4),
-    question:     market.question,
-    conditionId:  market.conditionId,
+    id:            Date.now() + state.stats.trades,
+    time:          new Date().toUTCString().slice(-12, -4),
+    question:      market.question,
+    conditionId:   market.conditionId,
     tokenId,
-    signal:       analysis.signal,
+    signal:        analysis.signal,
     entryPrice,
     amount,
-    shares:       amount / entryPrice,
-    currentPrice: entryPrice,
-    confidence:   analysis.confidence,
+    shares:        amount / entryPrice,
+    currentPrice:  entryPrice,
+    confidence:    analysis.confidence,
     unrealizedPnl: 0,
-    mode:         c.dryRun ? "SIM" : "LIVE",
-    type:         "btc",
-    endDate:      market.endDate,
+    mode:          c.dryRun ? "SIM" : "LIVE",
+    type:          asset,
+    endDate:       market.endDate,
     spot,
     priceToBeat,
-    gap:          analysis.gap,
-    totalSecs:    secsLeft,
+    gap:           analysis.gap,
+    totalSecs:     secsLeft,
     marketUrl,
   };
 
   state.trades.push(trade);
-  addBtcCard(trade);
+  addCryptoCard(trade);
   priceStream.subscribe(tokenId);
-  startBtcCountdown();
+  startCryptoCountdown();
 
   state.stats.trades++;
   state.stats.spent += amount;
-  setStat("trades",     String(state.stats.trades));
-  setStat("spent",      `$${state.stats.spent.toFixed(2)}`);
-  setStat("budget",     `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+  setStat("trades", String(state.stats.trades));
+  setStat("spent",  `$${state.stats.spent.toFixed(2)}`);
+  setStat("budget", `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
 
-  const btcTradesEl = $("#stat-btc-trades");
-  if (btcTradesEl) btcTradesEl.textContent =
-    String(parseInt(btcTradesEl.textContent || "0") + 1);
+  const tradesEl = $(`#stat-${asset}-trades`);
+  if (tradesEl) tradesEl.textContent = String(parseInt(tradesEl.textContent || "0") + 1);
 }
+
+const placeBtcTrade = (analysis, data) => placeCryptoTrade("btc", analysis, data);
 
 // ── Countdown timer ───────────────────────────────────────────────
 
-let btcCountdownTimer = null;
+let cryptoCountdownTimer = null;
 
-function startBtcCountdown() {
-  if (btcCountdownTimer) return;
-  btcCountdownTimer = setInterval(() => {
-    const btcTrades = state.trades.filter(t => t.type === "btc");
-    if (!btcTrades.length) {
-      clearInterval(btcCountdownTimer);
-      btcCountdownTimer = null;
+function startCryptoCountdown() {
+  if (cryptoCountdownTimer) return;
+  cryptoCountdownTimer = setInterval(() => {
+    const cryptoTrades = state.trades.filter(t => ["btc","eth","sol"].includes(t.type));
+    if (!cryptoTrades.length) {
+      clearInterval(cryptoCountdownTimer);
+      cryptoCountdownTimer = null;
       return;
     }
-    for (const t of btcTrades) {
+    for (const t of cryptoTrades) {
       const cdEl  = $(`#cd-${t.id}`);
       const barEl = $(`#cdbar-${t.id}`);
       if (!cdEl) continue;
@@ -652,6 +696,8 @@ function startBtcCountdown() {
     }
   }, 1_000);
 }
+
+const startBtcCountdown = startCryptoCountdown;
 
 // ── Util ─────────────────────────────────────────────────────────
 

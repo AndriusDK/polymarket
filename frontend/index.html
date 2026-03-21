@@ -95,25 +95,76 @@
         <span id="dry-run-label" class="toggle-status amber">ON</span>
       </div>
 
-      <!-- BTC 5-min Mode -->
-      <div class="section-title"><span class="diamond">◈</span> BTC 5-MIN MODE <span class="hint">(AI-analyzed high-freq Bitcoin markets)</span></div>
-      <div class="row-2">
-        <div>
-          <label class="field-label">BTC Max Bet (USDC)</label>
-          <input type="number" id="btc-max-bet" class="neon-input" value="5" min="1" step="1" />
+      <!-- Crypto Modes -->
+      <div class="section-title"><span class="diamond">◈</span> CRYPTO MODES <span class="hint">(AI-analyzed 5-min &amp; 15-min markets)</span></div>
+
+      <!-- BTC -->
+      <div class="crypto-mode-block">
+        <div class="crypto-mode-label asset-btc-text">⚡ BITCOIN (BTC)</div>
+        <div class="row-2">
+          <div>
+            <label class="field-label">Max Bet (USDC)</label>
+            <input type="number" id="btc-max-bet" class="neon-input" value="5" min="1" step="1" />
+          </div>
+          <div>
+            <label class="field-label">Min Edge</label>
+            <input type="number" id="btc-min-edge" class="neon-input" value="0.06" min="0.01" max="0.50" step="0.01" />
+          </div>
         </div>
-        <div>
-          <label class="field-label">BTC Min Edge</label>
-          <input type="number" id="btc-min-edge" class="neon-input" value="0.06" min="0.01" max="0.50" step="0.01" />
+        <div class="switch-row">
+          <span class="field-label">Auto-start on launch</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="btc-mode-toggle" />
+            <span class="toggle-slider"></span>
+          </label>
+          <span id="btc-mode-label" class="toggle-status dim">OFF</span>
         </div>
       </div>
-      <div class="switch-row">
-        <span class="field-label">Auto-start BTC mode on launch</span>
-        <label class="toggle-switch">
-          <input type="checkbox" id="btc-mode-toggle" />
-          <span class="toggle-slider"></span>
-        </label>
-        <span id="btc-mode-label" class="toggle-status dim">OFF</span>
+
+      <!-- ETH -->
+      <div class="crypto-mode-block">
+        <div class="crypto-mode-label asset-eth-text">◆ ETHEREUM (ETH)</div>
+        <div class="row-2">
+          <div>
+            <label class="field-label">Max Bet (USDC)</label>
+            <input type="number" id="eth-max-bet" class="neon-input" value="5" min="1" step="1" />
+          </div>
+          <div>
+            <label class="field-label">Min Edge</label>
+            <input type="number" id="eth-min-edge" class="neon-input" value="0.06" min="0.01" max="0.50" step="0.01" />
+          </div>
+        </div>
+        <div class="switch-row">
+          <span class="field-label">Auto-start on launch</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="eth-mode-toggle" />
+            <span class="toggle-slider"></span>
+          </label>
+          <span id="eth-mode-label" class="toggle-status dim">OFF</span>
+        </div>
+      </div>
+
+      <!-- SOL -->
+      <div class="crypto-mode-block">
+        <div class="crypto-mode-label asset-sol-text">◎ SOLANA (SOL)</div>
+        <div class="row-2">
+          <div>
+            <label class="field-label">Max Bet (USDC)</label>
+            <input type="number" id="sol-max-bet" class="neon-input" value="5" min="1" step="1" />
+          </div>
+          <div>
+            <label class="field-label">Min Edge</label>
+            <input type="number" id="sol-min-edge" class="neon-input" value="0.06" min="0.01" max="0.50" step="0.01" />
+          </div>
+        </div>
+        <div class="switch-row">
+          <span class="field-label">Auto-start on launch</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="sol-mode-toggle" />
+            <span class="toggle-slider"></span>
+          </label>
+          <span id="sol-mode-label" class="toggle-status dim">OFF</span>
+        </div>
       </div>
 
       <div class="divider"></div>
@@ -139,14 +190,14 @@
     <!-- Main grid -->
     <div class="dash-grid">
 
-      <!-- BTC Positions panel -->
+      <!-- Positions panel -->
       <section class="panel" id="btc-panel">
-        <div class="panel-title">⚡ ACTIVE BTC POSITIONS</div>
+        <div class="panel-title">⚡ ACTIVE POSITIONS</div>
         <div id="btc-cards">
           <div id="btc-empty" class="btc-empty">
             <div class="btc-empty-icon">⚡</div>
-            <div class="btc-empty-msg">NO ACTIVE BTC POSITIONS</div>
-            <div class="btc-empty-hint">Press [⚡ BTC MODE] to start scanning for opportunities</div>
+            <div class="btc-empty-msg">NO ACTIVE POSITIONS</div>
+            <div class="btc-empty-hint">Press [BTC / ETH / SOL MODE] to start scanning</div>
           </div>
         </div>
       </section>
@@ -162,9 +213,17 @@
         <div class="stat"><span class="stat-key">Session PnL</span><span id="stat-pnl" class="stat-val dim">$0.00</span></div>
         <div class="stat"><span class="stat-key">Open positions</span><span id="stat-positions" class="stat-val dim">0</span></div>
         <div class="stat-divider"></div>
-        <div class="stat"><span class="stat-key">BTC mode</span><span id="stat-btc-status" class="stat-val dim">OFF</span></div>
+        <div class="stat"><span class="stat-key asset-btc-text">BTC mode</span><span id="stat-btc-status" class="stat-val dim">OFF</span></div>
         <div class="stat"><span class="stat-key">BTC signals</span><span id="stat-btc-signals" class="stat-val cyan">0</span></div>
         <div class="stat"><span class="stat-key">BTC trades</span><span id="stat-btc-trades" class="stat-val amber">0</span></div>
+        <div class="stat-divider"></div>
+        <div class="stat"><span class="stat-key asset-eth-text">ETH mode</span><span id="stat-eth-status" class="stat-val dim">OFF</span></div>
+        <div class="stat"><span class="stat-key">ETH signals</span><span id="stat-eth-signals" class="stat-val cyan">0</span></div>
+        <div class="stat"><span class="stat-key">ETH trades</span><span id="stat-eth-trades" class="stat-val eth">0</span></div>
+        <div class="stat-divider"></div>
+        <div class="stat"><span class="stat-key asset-sol-text">SOL mode</span><span id="stat-sol-status" class="stat-val dim">OFF</span></div>
+        <div class="stat"><span class="stat-key">SOL signals</span><span id="stat-sol-signals" class="stat-val cyan">0</span></div>
+        <div class="stat"><span class="stat-key">SOL trades</span><span id="stat-sol-trades" class="stat-val sol">0</span></div>
         <!-- Progress bar (used during BTC scan) -->
         <div id="progress-wrap" class="progress-wrap hidden">
           <div class="progress-label"><span id="progress-text">Scanning...</span></div>
@@ -182,6 +241,8 @@
     <!-- Toolbar -->
     <footer id="toolbar">
       <button id="btn-btc" class="toolbar-btn btc-btn">⚡ BTC MODE</button>
+      <button id="btn-eth" class="toolbar-btn eth-btn">◆ ETH MODE</button>
+      <button id="btn-sol" class="toolbar-btn sol-btn">◎ SOL MODE</button>
       <button id="btn-stop" class="toolbar-btn" disabled>■ STOP</button>
       <button id="btn-settings" class="toolbar-btn danger">◀ SETTINGS</button>
       <div class="toolbar-spacer"></div>
@@ -190,23 +251,49 @@
   </div>
 
   <style>
-    .btc-btn { color: #ffb347 !important; border-color: #ffb34780 !important; }
+    /* BTC — amber */
+    .btc-btn  { color: #ffb347 !important; border-color: #ffb34780 !important; }
     .btc-btn.active { background: #ffb34718 !important; }
     #stat-btc-status.amber { color: #ffb347; }
+    .asset-btc  { color: #ffb347; border-color: #ffb34780 !important; background: #ffb34718 !important; }
+    .asset-btc-text { color: #ffb347 !important; }
+
+    /* ETH — blue-purple */
+    .eth-btn  { color: #627eea !important; border-color: #627eea80 !important; }
+    .eth-btn.active { background: #627eea18 !important; }
+    .stat-val.eth { color: #627eea; }
+    #stat-eth-status.eth { color: #627eea; }
+    .asset-eth  { color: #627eea; border-color: #627eea80 !important; background: #627eea18 !important; }
+    .asset-eth-text { color: #627eea !important; }
+
+    /* SOL — green */
+    .sol-btn  { color: #14f195 !important; border-color: #14f19580 !important; }
+    .sol-btn.active { background: #14f19518 !important; }
+    .stat-val.sol { color: #14f195; }
+    #stat-sol-status.sol { color: #14f195; }
+    .asset-sol  { color: #14f195; border-color: #14f19580 !important; background: #14f19518 !important; }
+    .asset-sol-text { color: #14f195 !important; }
+
+    /* Crypto mode block in setup */
+    .crypto-mode-block { border-left: 2px solid #ffffff18; padding-left: 12px; margin-bottom: 16px; }
+    .crypto-mode-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; margin-bottom: 8px; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
   <script src="js/api.js"></script>
   <script src="js/app.js"></script>
   <script>
-    // Wire BTC mode toggle label
+    // Wire toggle labels for BTC / ETH / SOL
     document.addEventListener("DOMContentLoaded", () => {
-      const tog = document.getElementById("btc-mode-toggle");
-      const lbl = document.getElementById("btc-mode-label");
-      if (tog && lbl) {
-        tog.addEventListener("change", () => {
-          lbl.textContent  = tog.checked ? "ON" : "OFF";
-          lbl.className    = "toggle-status " + (tog.checked ? "amber" : "dim");
-        });
+      const colorMap = { btc: "amber", eth: "eth", sol: "sol" };
+      for (const asset of ["btc", "eth", "sol"]) {
+        const tog = document.getElementById(`${asset}-mode-toggle`);
+        const lbl = document.getElementById(`${asset}-mode-label`);
+        if (tog && lbl) {
+          tog.addEventListener("change", () => {
+            lbl.textContent = tog.checked ? "ON" : "OFF";
+            lbl.className   = "toggle-status " + (tog.checked ? colorMap[asset] : "dim");
+          });
+        }
       }
     });
   </script>

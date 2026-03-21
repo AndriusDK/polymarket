@@ -232,18 +232,24 @@ function sizeBet(analysis, maxBet, remainingBudget) {
   return Math.round(Math.min(bet, remainingBudget) * 100) / 100;
 }
 
-// ── Binance — BTC real-time data ─────────────────────────────────
+// ── Binance — crypto real-time data ──────────────────────────────
 
 const BINANCE_API = "https://api.binance.com/api/v3";
 
-async function fetchBtcSpot() {
-  const resp = await fetch(`${BINANCE_API}/ticker/price?symbol=BTCUSDT`);
+const CRYPTO_CONFIG = {
+  btc: { symbol: "BTCUSDT", keywords: ["bitcoin up or down", "btc up or down"], label: "Bitcoin", ticker: "BTC" },
+  eth: { symbol: "ETHUSDT", keywords: ["ethereum up or down", "eth up or down"], label: "Ethereum", ticker: "ETH" },
+  sol: { symbol: "SOLUSDT", keywords: ["solana up or down", "sol up or down"],   label: "Solana",   ticker: "SOL" },
+};
+
+async function fetchCryptoSpot(symbol) {
+  const resp = await fetch(`${BINANCE_API}/ticker/price?symbol=${symbol}`);
   if (!resp.ok) throw new Error(`Binance spot ${resp.status}`);
   return parseFloat((await resp.json()).price);
 }
 
-async function fetchBtcCandles(limit = 6) {
-  const resp = await fetch(`${BINANCE_API}/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`);
+async function fetchCryptoCandles(symbol, limit = 6) {
+  const resp = await fetch(`${BINANCE_API}/klines?symbol=${symbol}&interval=1m&limit=${limit}`);
   if (!resp.ok) throw new Error(`Binance candles ${resp.status}`);
   return (await resp.json()).map(c => ({
     time:  new Date(c[0]),
@@ -254,16 +260,21 @@ async function fetchBtcCandles(limit = 6) {
   }));
 }
 
-async function fetchBtcOpenAtTime(startTimeMs) {
+async function fetchCryptoOpenAtTime(symbol, startTimeMs) {
   const resp = await fetch(
-    `${BINANCE_API}/klines?symbol=BTCUSDT&interval=1m&startTime=${startTimeMs}&limit=1`
+    `${BINANCE_API}/klines?symbol=${symbol}&interval=1m&startTime=${startTimeMs}&limit=1`
   );
   if (!resp.ok) throw new Error(`Binance historical ${resp.status}`);
   const data = await resp.json();
   return data.length ? parseFloat(data[0][1]) : null;
 }
 
-function parseBtcMarket(raw) {
+// Backward-compat aliases
+const fetchBtcSpot       = ()    => fetchCryptoSpot("BTCUSDT");
+const fetchBtcCandles    = (n)   => fetchCryptoCandles("BTCUSDT", n);
+const fetchBtcOpenAtTime = (ms)  => fetchCryptoOpenAtTime("BTCUSDT", ms);
+
+function parseCryptoMarket(raw) {
   let outcomes, prices, tokenIds;
   try {
     outcomes = JSON.parse(raw.outcomes      || "[]");
@@ -295,9 +306,8 @@ function parseBtcMarket(raw) {
   };
 }
 
-async function fetchBtcMarkets({ maxMinutes = 10 } = {}) {
-  // Query by end-date window so we catch low-volume freshly-opened markets
-  // that would never appear in a volume-sorted top-300 list.
+async function fetchCryptoMarkets(asset, { maxMinutes = 20 } = {}) {
+  const cfg    = CRYPTO_CONFIG[asset];
   const now    = Date.now();
   const maxEnd = new Date(now + maxMinutes * 60_000).toISOString();
 
@@ -310,18 +320,18 @@ async function fetchBtcMarkets({ maxMinutes = 10 } = {}) {
   });
 
   const resp = await fetch(`${PROXY_URL}?${params}`);
-  if (!resp.ok) throw new Error(`BTC markets ${resp.status}`);
+  if (!resp.ok) throw new Error(`${cfg.ticker} markets ${resp.status}`);
   const raw = await resp.json();
 
-  let nBtc = 0, nParsed = 0;
+  let nAsset = 0, nParsed = 0;
   const markets = [];
 
   for (const m of raw) {
     const q = (m.question || "").toLowerCase();
-    if (!q.includes("bitcoin up or down") && !q.includes("btc up or down")) continue;
-    nBtc++;
+    if (!cfg.keywords.some(kw => q.includes(kw))) continue;
+    nAsset++;
 
-    const parsed = parseBtcMarket(m);
+    const parsed = parseCryptoMarket(m);
     if (!parsed) continue;
     nParsed++;
     markets.push(parsed);
@@ -329,22 +339,24 @@ async function fetchBtcMarkets({ maxMinutes = 10 } = {}) {
 
   return {
     markets: markets.sort((a, b) => new Date(a.endDate) - new Date(b.endDate)),
-    debug: { total: raw.length, btc: nBtc, inWindow: nBtc, parsed: nParsed },
+    debug: { total: raw.length, asset: nAsset, inWindow: nAsset, parsed: nParsed },
   };
 }
 
-// ── Claude BTC analysis ───────────────────────────────────────────
+const fetchBtcMarkets = (opts) => fetchCryptoMarkets("btc", opts);
 
-const BTC_PROMPT = [
-  "You are a quantitative analyst for ultra-short-term Bitcoin prediction markets on Polymarket.",
+// ── Claude crypto analysis ────────────────────────────────────────
+
+const CRYPTO_PROMPT = [
+  "You are a quantitative analyst for ultra-short-term {label} prediction markets on Polymarket.",
   "",
   "MARKET: {question}",
   "Time remaining until resolution: {timeRemaining} seconds",
-  "Price to beat (BTC/USD at market open): {priceToBeat}",
+  "Price to beat ({ticker}/USD at market open): {priceToBeat}",
   "",
   "── LIVE BINANCE DATA ──────────────────────────────────────────────",
-  "Current BTC/USD : {currentPrice}",
-  "Gap             : {gapSign}{gap} ({gapPct}%) — BTC is {direction} the target",
+  "Current {ticker}/USD : {currentPrice}",
+  "Gap             : {gapSign}{gap} ({gapPct}%) — {ticker} is {direction} the target",
   "Momentum        : {momentumSign}{momentum}/min (avg last 3 closed candles)",
   "Avg volatility  : ±{volatility}/min (avg high-low range)",
   "Candle trend    : {bullCount} bullish, {bearCount} bearish of last 5 → {trendLabel}",
@@ -360,7 +372,7 @@ const BTC_PROMPT = [
   "",
   "── DECISION RULES (apply in order, first match wins) ──────────────",
   "1. HARD STOP — candle trend opposes gap AND ≥4 of 5 candles oppose gap direction → SKIP always",
-  "2. HARD STOP — timeRemaining > 300s AND momentum opposes gap AND |momentum| > 5/min → SKIP",
+  "2. HARD STOP — timeRemaining > 300s AND momentum opposes gap AND |momentum| > {momentumThreshold}/min → SKIP",
   "   EXCEPTION to rule 2: if |effectiveGap| > 3× avg volatility, the gap is too large for momentum to erase — do NOT skip, use MEDIUM confidence instead.",
   "3. Effective gap = gap + expectedDrift (expectedDrift is negative when momentum opposes gap).",
   "   If effective gap ≤ 0, the trend is expected to erase the gap → SKIP",
@@ -369,7 +381,7 @@ const BTC_PROMPT = [
   "6. Market lag: market odds haven't caught up to clear gap+momentum → exploit mispricing",
   "7. Too uncertain: |effective gap| < 0.03% of price OR both gap and momentum are tiny → SKIP",
   "",
-  "BUY_DOWN is equally valid when BTC is BELOW the target. Treat UP and DOWN symmetrically.",
+  "BUY_DOWN is equally valid when {ticker} is BELOW the target. Treat UP and DOWN symmetrically.",
   "Bet only when estimated true probability exceeds 70%. When in doubt, SKIP.",
   "",
   'Respond ONLY as JSON (no markdown, no extra text):',
@@ -381,8 +393,9 @@ const BTC_PROMPT = [
   '}',
 ].join("\n");
 
-async function analyzeBtcMarket(market, btcData, anthropicKey, { model = "claude-haiku-4-5-20251001", signal } = {}) {
-  const { candles, spot, priceToBeat } = btcData;
+async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "claude-haiku-4-5-20251001", signal } = {}, asset = "btc") {
+  const cfg = CRYPTO_CONFIG[asset];
+  const { candles, spot, priceToBeat } = cryptoData;
   const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
   const gap       = spot - priceToBeat;
   const gapPct    = ((gap / priceToBeat) * 100);
@@ -403,44 +416,52 @@ async function analyzeBtcMarket(market, btcData, anthropicKey, { model = "claude
   const bearCount = last5.filter(c => c.close < c.open).length;
   const trendLabel = bullCount > bearCount ? "bullish trend" : bearCount > bullCount ? "bearish trend" : "mixed";
 
-  // Expected price drift: momentum * (timeRemaining / 60)
   const expectedDrift = momentum * (timeRemaining / 60);
+
+  // Relative momentum threshold: ~0.007% of spot (≈5 for BTC@70k, ≈0.24 for ETH@3500, ≈0.01 for SOL@150)
+  const momentumThreshold = (spot * 0.00007).toFixed(3);
+
+  // Price decimals: integers for large prices, 2dp for mid, 3dp for small
+  const pd = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
 
   const candleStr = candles.slice(0, 5).map(c => {
     const hh = c.time.getUTCHours().toString().padStart(2, "0");
     const mm = c.time.getUTCMinutes().toString().padStart(2, "0");
     const dir = c.close > c.open ? "▲" : c.close < c.open ? "▼" : "→";
-    return `  ${hh}:${mm}  O=${c.open.toFixed(0)} H=${c.high.toFixed(0)} L=${c.low.toFixed(0)} C=${c.close.toFixed(0)} ${dir}`;
+    return `  ${hh}:${mm}  O=${c.open.toFixed(pd)} H=${c.high.toFixed(pd)} L=${c.low.toFixed(pd)} C=${c.close.toFixed(pd)} ${dir}`;
   }).join("\n");
 
   const fmtVol = v => v >= 1e6 ? (v/1e6).toFixed(1)+"M" : v >= 1e3 ? (v/1e3).toFixed(0)+"K" : String(Math.round(v));
 
-  const prompt = BTC_PROMPT
-    .replace("{question}",        market.question)
-    .replace("{timeRemaining}",   String(timeRemaining))
-    .replace("{priceToBeat}",     priceToBeat.toFixed(2))
-    .replace("{currentPrice}",    spot.toFixed(2))
-    .replace("{gapSign}",         gap >= 0 ? "+" : "-")
-    .replace("{gap}",             Math.abs(gap).toFixed(2))
-    .replace("{gapPct}",          (gap >= 0 ? "+" : "") + gapPct.toFixed(3) + "%")
-    .replace("{direction}",       direction)
-    .replace("{momentumSign}",    momentum >= 0 ? "+" : "")
-    .replace("{momentum}",        momentum.toFixed(2))
-    .replace("{volatility}",      volatility.toFixed(2))
-    .replace("{bullCount}",       String(bullCount))
-    .replace("{bearCount}",       String(bearCount))
-    .replace("{trendLabel}",      trendLabel)
-    .replace("{expectedDrift}",   (expectedDrift >= 0 ? "+" : "") + expectedDrift.toFixed(1))
-    .replace("{candles}",         candleStr)
-    .replace("{upPrice}",         market.upPrice.toFixed(3))
-    .replace("{upPct}",           (market.upPrice * 100).toFixed(1))
-    .replace("{downPrice}",       market.downPrice.toFixed(3))
-    .replace("{downPct}",         (market.downPrice * 100).toFixed(1))
-    .replace("{volume}",          fmtVol(market.volume));
+  const prompt = CRYPTO_PROMPT
+    .replace(/{label}/g,            cfg.label)
+    .replace(/{ticker}/g,           cfg.ticker)
+    .replace("{question}",          market.question)
+    .replace("{timeRemaining}",     String(timeRemaining))
+    .replace("{priceToBeat}",       priceToBeat.toFixed(pd))
+    .replace("{currentPrice}",      spot.toFixed(pd))
+    .replace("{gapSign}",           gap >= 0 ? "+" : "-")
+    .replace("{gap}",               Math.abs(gap).toFixed(pd))
+    .replace("{gapPct}",            (gap >= 0 ? "+" : "") + gapPct.toFixed(3) + "%")
+    .replace("{direction}",         direction)
+    .replace("{momentumSign}",      momentum >= 0 ? "+" : "")
+    .replace("{momentum}",          momentum.toFixed(pd))
+    .replace("{volatility}",        volatility.toFixed(pd))
+    .replace("{bullCount}",         String(bullCount))
+    .replace("{bearCount}",         String(bearCount))
+    .replace("{trendLabel}",        trendLabel)
+    .replace("{expectedDrift}",     (expectedDrift >= 0 ? "+" : "") + expectedDrift.toFixed(pd))
+    .replace("{candles}",           candleStr)
+    .replace("{upPrice}",           market.upPrice.toFixed(3))
+    .replace("{upPct}",             (market.upPrice * 100).toFixed(1))
+    .replace("{downPrice}",         market.downPrice.toFixed(3))
+    .replace("{downPct}",           (market.downPrice * 100).toFixed(1))
+    .replace("{volume}",            fmtVol(market.volume))
+    .replace("{momentumThreshold}", momentumThreshold);
 
   const metrics = { gap, volatility, timeRemaining, momentum, spot, priceToBeat };
 
-  if (!anthropicKey) return analyzeBtcHeuristic(market, metrics);
+  if (!anthropicKey) return analyzeCryptoHeuristic(market, metrics);
 
   const resp = await fetch(ANTHROPIC_API, {
     method: "POST",
@@ -462,26 +483,28 @@ async function analyzeBtcMarket(market, btcData, anthropicKey, { model = "claude
     const err = await resp.text();
     const isBilling = [400, 401, 402, 403].includes(resp.status);
     if (isBilling) {
-      console.warn(`Claude BTC ${resp.status} — heuristic fallback`);
-      return analyzeBtcHeuristic(market, metrics);
+      console.warn(`Claude ${cfg.ticker} ${resp.status} — heuristic fallback`);
+      return analyzeCryptoHeuristic(market, metrics);
     }
-    throw new Error(`Claude BTC ${resp.status}: ${err.slice(0, 100)}`);
+    throw new Error(`Claude ${cfg.ticker} ${resp.status}: ${err.slice(0, 100)}`);
   }
 
   const data = await resp.json();
-  return parseBtcResponse(data.content[0].text.trim(), market, metrics);
+  return parseCryptoResponse(data.content[0].text.trim(), market, metrics);
 }
 
-function analyzeBtcHeuristic(market, { gap, volatility, timeRemaining, momentum }) {
-  const expectedDrift = momentum * (timeRemaining / 60);
-  const effectiveGap  = gap + expectedDrift;                // gap after accounting for expected drift
-  const gapToVol      = volatility > 0 ? Math.abs(effectiveGap) / volatility : 0;
+const analyzeBtcMarket = (market, data, key, opts) => analyzeCryptoMarket(market, data, key, opts, "btc");
+
+function analyzeCryptoHeuristic(market, { gap, volatility, timeRemaining, momentum, spot }) {
+  const expectedDrift  = momentum * (timeRemaining / 60);
+  const effectiveGap   = gap + expectedDrift;
+  const gapToVol       = volatility > 0 ? Math.abs(effectiveGap) / volatility : 0;
   const momentumConflicts = Math.sign(momentum) !== 0 && Math.sign(momentum) !== Math.sign(gap);
+  const momThreshold   = (spot || 70000) * 0.00007;
 
   let signal = "SKIP", confidence = "LOW", edge = 0;
 
-  // Hard stops
-  if (momentumConflicts && timeRemaining > 300 && Math.abs(momentum) > 5) {
+  if (momentumConflicts && timeRemaining > 300 && Math.abs(momentum) > momThreshold) {
     // strong conflicting momentum with lots of time → SKIP
   } else if (effectiveGap * gap <= 0) {
     // expected drift erases or flips the gap → SKIP
@@ -497,12 +520,14 @@ function analyzeBtcHeuristic(market, { gap, volatility, timeRemaining, momentum 
 
   return {
     market, signal, confidence, edge, absEdge: Math.abs(edge),
-    reasoning: `Heuristic: gap=$${gap.toFixed(2)}, effGap=$${effectiveGap.toFixed(2)}, vol=±$${volatility.toFixed(2)}, ${timeRemaining}s left`,
+    reasoning: `Heuristic: gap=${gap.toFixed(2)}, effGap=${effectiveGap.toFixed(2)}, vol=±${volatility.toFixed(2)}, ${timeRemaining}s left`,
     timeRemaining, gap, priceToBeat: null, spot: null,
   };
 }
 
-function parseBtcResponse(raw, market, metrics) {
+const analyzeBtcHeuristic = (market, metrics) => analyzeCryptoHeuristic(market, { ...metrics, spot: metrics.spot || 70000 });
+
+function parseCryptoResponse(raw, market, metrics) {
   let text = raw;
   if (text.startsWith("```")) {
     text = text.split("```")[1];
@@ -511,34 +536,29 @@ function parseBtcResponse(raw, market, metrics) {
 
   let parsed;
   try { parsed = JSON.parse(text); }
-  catch { throw new Error("BTC JSON parse failed: " + text.slice(0, 80)); }
+  catch { throw new Error("Crypto JSON parse failed: " + text.slice(0, 80)); }
 
   let signal     = ["BUY_UP", "BUY_DOWN", "SKIP"].includes(parsed.signal) ? parsed.signal : "SKIP";
   let confidence = (parsed.confidence || "LOW").toUpperCase();
   if (!["LOW", "MEDIUM", "HIGH"].includes(confidence)) confidence = "LOW";
   const edge = parseFloat(parsed.edge) || 0;
 
-  // Post-parse guardrails — override overly aggressive AI calls
-  const { gap, momentum, timeRemaining, volatility } = metrics;
+  const { gap, momentum, timeRemaining, volatility, spot } = metrics;
   const expectedDrift     = (momentum ?? 0) * (timeRemaining / 60);
   const effectiveGap      = gap + expectedDrift;
   const momentumConflicts = momentum != null && Math.sign(momentum) !== 0 && Math.sign(momentum) !== Math.sign(gap);
 
-  // Gap dominance: if |effectiveGap| > 3× avg candle range, the gap is so large that
-  // opposing momentum cannot realistically close it — skip the hard-stop rules.
-  const vol = volatility ?? 0;
-  const gapDominant = vol > 0 && Math.abs(effectiveGap) > 3 * vol;
+  const vol          = volatility ?? 0;
+  const gapDominant  = vol > 0 && Math.abs(effectiveGap) > 3 * vol;
+  const momThreshold = (spot || 70000) * 0.00007;
 
   if (signal !== "SKIP") {
-    // Effective gap erased by trend — force skip (applies even when gap dominant)
     if (effectiveGap * gap <= 0) {
       signal = "SKIP"; confidence = "LOW";
     }
-    // Long window + strong conflicting momentum — skip UNLESS gap is dominant
-    else if (!gapDominant && momentumConflicts && timeRemaining > 300 && Math.abs(momentum) > 5) {
+    else if (!gapDominant && momentumConflicts && timeRemaining > 300 && Math.abs(momentum) > momThreshold) {
       signal = "SKIP"; confidence = "LOW";
     }
-    // Long window with any conflict — downgrade HIGH → MEDIUM (still applies even if gap dominant)
     else if (momentumConflicts && timeRemaining > 200 && confidence === "HIGH") {
       confidence = "MEDIUM";
     }
@@ -549,7 +569,9 @@ function parseBtcResponse(raw, market, metrics) {
     reasoning: parsed.reasoning || "",
     timeRemaining,
     gap,
-    priceToBeat:  metrics.priceToBeat,
-    spot:         metrics.spot,
+    priceToBeat: metrics.priceToBeat,
+    spot:        metrics.spot,
   };
 }
+
+const parseBtcResponse = parseCryptoResponse;
