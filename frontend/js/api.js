@@ -361,6 +361,7 @@ const BTC_PROMPT = [
   "── DECISION RULES (apply in order, first match wins) ──────────────",
   "1. HARD STOP — candle trend opposes gap AND ≥4 of 5 candles oppose gap direction → SKIP always",
   "2. HARD STOP — timeRemaining > 300s AND momentum opposes gap AND |momentum| > 5/min → SKIP",
+  "   EXCEPTION to rule 2: if |effectiveGap| > 3× avg volatility, the gap is too large for momentum to erase — do NOT skip, use MEDIUM confidence instead.",
   "3. Effective gap = gap + expectedDrift (expectedDrift is negative when momentum opposes gap).",
   "   If effective gap ≤ 0, the trend is expected to erase the gap → SKIP",
   "4. Near-resolution arb: |gap| > 2× volatility AND timeRemaining < 90s → HIGH confidence",
@@ -368,6 +369,7 @@ const BTC_PROMPT = [
   "6. Market lag: market odds haven't caught up to clear gap+momentum → exploit mispricing",
   "7. Too uncertain: |effective gap| < 0.03% of price OR both gap and momentum are tiny → SKIP",
   "",
+  "BUY_DOWN is equally valid when BTC is BELOW the target. Treat UP and DOWN symmetrically.",
   "Bet only when estimated true probability exceeds 70%. When in doubt, SKIP.",
   "",
   'Respond ONLY as JSON (no markdown, no extra text):',
@@ -517,21 +519,26 @@ function parseBtcResponse(raw, market, metrics) {
   const edge = parseFloat(parsed.edge) || 0;
 
   // Post-parse guardrails — override overly aggressive AI calls
-  const { gap, momentum, timeRemaining } = metrics;
+  const { gap, momentum, timeRemaining, volatility } = metrics;
   const expectedDrift     = (momentum ?? 0) * (timeRemaining / 60);
   const effectiveGap      = gap + expectedDrift;
   const momentumConflicts = momentum != null && Math.sign(momentum) !== 0 && Math.sign(momentum) !== Math.sign(gap);
 
+  // Gap dominance: if |effectiveGap| > 3× avg candle range, the gap is so large that
+  // opposing momentum cannot realistically close it — skip the hard-stop rules.
+  const vol = volatility ?? 0;
+  const gapDominant = vol > 0 && Math.abs(effectiveGap) > 3 * vol;
+
   if (signal !== "SKIP") {
-    // Effective gap erased by trend — force skip
+    // Effective gap erased by trend — force skip (applies even when gap dominant)
     if (effectiveGap * gap <= 0) {
       signal = "SKIP"; confidence = "LOW";
     }
-    // Long window + strong conflicting momentum — cap at MEDIUM then let qualifies filter
-    else if (momentumConflicts && timeRemaining > 300 && Math.abs(momentum) > 5) {
+    // Long window + strong conflicting momentum — skip UNLESS gap is dominant
+    else if (!gapDominant && momentumConflicts && timeRemaining > 300 && Math.abs(momentum) > 5) {
       signal = "SKIP"; confidence = "LOW";
     }
-    // Long window with any conflict — downgrade HIGH → MEDIUM
+    // Long window with any conflict — downgrade HIGH → MEDIUM (still applies even if gap dominant)
     else if (momentumConflicts && timeRemaining > 200 && confidence === "HIGH") {
       confidence = "MEDIUM";
     }
