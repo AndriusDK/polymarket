@@ -638,6 +638,8 @@ function startBtcCountdown() {
         cdEl.textContent = "[RESOLVED]";
         cdEl.className   = "btc-card-cd resolved";
         if (barEl) { barEl.style.width = "0%"; barEl.className = "btc-timer-fill urgent"; }
+        // Auto-close expired positions at current market price
+        closePosition(t, "RESOLVED");
       } else {
         cdEl.textContent = `[${secs}s]`;
         cdEl.className   = `btc-card-cd ${urgent ? "urgent" : ""}`;
