@@ -509,6 +509,18 @@ function closePosition(trade, reason) {
     `| Realized: <span class="${realized >= 0 ? "green" : "red"}">${sign}$${realized.toFixed(2)}</span>`
   );
 
+  // BTC stop loss triggers cross-asset cascade + directional veto
+  if (reason === "STOP LOSS" && trade.type === "btc") {
+    const correlated = state.trades.filter(t => t.signal === trade.signal);
+    const vetoMins = 2;
+    state.directionVeto = { signal: trade.signal, expiresAt: Date.now() + vetoMins * 60_000 };
+    if (correlated.length) {
+      logEntry("info", `  ⚡ BTC cascade — closing ${correlated.length} correlated ${trade.signal} position(s)`);
+      for (const t of correlated) closePosition(t, "CASCADE STOP LOSS");
+    }
+    logEntry("info", `  🚫 ${trade.signal} veto active for ${vetoMins}min (BTC correlation)`);
+  }
+
   setStat("positions", String(state.trades.length));
   updatePnlStat();
 }
@@ -671,6 +683,14 @@ async function _runCryptoCycleInner(asset) {
     const signalAgainstGap = analysis.signal === "BUY_UP" && gap < 0 ||
                              analysis.signal === "BUY_DOWN" && gap > 0;
     const crossable = !signalAgainstGap || Math.abs(gap) <= maxMovement;
+
+    // Directional veto: BTC stop loss has indicated a correlated market regime
+    const veto = state.directionVeto;
+    if (veto && Date.now() < veto.expiresAt && analysis.signal === veto.signal) {
+      const secsLeft = Math.ceil((veto.expiresAt - Date.now()) / 1000);
+      logEntry("info", `  ↳ <span class="amber">no trade</span> — ${veto.signal} vetoed ${secsLeft}s (BTC correlation)`);
+      continue;
+    }
 
     const qualifies =
       analysis.signal !== "SKIP" &&
