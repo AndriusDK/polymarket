@@ -311,38 +311,41 @@ async function fetchCryptoMarkets(asset, { maxMinutes = 20 } = {}) {
   const now    = Date.now();
   const maxEnd = new Date(now + maxMinutes * 60_000).toISOString();
 
-  // Fetch once per keyword so crypto markets are never pushed past a generic limit
-  const allMarkets = new Map(); // conditionId → parsed market (dedupe)
-  let totalRaw = 0;
+  const params = new URLSearchParams({
+    active:       "true",
+    closed:       "false",
+    limit:        "500",
+    end_date_min: new Date(now).toISOString(),
+    end_date_max: maxEnd,
+    _order:       "end_date_asc",
+  });
 
-  for (const kw of cfg.keywords) {
-    const params = new URLSearchParams({
-      active:       "true",
-      closed:       "false",
-      limit:        "20",
-      end_date_min: new Date(now).toISOString(),
-      end_date_max: maxEnd,
-      q:            kw,
-    });
+  const resp = await fetch(`${PROXY_URL}?${params}`);
+  if (!resp.ok) throw new Error(`${cfg.ticker} markets ${resp.status}`);
+  const raw = await resp.json();
 
-    const resp = await fetch(`${PROXY_URL}?${params}`);
-    if (!resp.ok) throw new Error(`${cfg.ticker} markets ${resp.status}`);
-    const raw = await resp.json();
-    totalRaw += raw.length;
-
-    for (const m of raw) {
-      const q = (m.question || "").toLowerCase();
-      if (!cfg.keywords.some(k => q.includes(k))) continue;
-      if (allMarkets.has(m.conditionId)) continue;
-      const parsed = parseCryptoMarket(m);
-      if (parsed) allMarkets.set(m.conditionId, parsed);
-    }
+  // Debug: log first few questions so we can see what the API returns
+  if (raw.length > 0 && raw.length < 10) {
+    console.log(`[${cfg.ticker}] sample questions:`, raw.slice(0, 3).map(m => m.question));
   }
 
-  const markets = [...allMarkets.values()];
+  let nAsset = 0, nParsed = 0;
+  const markets = [];
+
+  for (const m of raw) {
+    const q = (m.question || "").toLowerCase();
+    if (!cfg.keywords.some(kw => q.includes(kw))) continue;
+    nAsset++;
+
+    const parsed = parseCryptoMarket(m);
+    if (!parsed) continue;
+    nParsed++;
+    markets.push(parsed);
+  }
+
   return {
     markets: markets.sort((a, b) => new Date(a.endDate) - new Date(b.endDate)),
-    debug: { total: totalRaw, asset: markets.length, inWindow: markets.length, parsed: markets.length },
+    debug: { total: raw.length, asset: nAsset, inWindow: nAsset, parsed: nParsed },
   };
 }
 
