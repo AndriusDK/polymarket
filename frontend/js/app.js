@@ -16,6 +16,10 @@ const state = {
   trades: [],          // open positions for session PnL
   sessionPnl: 0,
   realizedPnl: 0,
+  btc: {
+    timer:    null,    // setInterval handle for 30s BTC scan
+    analyzed: new Set(), // conditionIds already sent to Claude this session
+  },
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -76,6 +80,10 @@ function initSetup() {
       marketsToScan:   parseInt($("#markets-count").value) || 20,
       dryRun:          $("#dry-run-toggle").checked,
       takeProfitPct:   parseFloat($("#take-profit-pct")?.value) || 50,
+      // BTC 5-min mode
+      btcMode:         $("#btc-mode-toggle")?.checked ?? false,
+      btcMaxBet:       parseFloat($("#btc-max-bet")?.value) || 5,
+      btcMinEdge:      parseFloat($("#btc-min-edge")?.value) || 0.06,
     };
 
     initDashboard();
@@ -118,11 +126,20 @@ function initDashboard() {
     stopBot();
     showScreen("setup-screen");
   });
+  $("#btn-btc")?.addEventListener("click", () => {
+    if (state.btc.timer) stopBtcMode();
+    else startBtcMode();
+  });
 
   startClock();
   logEntry("cyan", `POLYMARKET AI TRADING SYSTEM — ONLINE`);
   logEntry("info", `Mode: ${c.dryRun ? "DRY RUN" : "⚡ LIVE"}  |  Edge ≥ ${(c.minEdge*100).toFixed(0)}%  |  Max $${c.maxBet}/trade  |  Budget $${c.maxDaily}`);
-  logEntry("info", `Press [RUN CYCLE] to scan or [AUTO 5min] to loop.`);
+  if (c.btcMode) {
+    logEntry("info", `BTC 5-min mode: auto-starting…`);
+    startBtcMode();
+  } else {
+    logEntry("info", `Press [RUN CYCLE] to scan, [AUTO 5min] to loop, or [⚡ BTC] for real-time BTC markets.`);
+  }
 }
 
 // ── Bot cycle ────────────────────────────────────────────────────
@@ -336,6 +353,7 @@ async function startAutoLoop() {
 function stopBot() {
   state.autoLoop = false;
   if (state.abortCtrl) state.abortCtrl.abort();
+  stopBtcMode();
   setStat("status", "STOPPING…", "amber");
   logEntry("warning", "Stop requested.");
   setRunning(false);
@@ -716,6 +734,241 @@ function updatePnlStat() {
     pnlEl.className = `stat-val ${pnl > 0 ? "green" : pnl < 0 ? "red" : "dim"}`;
   }
   setStat("positions", String(state.trades.length));
+}
+
+// ── BTC 5-min mode ───────────────────────────────────────────────
+
+function startBtcMode() {
+  if (state.btc.timer) return;
+  state.btc.analyzed.clear();
+
+  const btn = $("#btn-btc");
+  if (btn) { btn.textContent = "■ BTC STOP"; btn.classList.add("active"); }
+  setStat("btc-status", "ACTIVE", "amber");
+  logEntry("cyan", "⚡ BTC MODE ON — scanning every 30s for high-volume 5-min markets");
+
+  runBtcCycle(); // run immediately
+  state.btc.timer = setInterval(runBtcCycle, 30_000);
+}
+
+function stopBtcMode() {
+  if (!state.btc.timer) return;
+  clearInterval(state.btc.timer);
+  state.btc.timer = null;
+
+  const btn = $("#btn-btc");
+  if (btn) { btn.textContent = "⚡ BTC MODE"; btn.classList.remove("active"); }
+  setStat("btc-status", "OFF", "dim");
+  logEntry("warning", "BTC mode stopped.");
+}
+
+async function runBtcCycle() {
+  const c = state.config;
+  setStat("btc-status", "SCANNING…", "cyan");
+
+  // 1. Find active BTC 5-min markets resolving in 1–9 min
+  let markets;
+  try {
+    markets = await fetchBtcMarkets({ minVolume: 3000, minMinutes: 1, maxMinutes: 9 });
+  } catch (err) {
+    logEntry("error", `BTC: market fetch failed — ${err.message}`);
+    setStat("btc-status", "ERROR", "red");
+    return;
+  }
+
+  // Only process markets we haven't analyzed yet
+  const fresh = markets.filter(m => !state.btc.analyzed.has(m.conditionId));
+  if (!fresh.length) {
+    setStat("btc-status", "WATCHING", "dim");
+    return;
+  }
+
+  // 2. Fetch BTC market data once (shared across all markets this cycle)
+  let spot, candles;
+  try {
+    [spot, candles] = await Promise.all([fetchBtcSpot(), fetchBtcCandles(6)]);
+  } catch (err) {
+    logEntry("error", `BTC: Binance data failed — ${err.message}`);
+    setStat("btc-status", "ERROR", "red");
+    return;
+  }
+
+  // 3. Analyze each fresh market
+  for (const market of fresh) {
+    // Mark analyzed immediately to avoid re-queuing in the next 30s tick
+    state.btc.analyzed.add(market.conditionId);
+
+    // Get price to beat = BTC open at market start
+    let priceToBeat = null;
+    if (market.startDate) {
+      try {
+        priceToBeat = await fetchBtcOpenAtTime(new Date(market.startDate).getTime());
+      } catch { /* fall through */ }
+    }
+    // Fallback: oldest candle's open
+    if (!priceToBeat) priceToBeat = candles[candles.length - 1]?.open ?? spot;
+
+    const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
+    const gap = spot - priceToBeat;
+
+    logEntry("info",
+      `BTC: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
+      `[${timeRemaining}s left]  BTC $${spot.toFixed(0)} vs target $${priceToBeat.toFixed(0)}  ` +
+      `<span class="${gap >= 0 ? "green" : "red"}">${gap >= 0 ? "+" : ""}$${gap.toFixed(0)}</span>`
+    );
+
+    let analysis;
+    try {
+      analysis = await analyzeBtcMarket(
+        market,
+        { spot, candles, priceToBeat },
+        c.anthropicKey,
+        { model: c.model }
+      );
+    } catch (err) {
+      logEntry("error", `  BTC analysis failed: ${err.message}`);
+      continue;
+    }
+
+    const sigColor = analysis.signal === "BUY_UP" ? "green"
+                   : analysis.signal === "BUY_DOWN" ? "red" : "dim";
+    logEntry("info",
+      `  → <span class="${sigColor}">${analysis.signal}</span>  ` +
+      `Conf: ${analysis.confidence}  ` +
+      `Edge: ${(analysis.edge >= 0 ? "+" : "")}${(analysis.edge * 100).toFixed(1)}%  ` +
+      `| ${analysis.reasoning}`
+    );
+
+    // Increment BTC signals stat
+    const sigEl = $("#stat-btc-signals");
+    if (sigEl) sigEl.textContent = String(parseInt(sigEl.textContent || "0") + 1);
+
+    // Place trade if qualifies
+    const qualifies =
+      analysis.signal !== "SKIP" &&
+      (analysis.confidence === "HIGH" ||
+       (analysis.confidence === "MEDIUM" && analysis.absEdge >= 0.10)) &&
+      analysis.absEdge >= c.btcMinEdge &&
+      state.stats.spent < c.maxDaily;
+
+    if (qualifies) placeBtcTrade(analysis, { spot, priceToBeat });
+  }
+
+  setStat("btc-status", "WATCHING", "dim");
+}
+
+function placeBtcTrade(analysis, { spot, priceToBeat }) {
+  const c      = state.config;
+  const market = analysis.market;
+  const isUp   = analysis.signal === "BUY_UP";
+
+  const entryPrice = isUp ? market.upPrice : market.downPrice;
+  const tokenId    = isUp ? market.upTokenId : market.downTokenId;
+  const amount     = Math.min(c.btcMaxBet, c.maxDaily - state.stats.spent);
+  if (amount < 1) return;
+
+  const tag      = c.dryRun ? "[SIM]" : "[LIVE]";
+  const sigClass = isUp ? "green" : "red";
+
+  logEntry("trade",
+    `${tag} BTC <span class="${sigClass}">${analysis.signal}</span>  ` +
+    `$${amount.toFixed(2)}  —  ${market.question.slice(0, 50)}`
+  );
+  logEntry("info",
+    `  Entry: ${(entryPrice * 100).toFixed(1)}%  ` +
+    `BTC $${spot.toFixed(0)} vs target $${priceToBeat.toFixed(0)}  ` +
+    `Gap: ${analysis.gap >= 0 ? "+" : ""}$${analysis.gap.toFixed(2)}`
+  );
+
+  const trade = {
+    id:          Date.now() + state.stats.trades,
+    time:        new Date().toUTCString().slice(-12, -4),
+    question:    market.question,
+    conditionId: market.conditionId,
+    tokenId,
+    signal:      analysis.signal,
+    entryPrice,
+    amount,
+    shares:      amount / entryPrice,
+    currentPrice: entryPrice,
+    confidence:  analysis.confidence,
+    unrealizedPnl: 0,
+    mode:        c.dryRun ? "SIM" : "LIVE",
+    type:        "btc",
+    endDate:     market.endDate,
+  };
+
+  state.trades.push(trade);
+  addBtcTradeRow(trade);
+  priceStream.subscribe(tokenId);
+  startBtcCountdown();
+
+  state.stats.trades++;
+  state.stats.spent += amount;
+  setStat("trades", String(state.stats.trades));
+  setStat("spent",  `$${state.stats.spent.toFixed(2)}`);
+  setStat("budget", `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+
+  const btcTradesEl = $("#stat-btc-trades");
+  if (btcTradesEl) btcTradesEl.textContent = String(parseInt(btcTradesEl.textContent || "0") + 1);
+}
+
+function addBtcTradeRow(trade) {
+  const empty = $("#trades-empty-row");
+  if (empty) empty.remove();
+
+  const tbody  = $("#trades-tbody");
+  const tr     = document.createElement("tr");
+  tr.id        = `trade-${trade.id}`;
+  tr.className = "trade-row btc-trade-row";
+
+  const modeClass = trade.mode === "SIM" ? "amber" : "live-mode";
+  const sigClass  = trade.signal === "BUY_UP" ? "signal-buy-yes" : "signal-buy-no";
+  const sigLabel  = trade.signal === "BUY_UP" ? "BTC UP" : "BTC DOWN";
+  const secsLeft  = Math.max(0, Math.round((new Date(trade.endDate) - Date.now()) / 1000));
+
+  tr.innerHTML = `
+    <td class="${modeClass}">${trade.mode}</td>
+    <td class="col-q-trade" title="${escHtml(trade.question)}">
+      ⚡ ${escHtml(trade.question.slice(0, 36))}…
+      <span class="btc-countdown" id="cd-${trade.id}">[${secsLeft}s]</span>
+    </td>
+    <td class="${sigClass}">${sigLabel}</td>
+    <td>$${trade.amount.toFixed(2)}</td>
+    <td>${(trade.entryPrice * 100).toFixed(1)}%</td>
+    <td id="tp-${trade.id}">${(trade.currentPrice * 100).toFixed(1)}%</td>
+    <td id="pnl-${trade.id}" class="dim">+$0.00</td>
+    <td class="conf-${trade.confidence.toLowerCase()}">${trade.confidence}</td>
+  `;
+
+  tbody.insertBefore(tr, tbody.firstChild);
+}
+
+// Countdown timer for BTC trades (updates every second)
+let btcCountdownTimer = null;
+
+function startBtcCountdown() {
+  if (btcCountdownTimer) return;
+  btcCountdownTimer = setInterval(() => {
+    const btcTrades = state.trades.filter(t => t.type === "btc");
+    if (!btcTrades.length) {
+      clearInterval(btcCountdownTimer);
+      btcCountdownTimer = null;
+      return;
+    }
+    for (const t of btcTrades) {
+      const el = $(`#cd-${t.id}`);
+      if (!el) continue;
+      const secs = Math.round((new Date(t.endDate) - Date.now()) / 1000);
+      if (secs <= 0) {
+        el.textContent = "[RESOLVED]";
+        el.style.color = "#00ffe7";
+      } else {
+        el.textContent = `[${secs}s]`;
+        el.style.color = secs < 30 ? "#ff4444" : "#ffb347";
+      }
+    }
+  }, 1_000);
 }
 
 // ── Util ─────────────────────────────────────────────────────────

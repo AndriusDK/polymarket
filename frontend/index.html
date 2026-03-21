@@ -95,6 +95,27 @@
         <span id="dry-run-label" class="toggle-status amber">ON</span>
       </div>
 
+      <!-- BTC 5-min Mode -->
+      <div class="section-title"><span class="diamond">◈</span> BTC 5-MIN MODE <span class="hint">(AI-analyzed high-freq Bitcoin markets)</span></div>
+      <div class="row-2">
+        <div>
+          <label class="field-label">BTC Max Bet (USDC)</label>
+          <input type="number" id="btc-max-bet" class="neon-input" value="5" min="1" step="1" />
+        </div>
+        <div>
+          <label class="field-label">BTC Min Edge</label>
+          <input type="number" id="btc-min-edge" class="neon-input" value="0.06" min="0.01" max="0.50" step="0.01" />
+        </div>
+      </div>
+      <div class="switch-row">
+        <span class="field-label">Auto-start BTC mode on launch</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="btc-mode-toggle" />
+          <span class="toggle-slider"></span>
+        </label>
+        <span id="btc-mode-label" class="toggle-status dim">OFF</span>
+      </div>
+
       <div class="divider"></div>
       <button id="btn-launch" class="neon-btn launch-btn">▶ &nbsp; INITIATE SYSTEM</button>
       <div id="setup-error" class="error-msg"></div>
@@ -155,6 +176,10 @@
         <div class="stat-divider"></div>
         <div class="stat"><span class="stat-key">Session PnL</span><span id="stat-pnl" class="stat-val dim">$0.00</span></div>
         <div class="stat"><span class="stat-key">Open positions</span><span id="stat-positions" class="stat-val dim">0</span></div>
+        <div class="stat-divider"></div>
+        <div class="stat"><span class="stat-key">BTC mode</span><span id="stat-btc-status" class="stat-val dim">OFF</span></div>
+        <div class="stat"><span class="stat-key">BTC signals</span><span id="stat-btc-signals" class="stat-val cyan">0</span></div>
+        <div class="stat"><span class="stat-key">BTC trades</span><span id="stat-btc-trades" class="stat-val amber">0</span></div>
 
         <!-- Progress bar -->
         <div id="progress-wrap" class="progress-wrap hidden">
@@ -197,6 +222,7 @@
     <footer id="toolbar">
       <button id="btn-run" class="toolbar-btn">▶ RUN CYCLE</button>
       <button id="btn-auto" class="toolbar-btn">⟳ AUTO 5min</button>
+      <button id="btn-btc" class="toolbar-btn btc-btn">⚡ BTC MODE</button>
       <button id="btn-stop" class="toolbar-btn" disabled>■ STOP</button>
       <button id="btn-settings" class="toolbar-btn danger">◀ SETTINGS</button>
       <div class="toolbar-spacer"></div>
@@ -204,8 +230,29 @@
     </footer>
   </div>
 
+  <style>
+    /* BTC mode */
+    .btc-btn { color: #ffb347 !important; border-color: #ffb34780 !important; }
+    .btc-btn.active { background: #ffb34718 !important; }
+    .btc-trade-row { border-left: 2px solid #ffb347; }
+    .btc-countdown { font-size: 10px; color: #ffb347; margin-left: 4px; }
+    #stat-btc-status.amber { color: #ffb347; }
+  </style>
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
   <script src="js/api.js"></script>
   <script src="js/app.js"></script>
+  <script>
+    // Wire BTC mode toggle label
+    document.addEventListener("DOMContentLoaded", () => {
+      const tog = document.getElementById("btc-mode-toggle");
+      const lbl = document.getElementById("btc-mode-label");
+      if (tog && lbl) {
+        tog.addEventListener("change", () => {
+          lbl.textContent  = tog.checked ? "ON" : "OFF";
+          lbl.className    = "toggle-status " + (tog.checked ? "amber" : "dim");
+        });
+      }
+    });
+  </script>
 </body>
 </html>

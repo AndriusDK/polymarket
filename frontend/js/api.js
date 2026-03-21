@@ -231,3 +231,260 @@ function sizeBet(analysis, maxBet, remainingBudget) {
   const bet = maxBet * confMult * edgeMult;
   return Math.round(Math.min(bet, remainingBudget) * 100) / 100;
 }
+
+// ── Binance — BTC real-time data ─────────────────────────────────
+
+const BINANCE_API = "https://api.binance.com/api/v3";
+
+async function fetchBtcSpot() {
+  const resp = await fetch(`${BINANCE_API}/ticker/price?symbol=BTCUSDT`);
+  if (!resp.ok) throw new Error(`Binance spot ${resp.status}`);
+  return parseFloat((await resp.json()).price);
+}
+
+async function fetchBtcCandles(limit = 6) {
+  const resp = await fetch(`${BINANCE_API}/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`);
+  if (!resp.ok) throw new Error(`Binance candles ${resp.status}`);
+  return (await resp.json()).map(c => ({
+    time:  new Date(c[0]),
+    open:  parseFloat(c[1]),
+    high:  parseFloat(c[2]),
+    low:   parseFloat(c[3]),
+    close: parseFloat(c[4]),
+  }));
+}
+
+async function fetchBtcOpenAtTime(startTimeMs) {
+  const resp = await fetch(
+    `${BINANCE_API}/klines?symbol=BTCUSDT&interval=1m&startTime=${startTimeMs}&limit=1`
+  );
+  if (!resp.ok) throw new Error(`Binance historical ${resp.status}`);
+  const data = await resp.json();
+  return data.length ? parseFloat(data[0][1]) : null;
+}
+
+function parseBtcMarket(raw) {
+  let outcomes, prices, tokenIds;
+  try {
+    outcomes = JSON.parse(raw.outcomes      || "[]");
+    prices   = JSON.parse(raw.outcomePrices || "[]");
+    tokenIds = JSON.parse(raw.clobTokenIds  || "[]");
+  } catch { return null; }
+
+  const upIdx   = outcomes.findIndex(o => /^up$/i.test(o));
+  const downIdx = outcomes.findIndex(o => /^down$/i.test(o));
+  if (upIdx === -1 || downIdx === -1) return null;
+
+  const upPrice   = parseFloat(prices[upIdx]   || 0);
+  const downPrice = parseFloat(prices[downIdx] || 0);
+  if (upPrice === 0 && downPrice === 0) return null;
+
+  return {
+    conditionId: raw.conditionId || raw.id || "",
+    question:    raw.question || "",
+    description: raw.description || "",
+    startDate:   raw.startDate || raw.startDateIso || "",
+    endDate:     raw.endDate   || raw.endDateIso   || "",
+    upTokenId:   tokenIds[upIdx]   || "",
+    downTokenId: tokenIds[downIdx] || "",
+    upPrice,
+    downPrice,
+    volume:    parseFloat(raw.volumeNum    || raw.volume    || 0),
+    liquidity: parseFloat(raw.liquidityNum || raw.liquidity || 0),
+  };
+}
+
+async function fetchBtcMarkets({ minVolume = 3000, minMinutes = 1, maxMinutes = 10 } = {}) {
+  const params = new URLSearchParams({
+    active: "true",
+    closed: "false",
+    limit:  "200",
+    volume_num_min: String(minVolume),
+  });
+  const resp = await fetch(`${PROXY_URL}?${params}`);
+  if (!resp.ok) throw new Error(`BTC markets ${resp.status}`);
+  const raw = await resp.json();
+
+  const now    = Date.now();
+  const minEnd = now + minMinutes  * 60_000;
+  const maxEnd = now + maxMinutes  * 60_000;
+
+  const markets = [];
+  for (const m of raw) {
+    const q = (m.question || "").toLowerCase();
+    if (!q.includes("bitcoin up or down") && !q.includes("btc up or down")) continue;
+
+    const endMs = new Date(m.endDate || m.endDateIso || 0).getTime();
+    if (endMs < minEnd || endMs > maxEnd) continue;
+
+    const parsed = parseBtcMarket(m);
+    if (!parsed) continue;
+    markets.push(parsed);
+  }
+
+  return markets.sort((a, b) => new Date(a.endDate) - new Date(b.endDate));
+}
+
+// ── Claude BTC analysis ───────────────────────────────────────────
+
+const BTC_PROMPT = `You are a quantitative analyst for ultra-short-term Bitcoin prediction markets on Polymarket.
+
+MARKET: {question}
+Time remaining until resolution: {timeRemaining} seconds
+Price to beat (BTC/USD at market open): ${priceToBeat}
+
+── LIVE BINANCE DATA ──────────────────────────────────────────────
+Current BTC/USD : ${currentPrice}
+Gap             : {gapSign}${gap} ({gapPct}%) — BTC is {direction} the target
+Momentum        : {momentumSign}${momentum}/min (avg last 3 closed candles)
+Avg volatility  : ±${volatility}/min (avg high-low range)
+
+1-min candles newest→oldest (Open / High / Low / Close):
+{candles}
+
+── POLYMARKET ODDS ────────────────────────────────────────────────
+UP price  : {upPrice} ({upPct}% implied)
+DOWN price: {downPrice} ({downPct}% implied)
+Volume    : ${volume}
+
+── DECISION FRAMEWORK ─────────────────────────────────────────────
+1. Near-resolution arb: |gap| > 2× volatility AND <90s left → very high confidence
+2. Momentum aligned with gap: e.g. gap=positive AND momentum=positive → higher confidence
+3. Market lag: market odds haven't caught up to clear gap+momentum → exploit mispricing
+4. Too uncertain: |gap| < 0.03% OR (timeRemaining > 200s AND gap is small) → SKIP
+5. Conflicting signals: gap direction vs momentum direction oppose each other → SKIP
+
+Bet only when you have genuinely HIGH confidence (estimated true probability > 70%).
+
+Respond ONLY as JSON (no markdown, no extra text):
+{
+  "signal": "BUY_UP" | "BUY_DOWN" | "SKIP",
+  "confidence": "LOW" | "MEDIUM" | "HIGH",
+  "edge": <estimated true prob minus market price, e.g. 0.12>,
+  "reasoning": "<max 2 sentences>"
+}`;
+
+async function analyzeBtcMarket(market, btcData, anthropicKey, { model = "claude-haiku-4-5-20251001", signal } = {}) {
+  const { candles, spot, priceToBeat } = btcData;
+  const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
+  const gap       = spot - priceToBeat;
+  const gapPct    = ((gap / priceToBeat) * 100);
+  const direction = gap >= 0 ? "ABOVE" : "BELOW";
+
+  // Use completed candles (skip index 0 = current, possibly incomplete)
+  const refCandles = candles.slice(1, 4);
+  const momentum   = refCandles.length
+    ? refCandles.reduce((s, c) => s + (c.close - c.open), 0) / refCandles.length
+    : 0;
+  const volatility = refCandles.length
+    ? refCandles.reduce((s, c) => s + (c.high - c.low), 0) / refCandles.length
+    : 0;
+
+  const candleStr = candles.slice(0, 5).map(c => {
+    const hh = c.time.getUTCHours().toString().padStart(2, "0");
+    const mm = c.time.getUTCMinutes().toString().padStart(2, "0");
+    const dir = c.close > c.open ? "▲" : c.close < c.open ? "▼" : "→";
+    return `  ${hh}:${mm}  O=${c.open.toFixed(0)} H=${c.high.toFixed(0)} L=${c.low.toFixed(0)} C=${c.close.toFixed(0)} ${dir}`;
+  }).join("\n");
+
+  const fmtVol = v => v >= 1e6 ? (v/1e6).toFixed(1)+"M" : v >= 1e3 ? (v/1e3).toFixed(0)+"K" : String(Math.round(v));
+
+  const prompt = BTC_PROMPT
+    .replace("{question}",      market.question)
+    .replace("{timeRemaining}", String(timeRemaining))
+    .replace("{priceToBeat}",   priceToBeat.toFixed(2))
+    .replace("{currentPrice}",  spot.toFixed(2))
+    .replace("{gapSign}",       gap >= 0 ? "+" : "-")
+    .replace("{gap}",           Math.abs(gap).toFixed(2))
+    .replace("{gapPct}",        (gap >= 0 ? "+" : "") + gapPct.toFixed(3) + "%")
+    .replace("{direction}",     direction)
+    .replace("{momentumSign}",  momentum >= 0 ? "+" : "")
+    .replace("{momentum}",      momentum.toFixed(2))
+    .replace("{volatility}",    volatility.toFixed(2))
+    .replace("{candles}",       candleStr)
+    .replace("{upPrice}",       market.upPrice.toFixed(3))
+    .replace("{upPct}",         (market.upPrice * 100).toFixed(1))
+    .replace("{downPrice}",     market.downPrice.toFixed(3))
+    .replace("{downPct}",       (market.downPrice * 100).toFixed(1))
+    .replace("{volume}",        fmtVol(market.volume));
+
+  const metrics = { gap, volatility, timeRemaining, momentum, spot, priceToBeat };
+
+  if (!anthropicKey) return analyzeBtcHeuristic(market, metrics);
+
+  const resp = await fetch(ANTHROPIC_API, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": anthropicKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 256,
+      messages: [{ role: "user", content: prompt }],
+    }),
+    signal,
+  });
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    const isBilling = [400, 401, 402, 403].includes(resp.status);
+    if (isBilling) {
+      console.warn(`Claude BTC ${resp.status} — heuristic fallback`);
+      return analyzeBtcHeuristic(market, metrics);
+    }
+    throw new Error(`Claude BTC ${resp.status}: ${err.slice(0, 100)}`);
+  }
+
+  const data = await resp.json();
+  return parseBtcResponse(data.content[0].text.trim(), market, metrics);
+}
+
+function analyzeBtcHeuristic(market, { gap, volatility, timeRemaining, momentum }) {
+  const gapToVol = volatility > 0 ? Math.abs(gap) / volatility : 0;
+  let signal = "SKIP", confidence = "LOW", edge = 0;
+
+  if (gapToVol > 2 && timeRemaining < 90) {
+    signal     = gap > 0 ? "BUY_UP" : "BUY_DOWN";
+    confidence = "HIGH";
+    edge       = gap > 0 ? Math.max(0, 0.9 - market.upPrice) : Math.max(0, 0.9 - market.downPrice);
+  } else if (gapToVol > 1.5 && timeRemaining < 120 && Math.sign(gap) === Math.sign(momentum)) {
+    signal     = gap > 0 ? "BUY_UP" : "BUY_DOWN";
+    confidence = "MEDIUM";
+    edge       = gap > 0 ? Math.max(0, 0.72 - market.upPrice) : Math.max(0, 0.72 - market.downPrice);
+  }
+
+  return {
+    market, signal, confidence, edge, absEdge: Math.abs(edge),
+    reasoning: `Heuristic: gap=$${gap.toFixed(2)}, vol=±$${volatility.toFixed(2)}, ${timeRemaining}s left`,
+    timeRemaining, gap, priceToBeat: null, spot: null,
+  };
+}
+
+function parseBtcResponse(raw, market, metrics) {
+  let text = raw;
+  if (text.startsWith("```")) {
+    text = text.split("```")[1];
+    if (text.startsWith("json")) text = text.slice(4);
+  }
+
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch { throw new Error("BTC JSON parse failed: " + text.slice(0, 80)); }
+
+  const signal     = ["BUY_UP", "BUY_DOWN", "SKIP"].includes(parsed.signal) ? parsed.signal : "SKIP";
+  let   confidence = (parsed.confidence || "LOW").toUpperCase();
+  if (!["LOW", "MEDIUM", "HIGH"].includes(confidence)) confidence = "LOW";
+  const edge = parseFloat(parsed.edge) || 0;
+
+  return {
+    market, signal, confidence, edge, absEdge: Math.abs(edge),
+    reasoning: parsed.reasoning || "",
+    timeRemaining: metrics.timeRemaining,
+    gap:          metrics.gap,
+    priceToBeat:  metrics.priceToBeat,
+    spot:         metrics.spot,
+  };
+}
