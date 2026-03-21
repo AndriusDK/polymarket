@@ -268,11 +268,16 @@ const priceStream = (() => {
           changed = true;
         }
         if (changed) {
-          const toClose = state.trades.filter(
-            t => t.tokenId === tokenId &&
-                 t.unrealizedPnl >= t.amount * ((state.config?.takeProfitPct ?? 50) / 100)
+          const stopLossPct = (state.config?.stopLossPct ?? 50) / 100;
+          const takeProfitPct = (state.config?.takeProfitPct ?? 50) / 100;
+          const toStopLoss = state.trades.filter(
+            t => t.tokenId === tokenId && t.unrealizedPnl <= -t.amount * stopLossPct
           );
-          for (const t of toClose) closePosition(t, "TAKE PROFIT");
+          for (const t of toStopLoss) closePosition(t, "STOP LOSS");
+          const toTakeProfit = state.trades.filter(
+            t => t.tokenId === tokenId && t.unrealizedPnl >= t.amount * takeProfitPct
+          );
+          for (const t of toTakeProfit) closePosition(t, "TAKE PROFIT");
           refreshBtcCards();
           updatePnlStat();
         }
@@ -513,8 +518,14 @@ function placeBtcTrade(analysis, { spot, priceToBeat }) {
 
   const entryPrice = isUp ? market.upPrice   : market.downPrice;
   const tokenId    = isUp ? market.upTokenId : market.downTokenId;
-  const amount     = Math.min(c.btcMaxBet, c.maxDaily - state.stats.spent);
-  if (amount < 1) return;
+
+  // Scale bet size by time remaining — more time = more uncertainty = smaller bet
+  const secsForSizing = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
+  const timeFraction  = secsForSizing > 400 ? 0.40
+                      : secsForSizing > 200 ? 0.65
+                      : 1.0;
+  const amount = Math.min(c.btcMaxBet * timeFraction, c.maxDaily - state.stats.spent);
+  if (amount < 0.50) return;
 
   const tag      = c.dryRun ? "[SIM]" : "[LIVE]";
   const sigClass = isUp ? "green" : "red";
