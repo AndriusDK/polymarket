@@ -311,35 +311,38 @@ async function fetchCryptoMarkets(asset, { maxMinutes = 20 } = {}) {
   const now    = Date.now();
   const maxEnd = new Date(now + maxMinutes * 60_000).toISOString();
 
-  const params = new URLSearchParams({
-    active:       "true",
-    closed:       "false",
-    limit:        "100",
-    end_date_min: new Date(now).toISOString(),
-    end_date_max: maxEnd,
-  });
+  // Fetch once per keyword so crypto markets are never pushed past a generic limit
+  const allMarkets = new Map(); // conditionId → parsed market (dedupe)
+  let totalRaw = 0;
 
-  const resp = await fetch(`${PROXY_URL}?${params}`);
-  if (!resp.ok) throw new Error(`${cfg.ticker} markets ${resp.status}`);
-  const raw = await resp.json();
+  for (const kw of cfg.keywords) {
+    const params = new URLSearchParams({
+      active:       "true",
+      closed:       "false",
+      limit:        "20",
+      end_date_min: new Date(now).toISOString(),
+      end_date_max: maxEnd,
+      q:            kw,
+    });
 
-  let nAsset = 0, nParsed = 0;
-  const markets = [];
+    const resp = await fetch(`${PROXY_URL}?${params}`);
+    if (!resp.ok) throw new Error(`${cfg.ticker} markets ${resp.status}`);
+    const raw = await resp.json();
+    totalRaw += raw.length;
 
-  for (const m of raw) {
-    const q = (m.question || "").toLowerCase();
-    if (!cfg.keywords.some(kw => q.includes(kw))) continue;
-    nAsset++;
-
-    const parsed = parseCryptoMarket(m);
-    if (!parsed) continue;
-    nParsed++;
-    markets.push(parsed);
+    for (const m of raw) {
+      const q = (m.question || "").toLowerCase();
+      if (!cfg.keywords.some(k => q.includes(k))) continue;
+      if (allMarkets.has(m.conditionId)) continue;
+      const parsed = parseCryptoMarket(m);
+      if (parsed) allMarkets.set(m.conditionId, parsed);
+    }
   }
 
+  const markets = [...allMarkets.values()];
   return {
     markets: markets.sort((a, b) => new Date(a.endDate) - new Date(b.endDate)),
-    debug: { total: raw.length, asset: nAsset, inWindow: nAsset, parsed: nParsed },
+    debug: { total: totalRaw, asset: markets.length, inWindow: markets.length, parsed: markets.length },
   };
 }
 
