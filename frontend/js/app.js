@@ -387,9 +387,13 @@ const priceStream = (() => {
             return t.unrealizedPnl <= stopThreshold;
           });
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
-          const toTakeProfit = state.trades.filter(
-            t => t.tokenId === tokenId && t.unrealizedPnl >= t.amount * takeProfitPct
-          );
+          const toTakeProfit = state.trades.filter(t => {
+            if (t.tokenId !== tokenId) return false;
+            // TP = capture takeProfitPct of remaining upside to $1.00
+            // e.g. entry 80%, pct 50% → fires at 80 + (100-80)*0.50 = 90%
+            const tpPrice = t.entryPrice + (1 - t.entryPrice) * takeProfitPct;
+            return t.currentPrice >= tpPrice;
+          });
           for (const t of toTakeProfit) closePosition(t, "TAKE PROFIT");
           refreshBtcCards();
           updatePnlStat();
