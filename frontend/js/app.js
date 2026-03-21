@@ -769,7 +769,7 @@ async function runBtcCycle() {
   // 1. Find active BTC 5-min markets resolving in 0–10 min
   let markets, debug;
   try {
-    ({ markets, debug } = await fetchBtcMarkets({ minVolume: 1000, minMinutes: 0, maxMinutes: 10 }));
+    ({ markets, debug } = await fetchBtcMarkets({ maxMinutes: 10 }));
   } catch (err) {
     logEntry("error", `BTC: market fetch failed — ${err.message}`);
     setStat("btc-status", "ERROR", "red");

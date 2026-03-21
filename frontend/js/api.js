@@ -294,32 +294,31 @@ function parseBtcMarket(raw) {
   };
 }
 
-async function fetchBtcMarkets({ minVolume = 1000, minMinutes = 0, maxMinutes = 10 } = {}) {
+async function fetchBtcMarkets({ maxMinutes = 10 } = {}) {
+  // Query by end-date window so we catch low-volume freshly-opened markets
+  // that would never appear in a volume-sorted top-300 list.
+  const now    = Date.now();
+  const maxEnd = new Date(now + maxMinutes * 60_000).toISOString();
+
   const params = new URLSearchParams({
-    active: "true",
-    closed: "false",
-    limit:  "300",
-    volume_num_min: String(minVolume),
+    active:       "true",
+    closed:       "false",
+    limit:        "100",
+    end_date_min: new Date(now).toISOString(),
+    end_date_max: maxEnd,
   });
+
   const resp = await fetch(`${PROXY_URL}?${params}`);
   if (!resp.ok) throw new Error(`BTC markets ${resp.status}`);
   const raw = await resp.json();
 
-  const now    = Date.now();
-  const minEnd = now + minMinutes * 60_000;
-  const maxEnd = now + maxMinutes * 60_000;
-
-  let nBtc = 0, nTime = 0, nParsed = 0;
+  let nBtc = 0, nParsed = 0;
   const markets = [];
 
   for (const m of raw) {
     const q = (m.question || "").toLowerCase();
     if (!q.includes("bitcoin up or down") && !q.includes("btc up or down")) continue;
     nBtc++;
-
-    const endMs = new Date(m.endDate || m.endDateIso || 0).getTime();
-    if (endMs < minEnd || endMs > maxEnd) continue;
-    nTime++;
 
     const parsed = parseBtcMarket(m);
     if (!parsed) continue;
@@ -329,7 +328,7 @@ async function fetchBtcMarkets({ minVolume = 1000, minMinutes = 0, maxMinutes = 
 
   return {
     markets: markets.sort((a, b) => new Date(a.endDate) - new Date(b.endDate)),
-    debug: { total: raw.length, btc: nBtc, inWindow: nTime, parsed: nParsed },
+    debug: { total: raw.length, btc: nBtc, inWindow: nBtc, parsed: nParsed },
   };
 }
 
