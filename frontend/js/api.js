@@ -294,11 +294,11 @@ function parseBtcMarket(raw) {
   };
 }
 
-async function fetchBtcMarkets({ minVolume = 3000, minMinutes = 1, maxMinutes = 10 } = {}) {
+async function fetchBtcMarkets({ minVolume = 1000, minMinutes = 0, maxMinutes = 10 } = {}) {
   const params = new URLSearchParams({
     active: "true",
     closed: "false",
-    limit:  "200",
+    limit:  "300",
     volume_num_min: String(minVolume),
   });
   const resp = await fetch(`${PROXY_URL}?${params}`);
@@ -306,23 +306,31 @@ async function fetchBtcMarkets({ minVolume = 3000, minMinutes = 1, maxMinutes = 
   const raw = await resp.json();
 
   const now    = Date.now();
-  const minEnd = now + minMinutes  * 60_000;
-  const maxEnd = now + maxMinutes  * 60_000;
+  const minEnd = now + minMinutes * 60_000;
+  const maxEnd = now + maxMinutes * 60_000;
 
+  let nBtc = 0, nTime = 0, nParsed = 0;
   const markets = [];
+
   for (const m of raw) {
     const q = (m.question || "").toLowerCase();
     if (!q.includes("bitcoin up or down") && !q.includes("btc up or down")) continue;
+    nBtc++;
 
     const endMs = new Date(m.endDate || m.endDateIso || 0).getTime();
     if (endMs < minEnd || endMs > maxEnd) continue;
+    nTime++;
 
     const parsed = parseBtcMarket(m);
     if (!parsed) continue;
+    nParsed++;
     markets.push(parsed);
   }
 
-  return markets.sort((a, b) => new Date(a.endDate) - new Date(b.endDate));
+  return {
+    markets: markets.sort((a, b) => new Date(a.endDate) - new Date(b.endDate)),
+    debug: { total: raw.length, btc: nBtc, inWindow: nTime, parsed: nParsed },
+  };
 }
 
 // ── Claude BTC analysis ───────────────────────────────────────────

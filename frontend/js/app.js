@@ -766,15 +766,21 @@ async function runBtcCycle() {
   const c = state.config;
   setStat("btc-status", "SCANNING…", "cyan");
 
-  // 1. Find active BTC 5-min markets resolving in 1–9 min
-  let markets;
+  // 1. Find active BTC 5-min markets resolving in 0–10 min
+  let markets, debug;
   try {
-    markets = await fetchBtcMarkets({ minVolume: 3000, minMinutes: 1, maxMinutes: 9 });
+    ({ markets, debug } = await fetchBtcMarkets({ minVolume: 1000, minMinutes: 0, maxMinutes: 10 }));
   } catch (err) {
     logEntry("error", `BTC: market fetch failed — ${err.message}`);
     setStat("btc-status", "ERROR", "red");
     return;
   }
+
+  logEntry("info",
+    `BTC scan: ${debug.total} total markets → ${debug.btc} BTC → ` +
+    `${debug.inWindow} in window → ${debug.parsed} valid ` +
+    `(${markets.filter(m => !state.btc.analyzed.has(m.conditionId)).length} fresh)`
+  );
 
   // Only process markets we haven't analyzed yet
   const fresh = markets.filter(m => !state.btc.analyzed.has(m.conditionId));
