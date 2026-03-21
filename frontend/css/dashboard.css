@@ -362,45 +362,45 @@
   text-shadow: 0 0 8px var(--cyan);
 }
 
-/* ── Close animations ── */
-.btc-card.closing-win {
-  filter: drop-shadow(0 0 20px rgba(0, 255, 159, 0.6));
-  animation: card-close 8s forwards !important;
+/* ── Closed (audit) cards ── */
+.btc-card.closed-win,
+.btc-card.closed-loss {
+  opacity: 0.55;
+  pointer-events: auto;
 }
-.btc-card.closing-win::before { border-color: var(--green) !important; }
-
-.btc-card.closing-loss {
-  filter: drop-shadow(0 0 20px rgba(255, 45, 45, 0.6));
-  animation: card-close 8s forwards !important;
+.btc-card.closed-win {
+  filter: drop-shadow(0 0 5px rgba(0, 255, 159, 0.15));
 }
-.btc-card.closing-loss::before { border-color: var(--red) !important; }
+.btc-card.closed-win::before  { border-color: rgba(0, 255, 159, 0.35) !important; }
+.btc-card.closed-loss {
+  filter: drop-shadow(0 0 5px rgba(255, 45, 45, 0.15));
+}
+.btc-card.closed-loss::before { border-color: rgba(255, 45, 45, 0.35) !important; }
 
-.btc-close-overlay {
-  position: absolute;
-  inset: 0;
+.btc-closed-strip {
   display: flex;
-  flex-direction: column;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  background: rgba(4, 4, 12, 0.75);
-  z-index: 10;
-  animation: overlay-in 8s forwards;
-}
-
-.btc-close-result {
-  font-size: 28px;
+  padding: 5px 16px;
+  font-size: 9px;
   font-weight: bold;
-  letter-spacing: 6px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  position: relative;
+  z-index: 4;
 }
-.btc-close-result.win  { color: var(--green); text-shadow: 0 0 24px var(--green); }
-.btc-close-result.loss { color: var(--red);   text-shadow: 0 0 24px var(--red);   }
-
-.btc-close-pnl {
-  font-size: 20px;
-  font-weight: bold;
-  font-variant-numeric: tabular-nums;
+.btc-closed-strip.win {
+  background: rgba(0, 255, 159, 0.05);
+  border-bottom: 1px solid rgba(0, 255, 159, 0.2);
+  color: var(--green);
 }
+.btc-closed-strip.loss {
+  background: rgba(255, 45, 45, 0.05);
+  border-bottom: 1px solid rgba(255, 45, 45, 0.2);
+  color: var(--red);
+}
+.btc-closed-label { opacity: 0.8; }
+.btc-closed-pnl   { font-size: 12px; font-variant-numeric: tabular-nums; }
 
 /* ── Stats panel ── */
 #stats-panel {

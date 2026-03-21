@@ -357,25 +357,33 @@ function closePosition(trade, reason) {
 
   const card = $(`#card-${trade.id}`);
   if (card) {
-    const isWin  = realized > 0;
-    const sign   = realized >= 0 ? "+" : "";
-    const overlay = document.createElement("div");
-    overlay.className = "btc-close-overlay";
-    overlay.innerHTML = `
-      <div class="btc-close-result ${isWin ? "win" : "loss"}">${isWin ? "▲ WIN" : "▼ LOSS"}</div>
-      <div class="btc-close-pnl ${isWin ? "green" : "red"}">${sign}$${realized.toFixed(2)}</div>
-    `;
-    card.appendChild(overlay);
-    card.classList.add(isWin ? "closing-win" : "closing-loss");
+    const isWin = realized > 0;
+    const sign  = realized >= 0 ? "+" : "";
 
-    const tradesRef = state.trades; // capture ref before timeout
-    setTimeout(() => {
-      card.remove();
-      if (tradesRef.filter(t => t.type === "btc").length === 0) {
-        const empty = $("#btc-empty");
-        if (empty) empty.style.display = "";
-      }
-    }, 8000);
+    // Insert a permanent result strip at top of card
+    const strip = document.createElement("div");
+    strip.className = `btc-closed-strip ${isWin ? "win" : "loss"}`;
+    strip.innerHTML = `
+      <span class="btc-closed-label">${isWin ? "▲ WIN" : "▼ LOSS"} — ${reason}</span>
+      <span class="btc-closed-pnl ${isWin ? "green" : "red"}">${sign}$${realized.toFixed(2)} REALIZED</span>
+    `;
+    card.insertBefore(strip, card.firstChild);
+
+    // Freeze countdown display
+    const cd = $(`#cd-${trade.id}`);
+    if (cd) { cd.textContent = "[CLOSED]"; cd.className = "btc-card-cd resolved"; }
+
+    // Mark card as closed + move to bottom of container (below active positions)
+    card.classList.add(isWin ? "closed-win" : "closed-loss");
+    const container = card.parentNode;
+    if (container) container.appendChild(card);
+  }
+
+  // Only show empty state if no active trades AND no closed cards in DOM
+  if (state.trades.filter(t => t.type === "btc").length === 0) {
+    const hasClosed = document.querySelectorAll("#btc-cards .closed-win, #btc-cards .closed-loss").length > 0;
+    const empty = $("#btc-empty");
+    if (empty) empty.style.display = hasClosed ? "none" : "";
   }
 
   const sign = realized >= 0 ? "+" : "";

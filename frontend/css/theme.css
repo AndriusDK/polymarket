@@ -90,19 +90,6 @@ html, body {
   to   { opacity: 1; transform: translateY(0)   scale(1);    }
 }
 
-@keyframes card-close {
-  0%   { opacity: 1; transform: scale(1); }
-  80%  { opacity: 1; transform: scale(1); }
-  100% { opacity: 0; transform: scale(0.96) translateY(-6px); }
-}
-
-@keyframes overlay-in {
-  0%   { opacity: 0; }
-  5%   { opacity: 1; }
-  80%  { opacity: 1; }
-  100% { opacity: 0; }
-}
-
 @keyframes urgent-pulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.5; }
