@@ -285,6 +285,7 @@ function parseBtcMarket(raw) {
     description: raw.description || "",
     startDate:   raw.startDate || raw.startDateIso || "",
     endDate:     raw.endDate   || raw.endDateIso   || "",
+    slug:        raw.slug || raw.groupSlug || raw.marketSlug || "",
     upTokenId:   tokenIds[upIdx]   || "",
     downTokenId: tokenIds[downIdx] || "",
     upPrice,

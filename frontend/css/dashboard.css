@@ -109,6 +109,11 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* Blade Runner grid background */
+  background-image:
+    linear-gradient(rgba(0, 212, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 212, 255, 0.025) 1px, transparent 1px);
+  background-size: 48px 48px;
 }
 
 /* ── Empty state ── */
@@ -139,19 +144,48 @@
   color: var(--dim);
 }
 
-/* ── BTC Cards ── */
+/* ── BTC Cards — Blade Runner style ── */
 .btc-card {
+  position: relative;
   background: rgba(255, 179, 71, 0.03);
-  border: 1px solid rgba(255, 179, 71, 0.22);
-  border-radius: 6px;
-  overflow: hidden;
-  animation: fade-in 0.3s ease;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  /* Angular corner clip — classic sci-fi notch */
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+  filter: drop-shadow(0 0 6px rgba(255, 179, 71, 0.12));
+  overflow: visible;
+  animation: btc-card-in 0.35s ease forwards;
+  border: none; /* handled by clip-path + pseudo */
+}
+.btc-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  clip-path: inherit;
+  border: 1px solid rgba(255, 179, 71, 0.28);
+  pointer-events: none;
+  z-index: 2;
+  transition: border-color 0.2s;
+}
+.btc-card:hover {
+  filter: drop-shadow(0 0 16px rgba(255, 179, 71, 0.35));
+}
+.btc-card:hover::before {
+  border-color: rgba(255, 179, 71, 0.6);
 }
 
-.btc-card:hover {
-  border-color: rgba(255, 179, 71, 0.5);
-  box-shadow: 0 0 16px rgba(255, 179, 71, 0.08);
+/* Scanline overlay per card */
+.btc-card-scan {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 3px,
+    rgba(0, 0, 0, 0.12) 3px,
+    rgba(0, 0, 0, 0.12) 4px
+  );
+  pointer-events: none;
+  z-index: 3;
+  opacity: 0.6;
 }
 
 /* card header */
@@ -159,16 +193,20 @@
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  padding: 10px 14px 8px;
+  padding: 10px 16px 8px;
   gap: 12px;
+  position: relative;
+  z-index: 4;
 }
 
 .btc-card-q {
-  font-size: 12px;
-  color: var(--text);
+  font-size: 11px;
+  color: var(--cyan);
   font-weight: bold;
-  line-height: 1.4;
+  letter-spacing: 0.5px;
+  line-height: 1.5;
   flex: 1;
+  text-shadow: 0 0 8px rgba(0, 212, 255, 0.4);
 }
 
 .btc-card-badges {
@@ -179,41 +217,58 @@
 }
 
 .btc-badge {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: bold;
-  letter-spacing: 1px;
+  letter-spacing: 1.5px;
   padding: 2px 8px;
-  border-radius: 3px;
   border: 1px solid currentColor;
+  text-transform: uppercase;
 }
 .btc-badge.amber { color: var(--amber); background: rgba(255,179,71,0.1); }
 .btc-badge.red   { color: var(--red);   background: rgba(255,45,45,0.1);  }
 
 .btc-card-cd {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--amber);
   font-weight: bold;
-  min-width: 62px;
+  min-width: 66px;
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
-.btc-card-cd.urgent   { color: var(--red); animation: glow-pulse 1s infinite; }
-.btc-card-cd.resolved { color: var(--cyan); }
+.btc-card-cd.urgent {
+  color: var(--red);
+  text-shadow: 0 0 8px var(--red);
+  animation: urgent-pulse 0.8s infinite;
+}
+.btc-card-cd.resolved { color: var(--cyan); text-shadow: 0 0 8px var(--cyan); }
 
-/* countdown progress bar */
+/* countdown timer bar */
 .btc-timer-bar {
-  height: 3px;
-  background: rgba(255, 179, 71, 0.08);
-  overflow: hidden;
+  position: relative;
+  height: 5px;
+  background: rgba(255, 179, 71, 0.06);
+  z-index: 4;
 }
-
+.btc-timer-track {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255,179,71,0.06) 0px, rgba(255,179,71,0.06) 1px,
+    transparent 1px, transparent 12px
+  );
+}
 .btc-timer-fill {
+  position: relative;
   height: 100%;
-  background: linear-gradient(90deg, var(--amber), #ffe080);
-  border-radius: 0 2px 2px 0;
+  background: linear-gradient(90deg, rgba(255,179,71,0.6), var(--amber), #ffe588);
+  box-shadow: 0 0 8px var(--amber), 0 0 2px #fff8;
   transition: width 0.9s linear, background 0.5s;
+  z-index: 1;
 }
 .btc-timer-fill.urgent {
-  background: linear-gradient(90deg, var(--red), #ff8888);
+  background: linear-gradient(90deg, rgba(255,45,45,0.6), var(--red), #ff9999);
+  box-shadow: 0 0 10px var(--red), 0 0 2px #fff4;
 }
 
 /* card body */
@@ -222,27 +277,33 @@
   align-items: center;
   gap: 24px;
   padding: 14px 16px;
+  position: relative;
+  z-index: 4;
 }
 
 .btc-card-signal {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: bold;
-  letter-spacing: 2px;
-  min-width: 150px;
-  padding: 10px 14px;
-  border-radius: 5px;
+  letter-spacing: 3px;
+  min-width: 152px;
+  padding: 12px 14px;
   text-align: center;
   flex-shrink: 0;
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
 }
 .btc-card-signal.sig-up {
   color: var(--green);
-  background: rgba(0, 255, 136, 0.07);
-  border: 1px solid rgba(0, 255, 136, 0.2);
+  background: rgba(0, 255, 159, 0.07);
+  border-left: 2px solid var(--green);
+  text-shadow: 0 0 12px var(--green);
+  box-shadow: inset 0 0 20px rgba(0,255,159,0.06);
 }
 .btc-card-signal.sig-down {
   color: var(--red);
   background: rgba(255, 45, 45, 0.07);
-  border: 1px solid rgba(255, 45, 45, 0.2);
+  border-left: 2px solid var(--red);
+  text-shadow: 0 0 12px var(--red);
+  box-shadow: inset 0 0 20px rgba(255,45,45,0.06);
 }
 
 .btc-card-stats {
@@ -254,29 +315,91 @@
 .btc-kv {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .btc-k {
-  font-size: 9px;
-  letter-spacing: 1.5px;
+  font-size: 8px;
+  letter-spacing: 2px;
   color: var(--dim);
   text-transform: uppercase;
 }
 
 .btc-v {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: bold;
   color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
+.btc-v.green { color: var(--green); text-shadow: 0 0 10px rgba(0,255,159,0.5); }
+.btc-v.red   { color: var(--red);   text-shadow: 0 0 10px rgba(255,45,45,0.5); }
 
 /* card footer */
 .btc-card-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   padding: 7px 16px;
   font-size: 11px;
   color: var(--text-dim);
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(0, 0, 0, 0.35);
   border-top: 1px solid rgba(255, 179, 71, 0.08);
+  position: relative;
+  z-index: 4;
+}
+
+.btc-market-link {
+  font-size: 10px;
+  color: var(--cyan);
+  text-decoration: none;
+  letter-spacing: 1px;
+  opacity: 0.6;
+  transition: opacity 0.15s, text-shadow 0.15s;
+  white-space: nowrap;
+}
+.btc-market-link:hover {
+  opacity: 1;
+  text-shadow: 0 0 8px var(--cyan);
+}
+
+/* ── Close animations ── */
+.btc-card.closing-win {
+  filter: drop-shadow(0 0 20px rgba(0, 255, 159, 0.6));
+  animation: card-close 2.6s forwards !important;
+}
+.btc-card.closing-win::before { border-color: var(--green) !important; }
+
+.btc-card.closing-loss {
+  filter: drop-shadow(0 0 20px rgba(255, 45, 45, 0.6));
+  animation: card-close 2.6s forwards !important;
+}
+.btc-card.closing-loss::before { border-color: var(--red) !important; }
+
+.btc-close-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(4, 4, 12, 0.75);
+  z-index: 10;
+  animation: overlay-in 2.4s forwards;
+}
+
+.btc-close-result {
+  font-size: 28px;
+  font-weight: bold;
+  letter-spacing: 6px;
+}
+.btc-close-result.win  { color: var(--green); text-shadow: 0 0 24px var(--green); }
+.btc-close-result.loss { color: var(--red);   text-shadow: 0 0 24px var(--red);   }
+
+.btc-close-pnl {
+  font-size: 20px;
+  font-weight: bold;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Stats panel ── */

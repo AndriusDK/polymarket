@@ -180,6 +180,7 @@ function addBtcCard(trade) {
   const gapClass  = gap >= 0 ? "green" : "red";
 
   div.innerHTML = `
+    <div class="btc-card-scan"></div>
     <div class="btc-card-head">
       <span class="btc-card-q">${escHtml(trade.question)}</span>
       <div class="btc-card-badges">
@@ -188,6 +189,7 @@ function addBtcCard(trade) {
       </div>
     </div>
     <div class="btc-timer-bar">
+      <div class="btc-timer-track"></div>
       <div class="btc-timer-fill ${secsLeft < 60 ? "urgent" : ""}" id="cdbar-${trade.id}" style="width:${pct}%"></div>
     </div>
     <div class="btc-card-body">
@@ -216,8 +218,9 @@ function addBtcCard(trade) {
       </div>
     </div>
     <div class="btc-card-foot">
-      BTC $${(trade.spot ?? 0).toFixed(0)}&nbsp; vs &nbsp;target $${(trade.priceToBeat ?? 0).toFixed(0)}
-      &nbsp;|&nbsp; Gap: <span class="${gapClass}">${gapSign}$${Math.abs(gap).toFixed(0)}</span>
+      <span>BTC $${(trade.spot ?? 0).toFixed(0)}&nbsp; vs &nbsp;target $${(trade.priceToBeat ?? 0).toFixed(0)}
+      &nbsp;|&nbsp; Gap: <span class="${gapClass}">${gapSign}$${Math.abs(gap).toFixed(0)}</span></span>
+      <a href="${trade.marketUrl}" target="_blank" rel="noopener" class="btc-market-link">↗ POLYMARKET</a>
     </div>
   `;
 
@@ -342,11 +345,26 @@ function closePosition(trade, reason) {
   state.realizedPnl = (state.realizedPnl || 0) + realized;
 
   const card = $(`#card-${trade.id}`);
-  if (card) card.remove();
+  if (card) {
+    const isWin  = realized > 0;
+    const sign   = realized >= 0 ? "+" : "";
+    const overlay = document.createElement("div");
+    overlay.className = "btc-close-overlay";
+    overlay.innerHTML = `
+      <div class="btc-close-result ${isWin ? "win" : "loss"}">${isWin ? "▲ WIN" : "▼ LOSS"}</div>
+      <div class="btc-close-pnl ${isWin ? "green" : "red"}">${sign}$${realized.toFixed(2)}</div>
+    `;
+    card.appendChild(overlay);
+    card.classList.add(isWin ? "closing-win" : "closing-loss");
 
-  if (state.trades.length === 0) {
-    const empty = $("#btc-empty");
-    if (empty) empty.style.display = "";
+    const tradesRef = state.trades; // capture ref before timeout
+    setTimeout(() => {
+      card.remove();
+      if (tradesRef.filter(t => t.type === "btc").length === 0) {
+        const empty = $("#btc-empty");
+        if (empty) empty.style.display = "";
+      }
+    }, 2600);
   }
 
   const sign = realized >= 0 ? "+" : "";
@@ -511,7 +529,10 @@ function placeBtcTrade(analysis, { spot, priceToBeat }) {
     `Gap: ${analysis.gap >= 0 ? "+" : ""}$${analysis.gap.toFixed(2)}`
   );
 
-  const secsLeft = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
+  const secsLeft  = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
+  const marketUrl = market.slug
+    ? `https://polymarket.com/event/${market.slug}`
+    : `https://polymarket.com/markets?q=bitcoin+up+or+down`;
 
   const trade = {
     id:           Date.now() + state.stats.trades,
@@ -533,6 +554,7 @@ function placeBtcTrade(analysis, { spot, priceToBeat }) {
     priceToBeat,
     gap:          analysis.gap,
     totalSecs:    secsLeft,
+    marketUrl,
   };
 
   state.trades.push(trade);
