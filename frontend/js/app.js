@@ -268,11 +268,17 @@ const priceStream = (() => {
           changed = true;
         }
         if (changed) {
-          const stopLossPct = (state.config?.stopLossPct ?? 50) / 100;
+          const stopLossPct   = (state.config?.stopLossPct   ?? 50) / 100;
           const takeProfitPct = (state.config?.takeProfitPct ?? 50) / 100;
-          const toStopLoss = state.trades.filter(
-            t => t.tokenId === tokenId && t.unrealizedPnl <= -t.amount * stopLossPct
-          );
+          const toStopLoss = state.trades.filter(t => {
+            if (t.tokenId !== tokenId) return false;
+            // For high-priced tokens (>0.70 entry), stop-loss in dollar terms only:
+            // don't trigger on normal spread noise — require a real directional move
+            const stopThreshold = t.entryPrice > 0.70
+              ? -t.amount * 0.35          // 35% loss cap for high-confidence entries
+              : -t.amount * stopLossPct;  // 50% for mid/low priced tokens
+            return t.unrealizedPnl <= stopThreshold;
+          });
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
           const toTakeProfit = state.trades.filter(
             t => t.tokenId === tokenId && t.unrealizedPnl >= t.amount * takeProfitPct
@@ -369,7 +375,7 @@ function closePosition(trade, reason) {
         const empty = $("#btc-empty");
         if (empty) empty.style.display = "";
       }
-    }, 2600);
+    }, 8000);
   }
 
   const sign = realized >= 0 ? "+" : "";
