@@ -523,8 +523,20 @@ async function runBtcCycle() {
       analysis.absEdge >= c.btcMinEdge &&
       state.stats.spent < c.maxDaily;
 
-    if (qualifies) placeBtcTrade(analysis, { spot, priceToBeat });
-  }
+    if (qualifies) {
+      placeBtcTrade(analysis, { spot, priceToBeat });
+    } else if (analysis.signal !== "SKIP") {
+      // Signal fired but didn't pass the qualifies filter — explain why
+      const reasons = [];
+      if (analysis.confidence === "LOW") reasons.push("confidence LOW");
+      else if (analysis.confidence === "MEDIUM" && analysis.absEdge < 0.10)
+        reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < 10% required for MEDIUM`);
+      if (analysis.absEdge < c.btcMinEdge)
+        reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < btcMinEdge ${(c.btcMinEdge * 100).toFixed(1)}%`);
+      if (state.stats.spent >= c.maxDaily)
+        reasons.push("daily budget exhausted");
+      logEntry("info", `  ↳ <span class="amber">no trade</span> — ${reasons.join(", ")}`);
+    }
 
   setStat("btc-status", "WATCHING", "dim");
 }
