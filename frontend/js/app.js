@@ -364,6 +364,8 @@ const priceStream = (() => {
             if (t.tokenId !== tokenId) return false;
             // Never stop-loss truly last-second entries — position resolves in seconds
             if (t.totalSecs < 45) return false;
+            // Grace period: ignore bid-ask spread noise for 30s after entry
+            if (Date.now() - t.entryTime < 30_000) return false;
             // For high-priced tokens (>0.70 entry), stop-loss in dollar terms only:
             // don't trigger on normal spread noise — require a real directional move
             const stopThreshold = t.entryPrice > 0.70
@@ -739,6 +741,7 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     priceToBeat,
     gap:           analysis.gap,
     totalSecs:     secsLeft,
+    entryTime:     Date.now(),
     marketUrl,
   };
 
