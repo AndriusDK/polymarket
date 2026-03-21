@@ -327,42 +327,44 @@ async function fetchBtcMarkets({ minVolume = 3000, minMinutes = 1, maxMinutes = 
 
 // ── Claude BTC analysis ───────────────────────────────────────────
 
-const BTC_PROMPT = `You are a quantitative analyst for ultra-short-term Bitcoin prediction markets on Polymarket.
-
-MARKET: {question}
-Time remaining until resolution: {timeRemaining} seconds
-Price to beat (BTC/USD at market open): ${priceToBeat}
-
-── LIVE BINANCE DATA ──────────────────────────────────────────────
-Current BTC/USD : ${currentPrice}
-Gap             : {gapSign}${gap} ({gapPct}%) — BTC is {direction} the target
-Momentum        : {momentumSign}${momentum}/min (avg last 3 closed candles)
-Avg volatility  : ±${volatility}/min (avg high-low range)
-
-1-min candles newest→oldest (Open / High / Low / Close):
-{candles}
-
-── POLYMARKET ODDS ────────────────────────────────────────────────
-UP price  : {upPrice} ({upPct}% implied)
-DOWN price: {downPrice} ({downPct}% implied)
-Volume    : ${volume}
-
-── DECISION FRAMEWORK ─────────────────────────────────────────────
-1. Near-resolution arb: |gap| > 2× volatility AND <90s left → very high confidence
-2. Momentum aligned with gap: e.g. gap=positive AND momentum=positive → higher confidence
-3. Market lag: market odds haven't caught up to clear gap+momentum → exploit mispricing
-4. Too uncertain: |gap| < 0.03% OR (timeRemaining > 200s AND gap is small) → SKIP
-5. Conflicting signals: gap direction vs momentum direction oppose each other → SKIP
-
-Bet only when you have genuinely HIGH confidence (estimated true probability > 70%).
-
-Respond ONLY as JSON (no markdown, no extra text):
-{
-  "signal": "BUY_UP" | "BUY_DOWN" | "SKIP",
-  "confidence": "LOW" | "MEDIUM" | "HIGH",
-  "edge": <estimated true prob minus market price, e.g. 0.12>,
-  "reasoning": "<max 2 sentences>"
-}`;
+const BTC_PROMPT = [
+  "You are a quantitative analyst for ultra-short-term Bitcoin prediction markets on Polymarket.",
+  "",
+  "MARKET: {question}",
+  "Time remaining until resolution: {timeRemaining} seconds",
+  "Price to beat (BTC/USD at market open): {priceToBeat}",
+  "",
+  "── LIVE BINANCE DATA ──────────────────────────────────────────────",
+  "Current BTC/USD : {currentPrice}",
+  "Gap             : {gapSign}{gap} ({gapPct}%) — BTC is {direction} the target",
+  "Momentum        : {momentumSign}{momentum}/min (avg last 3 closed candles)",
+  "Avg volatility  : ±{volatility}/min (avg high-low range)",
+  "",
+  "1-min candles newest→oldest (Open / High / Low / Close):",
+  "{candles}",
+  "",
+  "── POLYMARKET ODDS ────────────────────────────────────────────────",
+  "UP price  : {upPrice} ({upPct}% implied)",
+  "DOWN price: {downPrice} ({downPct}% implied)",
+  "Volume    : {volume}",
+  "",
+  "── DECISION FRAMEWORK ─────────────────────────────────────────────",
+  "1. Near-resolution arb: |gap| > 2x volatility AND <90s left → very high confidence",
+  "2. Momentum aligned with gap: e.g. gap=positive AND momentum=positive → higher confidence",
+  "3. Market lag: market odds haven't caught up to clear gap+momentum → exploit mispricing",
+  "4. Too uncertain: |gap| < 0.03% OR (timeRemaining > 200s AND gap is small) → SKIP",
+  "5. Conflicting signals: gap direction vs momentum direction oppose each other → SKIP",
+  "",
+  "Bet only when you have genuinely HIGH confidence (estimated true probability > 70%).",
+  "",
+  'Respond ONLY as JSON (no markdown, no extra text):',
+  '{',
+  '  "signal": "BUY_UP" | "BUY_DOWN" | "SKIP",',
+  '  "confidence": "LOW" | "MEDIUM" | "HIGH",',
+  '  "edge": <estimated true prob minus market price, e.g. 0.12>,',
+  '  "reasoning": "<max 2 sentences>"',
+  '}',
+].join("\n");
 
 async function analyzeBtcMarket(market, btcData, anthropicKey, { model = "claude-haiku-4-5-20251001", signal } = {}) {
   const { candles, spot, priceToBeat } = btcData;
