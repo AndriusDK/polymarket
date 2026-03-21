@@ -12,9 +12,9 @@ const state = {
   trades: [],          // open positions
   sessionPnl: 0,
   realizedPnl: 0,
-  btc: { timer: null, analyzed: new Set() },
-  eth: { timer: null, analyzed: new Set() },
-  sol: { timer: null, analyzed: new Set() },
+  btc: { timer: null, analyzed: new Map() },  // conditionId → endDateMs
+  eth: { timer: null, analyzed: new Map() },
+  sol: { timer: null, analyzed: new Map() },
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -443,7 +443,10 @@ const ASSET_COLORS = { btc: "amber", eth: "eth", sol: "sol" };
 
 function startCryptoMode(asset) {
   if (state[asset].timer) return;
-  state[asset].analyzed.clear();
+  // Prune only expired markets — keep active ones so restarts don't re-buy them
+  const now = Date.now();
+  for (const [cid, endMs] of state[asset].analyzed)
+    if (endMs < now) state[asset].analyzed.delete(cid);
 
   const cfg = CRYPTO_CONFIG[asset];
   const btn = $(`#btn-${asset}`);
@@ -514,7 +517,7 @@ async function runCryptoCycle(asset) {
   const pd = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
 
   for (const market of fresh) {
-    state[asset].analyzed.add(market.conditionId);
+    state[asset].analyzed.set(market.conditionId, new Date(market.endDate).getTime());
 
     let priceToBeat = null;
     if (market.startDate) {
