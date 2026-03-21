@@ -40,22 +40,87 @@ function startClock() {
   setInterval(tick, 1000);
 }
 
+// ── Settings persistence ──────────────────────────────────────────
+
+const SETTINGS_KEY = "polymarket_ai_settings";
+
+// Fields to persist: [elementId, type]
+const PERSIST_FIELDS = [
+  ["anthropic-key",       "value"],
+  ["claude-model",        "value"],
+  ["poly-private-key",    "value"],
+  ["poly-api-key",        "value"],
+  ["poly-api-secret",     "value"],
+  ["poly-passphrase",     "value"],
+  ["max-bet",             "value"],
+  ["min-edge",            "value"],
+  ["max-daily",           "value"],
+  ["markets-count",       "value"],
+  ["take-profit-pct",     "value"],
+  ["min-market-volume",   "value"],
+  ["min-entry-odds",      "value"],
+  ["dry-run-toggle",      "checked"],
+  ["btc-max-bet",         "value"],
+  ["btc-min-edge",        "value"],
+  ["btc-mode-toggle",     "checked"],
+  ["eth-max-bet",         "value"],
+  ["eth-min-edge",        "value"],
+  ["eth-mode-toggle",     "checked"],
+  ["sol-max-bet",         "value"],
+  ["sol-min-edge",        "value"],
+  ["sol-mode-toggle",     "checked"],
+];
+
+function saveSettings() {
+  const data = {};
+  for (const [id, prop] of PERSIST_FIELDS) {
+    const el = $(`#${id}`);
+    if (el) data[id] = el[prop];
+  }
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch {}
+}
+
+function loadSettings() {
+  let data;
+  try { data = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null"); } catch {}
+  if (!data) return;
+  for (const [id, prop] of PERSIST_FIELDS) {
+    const el = $(`#${id}`);
+    if (el && data[id] !== undefined) el[prop] = data[id];
+  }
+  // Sync toggle labels after restoring checkboxes
+  syncToggleLabel("dry-run-toggle",  "dry-run-label",  ["ON","amber"], ["OFF — LIVE","red"]);
+  syncToggleLabel("btc-mode-toggle", "btc-mode-label",  ["ON","green"], ["OFF","dim"]);
+  syncToggleLabel("eth-mode-toggle", "eth-mode-label",  ["ON","green"], ["OFF","dim"]);
+  syncToggleLabel("sol-mode-toggle", "sol-mode-label",  ["ON","green"], ["OFF","dim"]);
+}
+
+function syncToggleLabel(toggleId, labelId, onState, offState) {
+  const el = $(`#${toggleId}`);
+  const lbl = $(`#${labelId}`);
+  if (!el || !lbl) return;
+  const [text, cls] = el.checked ? onState : offState;
+  lbl.textContent = text;
+  lbl.className = `toggle-status ${cls}`;
+}
+
 // ── Setup screen ─────────────────────────────────────────────────
 
 function initSetup() {
-  $("#dry-run-toggle").addEventListener("change", (e) => {
-    const label = $("#dry-run-label");
-    if (e.target.checked) {
-      label.textContent = "ON";
-      label.className = "toggle-status amber";
-    } else {
-      label.textContent = "OFF — LIVE";
-      label.className = "toggle-status red";
-    }
-  });
+  loadSettings();
+
+  $("#dry-run-toggle").addEventListener("change", () =>
+    syncToggleLabel("dry-run-toggle", "dry-run-label", ["ON","amber"], ["OFF — LIVE","red"]));
+  $("#btc-mode-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("btc-mode-toggle", "btc-mode-label", ["ON","green"], ["OFF","dim"]));
+  $("#eth-mode-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("eth-mode-toggle", "eth-mode-label", ["ON","green"], ["OFF","dim"]));
+  $("#sol-mode-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("sol-mode-toggle", "sol-mode-label", ["ON","green"], ["OFF","dim"]));
 
   $("#btn-launch").addEventListener("click", () => {
     $("#setup-error").textContent = "";
+    saveSettings();
 
     state.config = {
       anthropicKey:  $("#anthropic-key").value.trim(),
