@@ -59,6 +59,7 @@ const PERSIST_FIELDS = [
   ["take-profit-pct",     "value"],
   ["min-market-volume",   "value"],
   ["min-entry-odds",      "value"],
+  ["max-entry-odds",      "value"],
   ["dry-run-toggle",      "checked"],
   ["btc-max-bet",         "value"],
   ["btc-min-edge",        "value"],
@@ -136,6 +137,7 @@ function initSetup() {
       takeProfitPct:    parseFloat($("#take-profit-pct")?.value) || 50,
       minMarketVolume:  parseFloat($("#min-market-volume")?.value) || 1000,
       minEntryOdds:     parseFloat($("#min-entry-odds")?.value)    || 15,
+      maxEntryOdds:     parseFloat($("#max-entry-odds")?.value)    || 87,
       btcMode:       $("#btc-mode-toggle")?.checked ?? false,
       btcMaxBet:     parseFloat($("#btc-max-bet")?.value) || 5,
       btcMinEdge:    parseFloat($("#btc-min-edge")?.value) || 0.06,
@@ -643,8 +645,9 @@ async function _runCryptoCycleInner(asset) {
 
     const minEdge     = c[`${asset}MinEdge`] ?? 0.06;
     const minOdds     = (c.minEntryOdds ?? 15) / 100;
+    const maxOdds     = (c.maxEntryOdds ?? 87) / 100;
     const entryOdds   = analysis.signal === "BUY_UP" ? market.upPrice : market.downPrice;
-    const oddsOk      = analysis.signal === "SKIP" || entryOdds >= minOdds;
+    const oddsOk      = analysis.signal === "SKIP" || (entryOdds >= minOdds && entryOdds <= maxOdds);
 
     // Gap-crossing guard: only applies when signal bets AGAINST the current gap direction.
     // (BUY_UP when price is below target, or BUY_DOWN when price is above target)
@@ -665,7 +668,12 @@ async function _runCryptoCycleInner(asset) {
       placeCryptoTrade(asset, analysis, { spot, priceToBeat });
     } else if (analysis.signal !== "SKIP") {
       const reasons = [];
-      if (!oddsOk) reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% < min ${(minOdds * 100).toFixed(0)}%`);
+      if (!oddsOk) {
+        if (entryOdds > maxOdds)
+          reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% > max ${(maxOdds * 100).toFixed(0)}% (bad risk/reward)`);
+        else
+          reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% < min ${(minOdds * 100).toFixed(0)}%`);
+      }
       if (!crossable) reasons.push(`gap $${Math.abs(gap).toFixed(pd)} too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < 0.10)

@@ -93,7 +93,10 @@
           <label class="field-label">Min Entry Odds (%)</label>
           <input type="number" id="min-entry-odds" class="neon-input" value="15" min="5" max="49" step="1" title="Skip trade if the chosen side is already priced below this % (avoids betting into overwhelming market consensus)" />
         </div>
-        <div></div>
+        <div>
+          <label class="field-label">Max Entry Odds (%)</label>
+          <input type="number" id="max-entry-odds" class="neon-input" value="87" min="50" max="99" step="1" title="Skip trade if the chosen side is already priced above this % — avoids terrible risk/reward (e.g. buying at 97% has max gain of 3¢ but full downside risk)" />
+        </div>
       </div>
 
       <div class="switch-row">
