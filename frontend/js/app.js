@@ -70,6 +70,7 @@ function initSetup() {
       dryRun:        $("#dry-run-toggle").checked,
       takeProfitPct:    parseFloat($("#take-profit-pct")?.value) || 50,
       minMarketVolume:  parseFloat($("#min-market-volume")?.value) || 1000,
+      minEntryOdds:     parseFloat($("#min-entry-odds")?.value)    || 15,
       btcMode:       $("#btc-mode-toggle")?.checked ?? false,
       btcMaxBet:     parseFloat($("#btc-max-bet")?.value) || 5,
       btcMinEdge:    parseFloat($("#btc-min-edge")?.value) || 0.06,
@@ -541,6 +542,20 @@ async function _runCryptoCycleInner(asset) {
     const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
     const gap = spot - priceToBeat;
 
+    // Pre-analysis guard: skip if gap is physically impossible to close in time.
+    // Uses recent candle range as a proxy for max movement rate per minute.
+    const recentRange = candles.slice(-3).reduce((mx, c) => Math.max(mx, c.high - c.low), 0);
+    const maxMovement = Math.max(recentRange, 1) * Math.max(timeRemaining / 60, 0.25) * 3;
+    if (Math.abs(gap) > maxMovement) {
+      logEntry("info",
+        `${cfg.ticker}: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
+        `[${timeRemaining}s left]  ${cfg.ticker} $${spot.toFixed(pd)} vs target $${priceToBeat.toFixed(pd)}  ` +
+        `<span class="${gap >= 0 ? "green" : "red"}">${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)}</span>  ` +
+        `<span class="dim">⊘ gap too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})</span>`
+      );
+      continue;
+    }
+
     logEntry("info",
       `${cfg.ticker}: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
       `[${timeRemaining}s left]  ${cfg.ticker} $${spot.toFixed(pd)} vs target $${priceToBeat.toFixed(pd)}  ` +
@@ -569,9 +584,14 @@ async function _runCryptoCycleInner(asset) {
     const sigEl = $(`#stat-${asset}-signals`);
     if (sigEl) sigEl.textContent = String(parseInt(sigEl.textContent || "0") + 1);
 
-    const minEdge = c[`${asset}MinEdge`] ?? 0.06;
+    const minEdge     = c[`${asset}MinEdge`] ?? 0.06;
+    const minOdds     = (c.minEntryOdds ?? 15) / 100;
+    const entryOdds   = analysis.signal === "BUY_UP" ? market.upPrice : market.downPrice;
+    const oddsOk      = analysis.signal === "SKIP" || entryOdds >= minOdds;
+
     const qualifies =
       analysis.signal !== "SKIP" &&
+      oddsOk &&
       (analysis.confidence === "HIGH" ||
        (analysis.confidence === "MEDIUM" && analysis.absEdge >= 0.10)) &&
       analysis.absEdge >= minEdge &&
@@ -581,6 +601,7 @@ async function _runCryptoCycleInner(asset) {
       placeCryptoTrade(asset, analysis, { spot, priceToBeat });
     } else if (analysis.signal !== "SKIP") {
       const reasons = [];
+      if (!oddsOk) reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% < min ${(minOdds * 100).toFixed(0)}%`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < 0.10)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < 10% required for MEDIUM`);
