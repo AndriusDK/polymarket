@@ -450,7 +450,7 @@ async function analyzeBtcMarket(market, btcData, anthropicKey, { model = "claude
     },
     body: JSON.stringify({
       model,
-      max_tokens: 256,
+      max_tokens: 512,
       messages: [{ role: "user", content: prompt }],
     }),
     signal,
