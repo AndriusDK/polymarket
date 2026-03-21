@@ -371,7 +371,8 @@ const CRYPTO_PROMPT = [
   "Volume    : {volume}",
   "",
   "── DECISION RULES (apply in order, first match wins) ──────────────",
-  "1. HARD STOP — candle trend opposes gap AND ≥4 of 5 candles oppose gap direction → SKIP always",
+  "1. HARD STOP — candle trend opposes gap AND all 5 of 5 candles oppose gap direction → SKIP always",
+  "   EXCEPTION to rule 1: if |effectiveGap| > 3× avg volatility, the gap is too large to ignore — do NOT hard skip, use MEDIUM confidence instead.",
   "2. HARD STOP — timeRemaining > 300s AND momentum opposes gap AND |momentum| > {momentumThreshold}/min → SKIP",
   "   EXCEPTION to rule 2: if |effectiveGap| > 3× avg volatility, the gap is too large for momentum to erase — do NOT skip, use MEDIUM confidence instead.",
   "3. Effective gap = gap + expectedDrift (expectedDrift is negative when momentum opposes gap).",
@@ -382,7 +383,7 @@ const CRYPTO_PROMPT = [
   "7. Too uncertain: |effective gap| < 0.03% of price OR both gap and momentum are tiny → SKIP",
   "",
   "BUY_DOWN is equally valid when {ticker} is BELOW the target. Treat UP and DOWN symmetrically.",
-  "Bet only when estimated true probability exceeds 70%. When in doubt, SKIP.",
+  "Bet only when estimated true probability exceeds 60%. When in doubt, SKIP.",
   "",
   'Respond ONLY as JSON (no markdown, no extra text):',
   '{',
@@ -556,7 +557,7 @@ function parseCryptoResponse(raw, market, metrics) {
     if (effectiveGap * gap <= 0) {
       signal = "SKIP"; confidence = "LOW";
     }
-    else if (!gapDominant && momentumConflicts && timeRemaining > 300 && Math.abs(momentum) > momThreshold) {
+    else if (!gapDominant && momentumConflicts && timeRemaining > 180 && Math.abs(momentum) > momThreshold) {
       signal = "SKIP"; confidence = "LOW";
     }
     else if (momentumConflicts && timeRemaining > 200 && confidence === "HIGH") {
