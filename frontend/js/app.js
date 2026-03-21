@@ -418,10 +418,10 @@ function startBtcMode() {
   if (btn) { btn.textContent = "■ BTC STOP"; btn.classList.add("active"); }
   setStat("btc-status", "ACTIVE", "amber");
   setRunning(true);
-  logEntry("cyan", "⚡ BTC MODE ON — scanning every 30s for high-volume 5-min markets");
+  logEntry("cyan", "⚡ BTC MODE ON — scanning every 10s for high-volume 5-min markets");
 
   runBtcCycle();
-  state.btc.timer = setInterval(runBtcCycle, 30_000);
+  state.btc.timer = setInterval(runBtcCycle, 10_000);
 }
 
 function stopBtcMode() {
