@@ -939,10 +939,15 @@ async function _runCryptoCycleInner(asset) {
       continue;
     }
 
+    // Long-window low-conviction guard: near-50% odds with >800s remaining means the
+    // market is uncertain and has ample time to reverse — require ≥55% conviction odds.
+    const longWindowLowConv = timeRemaining > 800 && entryOdds < 0.55;
+
     const qualifies =
       analysis.signal !== "SKIP" &&
       oddsOk &&
       crossable &&
+      !longWindowLowConv &&
       (analysis.confidence === "HIGH" ||
        (analysis.confidence === "MEDIUM" && analysis.absEdge >= 0.08)) &&
       analysis.absEdge >= minEdge &&
@@ -959,6 +964,7 @@ async function _runCryptoCycleInner(asset) {
           reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% < min ${(minOdds * 100).toFixed(0)}%`);
       }
       if (!crossable) reasons.push(`gap $${Math.abs(gap).toFixed(pd)} too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})`);
+      if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥55% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < 0.08)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < 8% required for MEDIUM`);
@@ -1000,8 +1006,11 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   const timeFraction  = secsForSizing > 800 ? 0.40
                       : secsForSizing > 400 ? 0.65
                       : 1.0;
+  // Scale down size for high-odds entries — reversal is more costly when you paid a premium.
+  // Linear reduction from 1.0× at 65% down to 0.40× at 87%, capped at 0.40 minimum.
+  const oddsFraction = entryPrice > 0.65 ? Math.max(0.40, 1 - (entryPrice - 0.65) / 0.367) : 1.0;
   const maxBet = c[`${asset}MaxBet`] ?? c.btcMaxBet ?? 5;
-  const amount = Math.min(maxBet * timeFraction, c.maxDaily - state.stats.spent);
+  const amount = Math.min(maxBet * timeFraction * oddsFraction, c.maxDaily - state.stats.spent);
   if (amount < 0.50) return;
 
   const tag      = c.dryRun ? "[SIM]" : "[LIVE]";
