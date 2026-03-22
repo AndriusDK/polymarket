@@ -264,6 +264,7 @@ function addCryptoCard(trade) {
   const gap       = trade.gap ?? 0;
   const gapSign   = gap >= 0 ? "+" : "";
   const gapClass  = gap >= 0 ? "green" : "red";
+  const edgePct   = trade.edge != null ? `${trade.edge >= 0 ? "+" : ""}${(trade.edge * 100).toFixed(1)}%` : null;
   const spot      = trade.spot ?? 0;
   const priceFmt  = spot >= 1000 ? spot.toFixed(0) : spot.toFixed(2);
   const targetFmt = (trade.priceToBeat ?? 0) >= 1000 ? (trade.priceToBeat ?? 0).toFixed(0) : (trade.priceToBeat ?? 0).toFixed(2);
@@ -313,6 +314,15 @@ function addCryptoCard(trade) {
         </div>
       </div>
     </div>
+    ${trade.reasoning ? `
+    <div class="card-reasoning expanded">
+      <div class="card-reasoning-head">
+        <span class="card-reasoning-label">◈ AI REASONING</span>
+        ${edgePct ? `<span class="card-reasoning-edge">EDGE ${edgePct}</span>` : ""}
+        <button class="card-reasoning-toggle" onclick="this.closest('.card-reasoning').classList.toggle('expanded')" title="Toggle reasoning">▾</button>
+      </div>
+      <div class="card-reasoning-body">${escHtml(trade.reasoning)}</div>
+    </div>` : ""}
     <div class="btc-card-foot">
       <span>${ticker} $${priceFmt}&nbsp; vs &nbsp;target $${targetFmt}
       &nbsp;|&nbsp; Gap: <span class="${gapClass}">${gapSign}$${gapFmt}</span></span>
@@ -934,6 +944,8 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     spot,
     priceToBeat,
     gap:           analysis.gap,
+    edge:          analysis.edge,
+    reasoning:     analysis.reasoning ?? "",
     totalSecs:     secsLeft,
     entryTime:     Date.now(),
     marketUrl,
