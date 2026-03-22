@@ -545,6 +545,96 @@ function updatePnlStat() {
 
 const ASSET_COLORS = { btc: "amber", eth: "eth", sol: "sol" };
 
+// ── Market WebSocket — instant new_market detection ──────────────
+
+const WS_MARKET_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+// Broader keywords for WS matching (exact filtering happens inside fetchCryptoMarkets)
+const WS_KEYWORDS = {
+  btc: ["bitcoin", "btc"],
+  eth: ["ethereum", "eth"],
+  sol: ["solana", "sol"],
+};
+
+let _marketWs = null;
+let _marketWsPingTimer = null;
+let _marketWsReconnectTimer = null;
+let _marketWsReconnectDelay = 2000;
+
+function startMarketWS() {
+  if (_marketWs && _marketWs.readyState < 2) return; // already open or connecting
+  clearTimeout(_marketWsReconnectTimer);
+
+  try { _marketWs = new WebSocket(WS_MARKET_URL); }
+  catch (e) {
+    logEntry("warning", `Market WS: could not open — ${e.message}`);
+    _scheduleWsReconnect();
+    return;
+  }
+
+  _marketWs.onopen = () => {
+    _marketWsReconnectDelay = 2000; // reset backoff on success
+    logEntry("cyan", "Market WS connected — instant new-market alerts active");
+    _marketWs.send(JSON.stringify({ assets_ids: [], type: "market", custom_feature_enabled: true }));
+    _marketWsPingTimer = setInterval(() => {
+      if (_marketWs.readyState === WebSocket.OPEN) _marketWs.send("PING");
+    }, 10_000);
+  };
+
+  _marketWs.onmessage = (evt) => {
+    if (evt.data === "PONG") return;
+    let msgs;
+    try { msgs = JSON.parse(evt.data); if (!Array.isArray(msgs)) msgs = [msgs]; }
+    catch { return; }
+    for (const msg of msgs) {
+      if (msg.event_type === "new_market") _handleNewMarketEvent(msg);
+    }
+  };
+
+  _marketWs.onclose = () => {
+    clearInterval(_marketWsPingTimer);
+    _marketWsPingTimer = null;
+    logEntry("warning", "Market WS closed — reconnecting…");
+    _scheduleWsReconnect();
+  };
+
+  _marketWs.onerror = () => { /* onclose fires after onerror */ };
+}
+
+function stopMarketWS() {
+  clearInterval(_marketWsPingTimer);
+  clearTimeout(_marketWsReconnectTimer);
+  _marketWsPingTimer = null;
+  _marketWsReconnectTimer = null;
+  if (_marketWs) {
+    _marketWs.onclose = null; // prevent reconnect loop
+    _marketWs.close();
+    _marketWs = null;
+  }
+}
+
+function _scheduleWsReconnect() {
+  if (!["btc", "eth", "sol"].some(a => state[a].timer)) return; // no asset running
+  _marketWsReconnectTimer = setTimeout(() => {
+    _marketWsReconnectDelay = Math.min(_marketWsReconnectDelay * 2, 30_000);
+    startMarketWS();
+  }, _marketWsReconnectDelay);
+}
+
+function _handleNewMarketEvent(msg) {
+  const question = (msg.market?.question || msg.question || "").toLowerCase();
+  if (!question) return;
+
+  for (const [asset, kws] of Object.entries(WS_KEYWORDS)) {
+    if (!state[asset].timer) continue;
+    if (!kws.some(kw => question.includes(kw))) continue;
+    logEntry("cyan", `⚡ WS new_market → <span class="amber">${question.slice(0, 60)}</span> — running ${asset.toUpperCase()} cycle`);
+    // Small delay so Gamma API has time to index the new market
+    setTimeout(() => runCryptoCycle(asset), 800);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+
 function startCryptoMode(asset) {
   if (state[asset].timer) return;
   // Prune only expired markets — keep active ones so restarts don't re-buy them
@@ -557,10 +647,11 @@ function startCryptoMode(asset) {
   if (btn) { btn.textContent = `■ ${cfg.ticker} STOP`; btn.classList.add("active"); }
   setStat(`${asset}-status`, "ACTIVE", ASSET_COLORS[asset]);
   setRunning(true);
-  logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — scanning every 10s for 5-min & 15-min markets`);
+  logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — WS instant detection + 30s safety poll`);
 
+  startMarketWS();
   runCryptoCycle(asset);
-  state[asset].timer = setInterval(() => runCryptoCycle(asset), 10_000);
+  state[asset].timer = setInterval(() => runCryptoCycle(asset), 30_000);
 }
 
 function stopCryptoMode(asset) {
@@ -572,7 +663,10 @@ function stopCryptoMode(asset) {
   const btn = $(`#btn-${asset}`);
   if (btn) { btn.textContent = `⚡ ${cfg.ticker} MODE`; btn.classList.remove("active"); }
   setStat(`${asset}-status`, "OFF", "dim");
-  if (!["btc","eth","sol"].some(a => state[a].timer)) setRunning(false);
+  if (!["btc", "eth", "sol"].some(a => state[a].timer)) {
+    setRunning(false);
+    stopMarketWS();
+  }
   logEntry("warning", `${cfg.ticker} mode stopped.`);
 }
 
