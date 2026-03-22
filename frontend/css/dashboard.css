@@ -2,6 +2,100 @@
    DASHBOARD SCREEN
    ═══════════════════════════════════════════════════════════════════ */
 
+/* ── Startup cooldown overlay ── */
+#cooldown-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 5, 20, 0.82);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+#cooldown-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 44px;
+  background: var(--bg-panel);
+  border: 1px solid var(--cyan-dim);
+  box-shadow: 0 0 40px var(--cyan-glow), inset 0 0 20px rgba(0,212,255,0.04);
+  text-align: center;
+  min-width: 260px;
+}
+
+#cooldown-title {
+  color: var(--cyan);
+  font-size: 15px;
+  font-weight: bold;
+  letter-spacing: 3px;
+  animation: text-flicker 6s infinite;
+}
+
+#cooldown-sub {
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+#cooldown-ring {
+  position: relative;
+  width: 80px;
+  height: 80px;
+}
+
+#cooldown-ring svg {
+  width: 80px;
+  height: 80px;
+  transform: rotate(-90deg);
+}
+
+.ring-bg {
+  fill: none;
+  stroke: #0d0d2a;
+  stroke-width: 6;
+}
+
+.ring-arc {
+  fill: none;
+  stroke: var(--cyan);
+  stroke-width: 6;
+  stroke-linecap: round;
+  stroke-dasharray: 213.6;
+  stroke-dashoffset: 0;
+  filter: drop-shadow(0 0 4px var(--cyan));
+  transition: stroke-dashoffset 1s linear;
+}
+
+#cooldown-num {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--cyan);
+  font-size: 22px;
+  font-weight: bold;
+}
+
+#cooldown-label {
+  color: #5a5a8a;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+#cooldown-label span {
+  color: var(--amber);
+}
+
+@keyframes cooldown-fade-out {
+  to { opacity: 0; transform: scale(1.04); }
+}
+
 #dashboard-screen {
   flex-direction: column;
   height: 100vh;

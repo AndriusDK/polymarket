@@ -635,6 +635,35 @@ function _handleNewMarketEvent(msg) {
   }
 }
 
+// ── Startup cooldown overlay ──────────────────────────────────────
+
+function _startCooldownOverlay(totalSecs) {
+  const overlay  = $("#cooldown-overlay");
+  const numEl    = $("#cooldown-num");
+  const secsEl   = $("#cooldown-secs");
+  const arc      = $("#cooldown-arc");
+  if (!overlay) return;
+
+  const circumference = 213.6; // 2π × r=34
+  const update = () => {
+    const elapsed  = (Date.now() - state.bootTime) / 1000;
+    const left     = Math.max(0, totalSecs - elapsed);
+    const leftInt  = Math.ceil(left);
+    if (numEl)  numEl.textContent  = leftInt;
+    if (secsEl) secsEl.textContent = leftInt;
+    if (arc)    arc.style.strokeDashoffset = String(circumference * (elapsed / totalSecs));
+    if (left <= 0) {
+      clearInterval(timer);
+      overlay.style.animation = "cooldown-fade-out 0.4s ease forwards";
+      setTimeout(() => { overlay.style.display = "none"; overlay.style.animation = ""; }, 400);
+    }
+  };
+
+  overlay.style.display = "flex";
+  update();
+  const timer = setInterval(update, 250);
+}
+
 // ─────────────────────────────────────────────────────────────────
 
 function startCryptoMode(asset) {
@@ -655,6 +684,7 @@ function startCryptoMode(asset) {
     const coolSecs = state.config?.startupCooldown ?? 90;
     state.bootTime = Date.now();
     logEntry("amber", `⏱ Startup cooldown: observing for ${coolSecs}s before trading`);
+    _startCooldownOverlay(coolSecs);
   }
 
   logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — WS instant detection + 30s safety poll`);
