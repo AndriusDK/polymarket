@@ -244,6 +244,17 @@ function showProgress(visible) {
   $("#progress-wrap")?.classList.toggle("hidden", !visible);
 }
 
+// ── Helpers ───────────────────────────────────────────────────────
+
+function fmtDuration(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60)  return `${s}s`;
+  const m = Math.floor(s / 60), rs = s % 60;
+  if (m < 60)  return `${m}m ${rs}s`;
+  const h = Math.floor(m / 60), rm = m % 60;
+  return `${h}h ${rm}m`;
+}
+
 // ── Crypto Position Cards ─────────────────────────────────────────
 
 function addCryptoCard(trade) {
@@ -314,6 +325,10 @@ function addCryptoCard(trade) {
         <div class="btc-kv">
           <span class="btc-k">CONFIDENCE</span>
           <span class="btc-v ${confClass}">${trade.confidence}</span>
+        </div>
+        <div class="btc-kv">
+          <span class="btc-k">DURATION</span>
+          <span class="btc-v dim" id="dur-${trade.id}">0s</span>
         </div>
       </div>
     </div>
@@ -409,6 +424,8 @@ function refreshBtcCards() {
       pnlEl.textContent = (isPos ? "+" : "") + "$" + t.unrealizedPnl.toFixed(2);
       pnlEl.className   = `btc-v ${isPos ? "green" : "red"}`;
     }
+    const durEl = $(`#dur-${t.id}`);
+    if (durEl) durEl.textContent = fmtDuration(Date.now() - t.entryTime);
     updateSparkline(t);
   }
 }
@@ -542,6 +559,9 @@ function closePosition(trade, reason) {
   const stillNeeded = state.trades.some(t => t.tokenId === trade.tokenId);
   if (!stillNeeded) priceStream.unsubscribe(trade.tokenId);
 
+  trade.exitTime = Date.now();
+  trade.duration = trade.exitTime - trade.entryTime;
+
   const realized = trade.unrealizedPnl;
   state.realizedPnl = (state.realizedPnl || 0) + realized;
   if (realized > 0) state.wins++; else state.losses++;
@@ -557,12 +577,17 @@ function closePosition(trade, reason) {
     strip.innerHTML = `
       <span class="btc-closed-label">${isWin ? "▲ WIN" : "▼ LOSS"} — ${reason}</span>
       <span class="btc-closed-pnl ${isWin ? "green" : "red"}">${sign}$${realized.toFixed(2)} REALIZED</span>
+      <span class="btc-closed-dur dim">${fmtDuration(trade.duration)}</span>
     `;
     card.insertBefore(strip, card.firstChild);
 
     // Freeze countdown display
     const cd = $(`#cd-${trade.id}`);
     if (cd) { cd.textContent = "[CLOSED]"; cd.className = "btc-card-cd resolved"; }
+
+    // Freeze duration display
+    const durEl = $(`#dur-${trade.id}`);
+    if (durEl) { durEl.textContent = fmtDuration(trade.duration); durEl.className = "btc-v dim"; }
 
     // Clear unrealized PnL — position is settled
     const pnlEl = $(`#pnl-${trade.id}`);

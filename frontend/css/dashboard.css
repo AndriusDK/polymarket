@@ -586,6 +586,7 @@
 }
 .btc-closed-label { opacity: 0.8; }
 .btc-closed-pnl   { font-size: 12px; font-variant-numeric: tabular-nums; }
+.btc-closed-dur   { font-size: 11px; opacity: 0.55; margin-left: auto; font-variant-numeric: tabular-nums; }
 
 /* ── Stats panel ── */
 #stats-panel {
