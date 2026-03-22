@@ -136,7 +136,7 @@ function initSetup() {
       dryRun:        $("#dry-run-toggle").checked,
       takeProfitPct:    parseFloat($("#take-profit-pct")?.value) || 50,
       minMarketVolume:  parseFloat($("#min-market-volume")?.value) || 1000,
-      minEntryOdds:     parseFloat($("#min-entry-odds")?.value)    || 15,
+      minEntryOdds:     parseFloat($("#min-entry-odds")?.value)    || 10,
       maxEntryOdds:     parseFloat($("#max-entry-odds")?.value)    || 87,
       btcMode:       $("#btc-mode-toggle")?.checked ?? false,
       btcMaxBet:     parseFloat($("#btc-max-bet")?.value) || 5,
@@ -737,8 +737,9 @@ async function _runCryptoCycleInner(asset) {
     const gap = spot - priceToBeat;
 
     // Precompute maxMovement for post-analysis crossing check.
+    // Floor: 0.1% of spot/min avoids underestimating movement during calm 1-min candles.
     const recentRange = candles.slice(-3).reduce((mx, c) => Math.max(mx, c.high - c.low), 0);
-    const maxMovement = Math.max(recentRange, 1) * Math.max(timeRemaining / 60, 0.25) * 3;
+    const maxMovement = Math.max(recentRange, spot * 0.001) * Math.max(timeRemaining / 60, 0.25) * 3;
 
     logEntry("info",
       `${cfg.ticker}: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
@@ -769,7 +770,7 @@ async function _runCryptoCycleInner(asset) {
     if (sigEl) sigEl.textContent = String(parseInt(sigEl.textContent || "0") + 1);
 
     const minEdge     = c[`${asset}MinEdge`] ?? 0.06;
-    const minOdds     = (c.minEntryOdds ?? 15) / 100;
+    const minOdds     = (c.minEntryOdds ?? 10) / 100;
     const maxOdds     = (c.maxEntryOdds ?? 87) / 100;
     const entryOdds   = analysis.signal === "BUY_UP" ? market.upPrice : market.downPrice;
     const oddsOk      = analysis.signal === "SKIP" || (entryOdds >= minOdds && entryOdds <= maxOdds);
