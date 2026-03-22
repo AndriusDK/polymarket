@@ -957,7 +957,7 @@ async function _runCryptoCycleInner(asset) {
       !longWindowLowConv &&
       !shortWindowMedium &&
       (analysis.confidence === "HIGH" ||
-       (analysis.confidence === "MEDIUM" && analysis.absEdge >= 0.08)) &&
+       (analysis.confidence === "MEDIUM" && analysis.absEdge >= 0.05)) &&
       analysis.absEdge >= minEdge &&
       state.stats.spent < c.maxDaily;
 
@@ -975,8 +975,8 @@ async function _runCryptoCycleInner(asset) {
       if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥55% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
       if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
-      else if (analysis.confidence === "MEDIUM" && analysis.absEdge < 0.08)
-        reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < 8% required for MEDIUM`);
+      else if (analysis.confidence === "MEDIUM" && analysis.absEdge < 0.05)
+        reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < 5% required for MEDIUM`);
       if (analysis.absEdge < minEdge)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < minEdge ${(minEdge * 100).toFixed(1)}%`);
       if (state.stats.spent >= c.maxDaily)
