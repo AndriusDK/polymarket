@@ -462,9 +462,10 @@ const priceStream = (() => {
           changed = true;
         }
         if (changed) {
-          const stopLossPct   = (state.config?.stopLossPct   ?? 50) / 100;
-          const takeProfitPct = (state.config?.takeProfitPct ?? 50) / 100;
-          const takeProfitAmt = state.config?.takeProfitAmt ?? 0;
+          // Read live from DOM so changes take effect instantly without restart
+          const stopLossPct   = (parseFloat($("#stop-loss-pct")?.value)   || state.config?.stopLossPct   || 50) / 100;
+          const takeProfitPct = (parseFloat($("#take-profit-pct")?.value) || state.config?.takeProfitPct || 50) / 100;
+          const takeProfitAmt =  parseFloat($("#take-profit-amt")?.value) || 0;
           const toStopLoss = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             // Never stop-loss truly last-second entries — position resolves in seconds
