@@ -191,6 +191,7 @@ function initDashboard() {
 
   startClock();
   logEntry("cyan", "POLYMARKET AI TRADING SYSTEM — ONLINE");
+  logEntry("dim", "  ◈ Subdivisions: BTC · ETH · SOL  |  Clockwork Angels protocol active");
   logEntry("info",
     `Mode: ${c.dryRun ? "DRY RUN" : "⚡ LIVE"}  |  BTC/ETH/SOL 5-min & 15-min  |  Budget $${c.maxDaily}`
   );
