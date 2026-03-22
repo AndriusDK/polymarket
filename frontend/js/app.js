@@ -605,10 +605,6 @@ async function _runCryptoCycleInner(asset) {
   }
 
   const freshCount = markets.filter(m => !state[asset].analyzed.has(m.conditionId)).length;
-  logEntry("info",
-    `${cfg.ticker} scan: ${debug.total} total markets → ${debug.asset} ${cfg.ticker} → ` +
-    `${debug.inWindow} in window → ${debug.parsed} valid → ${debug.filtered} vol≥$${c.minMarketVolume} (${freshCount} fresh)`
-  );
 
   const fresh = markets.filter(m => !state[asset].analyzed.has(m.conditionId));
   if (!fresh.length) {
