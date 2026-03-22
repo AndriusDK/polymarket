@@ -794,7 +794,7 @@ async function _runCryptoCycleInner(asset) {
       oddsOk &&
       crossable &&
       (analysis.confidence === "HIGH" ||
-       (analysis.confidence === "MEDIUM" && analysis.absEdge >= 0.10)) &&
+       (analysis.confidence === "MEDIUM" && analysis.absEdge >= 0.08)) &&
       analysis.absEdge >= minEdge &&
       state.stats.spent < c.maxDaily;
 
@@ -810,8 +810,8 @@ async function _runCryptoCycleInner(asset) {
       }
       if (!crossable) reasons.push(`gap $${Math.abs(gap).toFixed(pd)} too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
-      else if (analysis.confidence === "MEDIUM" && analysis.absEdge < 0.10)
-        reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < 10% required for MEDIUM`);
+      else if (analysis.confidence === "MEDIUM" && analysis.absEdge < 0.08)
+        reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < 8% required for MEDIUM`);
       if (analysis.absEdge < minEdge)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < minEdge ${(minEdge * 100).toFixed(1)}%`);
       if (state.stats.spent >= c.maxDaily)
