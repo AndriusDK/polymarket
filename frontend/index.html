@@ -194,6 +194,22 @@
 
   <!-- ═══ DASHBOARD SCREEN ═══ -->
   <div id="dashboard-screen" class="screen">
+
+  <!-- Startup cooldown overlay -->
+  <div id="cooldown-overlay" style="display:none">
+    <div id="cooldown-box">
+      <div id="cooldown-title">◈ SCANNING MARKETS</div>
+      <div id="cooldown-sub">Analysing conditions before placing trades…</div>
+      <div id="cooldown-ring">
+        <svg viewBox="0 0 80 80">
+          <circle class="ring-bg" cx="40" cy="40" r="34"/>
+          <circle id="cooldown-arc" class="ring-arc" cx="40" cy="40" r="34"/>
+        </svg>
+        <div id="cooldown-num">90</div>
+      </div>
+      <div id="cooldown-label">Trading begins in <span id="cooldown-secs">90</span>s</div>
+    </div>
+  </div>
     <!-- Header -->
     <header id="dash-header">
       <div class="header-left">
