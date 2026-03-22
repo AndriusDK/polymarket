@@ -391,10 +391,14 @@ const priceStream = (() => {
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
           const toTakeProfit = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
-            // TP = capture takeProfitPct of remaining upside to $1.00
-            // e.g. entry 80%, pct 50% → fires at 80 + (100-80)*0.50 = 90%
-            const tpPrice = t.entryPrice + (1 - t.entryPrice) * takeProfitPct;
-            return t.currentPrice >= tpPrice;
+            // Hard TP: fires when gain exceeds takeProfitPct of amount invested
+            // e.g. $20 trade, 50% pct → fires when unrealizedPnl >= $10
+            if (t.unrealizedPnl >= t.amount * takeProfitPct) return true;
+            // Trailing stop: protect gains once peak gain is meaningful (>15% of amount)
+            // Close if current PnL has fallen below 40% of peak PnL — locks in 40% of best gains
+            const peakGain = t.peakPrice * t.shares - t.amount;
+            if (peakGain >= t.amount * 0.15 && t.unrealizedPnl < peakGain * 0.40) return true;
+            return false;
           });
           for (const t of toTakeProfit) closePosition(t, "TAKE PROFIT");
           refreshBtcCards();
