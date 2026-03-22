@@ -470,9 +470,11 @@ const priceStream = (() => {
             if (t.tokenId !== tokenId) return false;
             // Never stop-loss truly last-second entries — position resolves in seconds
             if (t.totalSecs < 45) return false;
-            // Grace period: scale to entry window so short-duration trades don't
-            // sit blind for half their remaining time (min 10s, max 30s)
-            const grace = Math.min(30_000, Math.max(10_000, t.totalSecs * 120));
+            // Grace period: short windows get a tighter grace so stop loss reacts
+            // faster — a 119s trade with 14s blindspot is too exposed to flash moves.
+            const grace = t.totalSecs < 200
+              ? Math.min(8_000,  Math.max(3_000, t.totalSecs * 40))
+              : Math.min(30_000, Math.max(10_000, t.totalSecs * 120));
             if (Date.now() - t.entryTime < grace) return false;
             return t.unrealizedPnl <= -t.amount * stopLossPct;
           });
@@ -944,11 +946,16 @@ async function _runCryptoCycleInner(asset) {
     // market is uncertain and has ample time to reverse — require ≥55% conviction odds.
     const longWindowLowConv = timeRemaining > 800 && entryOdds < 0.55;
 
+    // Short-window MEDIUM guard: <200s left is high-volatility endgame territory.
+    // A single price candle can flip everything — only HIGH confidence is worth the risk.
+    const shortWindowMedium = timeRemaining < 200 && analysis.confidence !== "HIGH";
+
     const qualifies =
       analysis.signal !== "SKIP" &&
       oddsOk &&
       crossable &&
       !longWindowLowConv &&
+      !shortWindowMedium &&
       (analysis.confidence === "HIGH" ||
        (analysis.confidence === "MEDIUM" && analysis.absEdge >= 0.08)) &&
       analysis.absEdge >= minEdge &&
@@ -966,6 +973,7 @@ async function _runCryptoCycleInner(asset) {
       }
       if (!crossable) reasons.push(`gap $${Math.abs(gap).toFixed(pd)} too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})`);
       if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥55% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
+      if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < 0.08)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < 8% required for MEDIUM`);
@@ -1097,8 +1105,10 @@ function startCryptoCountdown() {
     const stopLossPct = (parseFloat($("#stop-loss-pct")?.value) || state.config?.stopLossPct || 25) / 100;
     for (const t of [...cryptoTrades]) {
       if (t.totalSecs < 45) continue;
-      // Scale grace period to entry window: short-duration entries get shorter grace
-      const grace = Math.min(30_000, t.totalSecs * 120);
+      // Scale grace period to entry window: short windows get tighter grace
+      const grace = t.totalSecs < 200
+        ? Math.min(8_000,  Math.max(3_000, t.totalSecs * 40))
+        : Math.min(30_000, Math.max(10_000, t.totalSecs * 120));
       if (Date.now() - t.entryTime < grace) continue;
       if (t.unrealizedPnl <= -t.amount * stopLossPct) { closePosition(t, "STOP LOSS"); refreshBtcCards(); updatePnlStat(); }
     }
