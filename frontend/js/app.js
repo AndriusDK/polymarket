@@ -139,6 +139,7 @@ function initSetup() {
       maxDaily:      parseFloat($("#max-daily").value) || 100,
       dryRun:        $("#dry-run-toggle").checked,
       takeProfitPct:    parseFloat($("#take-profit-pct")?.value) || 50,
+      takeProfitAmt:    parseFloat($("#take-profit-amt")?.value)  || 0,
       minMarketVolume:  parseFloat($("#min-market-volume")?.value) || 1000,
       minEntryOdds:     parseFloat($("#min-entry-odds")?.value)    || 10,
       maxEntryOdds:     parseFloat($("#max-entry-odds")?.value)    || 87,
@@ -463,6 +464,7 @@ const priceStream = (() => {
         if (changed) {
           const stopLossPct   = (state.config?.stopLossPct   ?? 50) / 100;
           const takeProfitPct = (state.config?.takeProfitPct ?? 50) / 100;
+          const takeProfitAmt = state.config?.takeProfitAmt ?? 0;
           const toStopLoss = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             // Never stop-loss truly last-second entries — position resolves in seconds
@@ -481,9 +483,12 @@ const priceStream = (() => {
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
           const toTakeProfit = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
-            // Hard TP: fires when gain exceeds takeProfitPct of amount invested
-            // e.g. $20 trade, 50% pct → fires when unrealizedPnl >= $10
-            if (t.unrealizedPnl >= t.amount * takeProfitPct) return true;
+            // Hard TP: fires at whichever target is hit first —
+            // fixed $ cap (if set) or % of amount — prevents leaving gains on the table
+            const tpTarget = takeProfitAmt > 0
+              ? Math.min(t.amount * takeProfitPct, takeProfitAmt)
+              : t.amount * takeProfitPct;
+            if (t.unrealizedPnl >= tpTarget) return true;
             // Trailing stop: protect gains once peak gain is meaningful (>15% of amount)
             // Close if current PnL has fallen below 40% of peak PnL — locks in 40% of best gains
             const peakGain = t.peakPrice * t.shares - t.amount;
