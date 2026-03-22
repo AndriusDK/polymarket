@@ -428,6 +428,34 @@
 .btc-v.green { color: var(--green); text-shadow: 0 0 10px rgba(0,255,159,0.5); }
 .btc-v.red   { color: var(--red);   text-shadow: 0 0 10px rgba(255,45,45,0.5); }
 
+/* ── Sparkline chart ── */
+.card-chart {
+  position: relative;
+  z-index: 4;
+  border-top: 1px solid rgba(255,255,255,0.04);
+  background: rgba(0,0,0,0.25);
+  line-height: 0;
+}
+
+.sparkline {
+  width: 100%;
+  height: 46px;
+  display: block;
+}
+
+.spark-entry-line {
+  stroke: rgba(255, 179, 71, 0.35);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.spark-line {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
 /* ── AI Reasoning strip ── */
 .card-reasoning {
   border-top: 1px solid rgba(0, 212, 255, 0.08);

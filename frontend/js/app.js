@@ -314,6 +314,20 @@ function addCryptoCard(trade) {
         </div>
       </div>
     </div>
+    <div class="card-chart">
+      <svg id="chart-${trade.id}" class="sparkline" viewBox="0 0 300 46" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="sg-${trade.id}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--green)" stop-opacity="0.18"/>
+            <stop offset="100%" stop-color="var(--green)" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <line class="spark-entry-line" id="el-${trade.id}" x1="0" y1="23" x2="300" y2="23"/>
+        <path class="spark-area" id="sa-${trade.id}" d=""/>
+        <path class="spark-line" id="sl-${trade.id}" d=""/>
+        <circle class="spark-dot" id="sd-${trade.id}" cx="0" cy="0" r="3"/>
+      </svg>
+    </div>
     ${trade.reasoning ? `
     <div class="card-reasoning expanded">
       <div class="card-reasoning-head">
@@ -335,6 +349,47 @@ function addCryptoCard(trade) {
 
 const addBtcCard = addCryptoCard;
 
+function updateSparkline(t) {
+  const W = 300, H = 46, PAD = 4;
+  const hist = t.priceHistory;
+  if (hist.length < 1) return;
+
+  const min   = Math.min(...hist, t.entryPrice);
+  const max   = Math.max(...hist, t.entryPrice);
+  const range = max - min || 0.001;
+  const toY   = v => PAD + (1 - (v - min) / range) * (H - PAD * 2);
+  const toX   = i => hist.length < 2 ? W : (i / (hist.length - 1)) * W;
+
+  const entryY = toY(t.entryPrice);
+  const isUp   = t.currentPrice >= t.entryPrice;
+  const colour = isUp ? "var(--green)" : "var(--red)";
+
+  // entry dashed line
+  const el = $(`#el-${t.id}`);
+  if (el) { el.setAttribute("y1", entryY); el.setAttribute("y2", entryY); }
+
+  // gradient colour
+  const grad = document.getElementById(`sg-${t.id}`);
+  if (grad) {
+    grad.querySelectorAll("stop").forEach(s => s.setAttribute("stop-color", colour));
+  }
+
+  if (hist.length >= 2) {
+    const pts = hist.map((v, i) => `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(" ");
+    const lastX = toX(hist.length - 1).toFixed(1);
+    const lastY = toY(hist[hist.length - 1]).toFixed(1);
+
+    const sl = $(`#sl-${t.id}`);
+    if (sl) { sl.setAttribute("d", `M ${pts.replace(/ /g, " L ")}`); sl.style.stroke = colour; }
+
+    const sa = $(`#sa-${t.id}`);
+    if (sa) { sa.setAttribute("d", `M 0,${H} L ${pts.replace(/ /g, " L ")} L ${lastX},${H} Z`); sa.setAttribute("fill", `url(#sg-${t.id})`); }
+
+    const sd = $(`#sd-${t.id}`);
+    if (sd) { sd.setAttribute("cx", lastX); sd.setAttribute("cy", lastY); sd.style.fill = colour; sd.style.filter = `drop-shadow(0 0 3px ${colour})`; }
+  }
+}
+
 function refreshBtcCards() {
   for (const t of state.trades) {
     const tpEl   = $(`#tp-${t.id}`);
@@ -351,6 +406,7 @@ function refreshBtcCards() {
       pnlEl.textContent = (isPos ? "+" : "") + "$" + t.unrealizedPnl.toFixed(2);
       pnlEl.className   = `btc-v ${isPos ? "green" : "red"}`;
     }
+    updateSparkline(t);
   }
 }
 
@@ -380,6 +436,8 @@ const priceStream = (() => {
           t.currentPrice  = bid;
           t.unrealizedPnl = t.shares * bid - t.amount;
           if (bid > t.peakPrice) t.peakPrice = bid;
+          t.priceHistory.push(bid);
+          if (t.priceHistory.length > 120) t.priceHistory.shift();
           changed = true;
         }
         if (changed) {
@@ -946,6 +1004,7 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     gap:           analysis.gap,
     edge:          analysis.edge,
     reasoning:     analysis.reasoning ?? "",
+    priceHistory:  [],
     totalSecs:     secsLeft,
     entryTime:     Date.now(),
     marketUrl,
