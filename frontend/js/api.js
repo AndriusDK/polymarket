@@ -252,12 +252,65 @@ async function fetchCryptoCandles(symbol, limit = 6) {
   const resp = await fetch(`${BINANCE_API}/klines?symbol=${symbol}&interval=1m&limit=${limit}`);
   if (!resp.ok) throw new Error(`Binance candles ${resp.status}`);
   return (await resp.json()).map(c => ({
-    time:  new Date(c[0]),
-    open:  parseFloat(c[1]),
-    high:  parseFloat(c[2]),
-    low:   parseFloat(c[3]),
-    close: parseFloat(c[4]),
+    time:   new Date(c[0]),
+    open:   parseFloat(c[1]),
+    high:   parseFloat(c[2]),
+    low:    parseFloat(c[3]),
+    close:  parseFloat(c[4]),
+    volume: parseFloat(c[5]),
   }));
+}
+
+async function fetchCryptoOrderBook(symbol) {
+  const resp = await fetch(`${BINANCE_API}/depth?symbol=${symbol}&limit=50`);
+  if (!resp.ok) throw new Error(`Binance depth ${resp.status}`);
+  const data = await resp.json();
+  return {
+    bids: data.bids.map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q) })),
+    asks: data.asks.map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q) })),
+  };
+}
+
+async function fetchCryptoFundingRate(symbol) {
+  const resp = await fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`);
+  if (!resp.ok) throw new Error(`Binance funding ${resp.status}`);
+  const data = await resp.json();
+  return parseFloat(data.lastFundingRate) || 0;
+}
+
+// Summarise order book walls within 0.5% of priceToBeat
+function analyzeOrderBook(book, priceToBeat) {
+  const range    = priceToBeat * 0.005;
+  const bidsNear = book.bids.filter(b => b.price >= priceToBeat - range && b.price <= priceToBeat);
+  const asksNear = book.asks.filter(a => a.price >= priceToBeat && a.price <= priceToBeat + range);
+  const bidQty   = bidsNear.reduce((s, b) => s + b.qty, 0);
+  const askQty   = asksNear.reduce((s, a) => s + a.qty, 0);
+  const largestBid = bidsNear.reduce((mx, b) => b.qty > mx.qty ? b : mx, { qty: 0, price: 0 });
+  const largestAsk = asksNear.reduce((mx, a) => a.qty > mx.qty ? a : mx, { qty: 0, price: 0 });
+  const ratio    = askQty > 0 ? bidQty / askQty : (bidQty > 0 ? 99 : 1);
+  let signal;
+  if      (ratio > 2)    signal = "strong bid support — bullish";
+  else if (ratio > 1.3)  signal = "moderate bid support — mildly bullish";
+  else if (ratio < 0.5)  signal = "strong ask resistance — bearish";
+  else if (ratio < 0.77) signal = "moderate ask resistance — mildly bearish";
+  else                   signal = "balanced order book";
+  return { bidQty, askQty, largestBid, largestAsk, ratio, signal };
+}
+
+// Compare last completed candle volume vs prior average
+function analyzeVolumeSpike(candles) {
+  const closed = candles.slice(1);  // skip current (possibly incomplete)
+  if (closed.length < 2 || closed[0].volume == null) return null;
+  const recentVol = closed[0].volume;
+  const priorVols = closed.slice(1, 5).map(c => c.volume ?? 0).filter(v => v > 0);
+  const avgVol    = priorVols.length ? priorVols.reduce((s, v) => s + v, 0) / priorVols.length : recentVol;
+  const ratio     = avgVol > 0 ? recentVol / avgVol : 1;
+  let signal;
+  if      (ratio > 2.5)  signal = "strong spike — high conviction momentum";
+  else if (ratio > 1.5)  signal = "elevated — moderate momentum confirmation";
+  else if (ratio < 0.5)  signal = "low volume — weak conviction, reduce confidence";
+  else                   signal = "normal volume";
+  return { recentVol, avgVol, ratio, signal };
 }
 
 async function fetchCryptoOpenAtTime(symbol, startTimeMs) {
@@ -369,8 +422,17 @@ const CRYPTO_PROMPT = [
   "Candle trend    : {bullCount} bullish, {bearCount} bearish of last 5 → {trendLabel}",
   "Expected drift  : {expectedDrift} pts over remaining time at current momentum",
   "",
-  "1-min candles newest→oldest (Open / High / Low / Close):",
+  "1-min candles newest→oldest (Open / High / Low / Close / Volume):",
   "{candles}",
+  "",
+  "── ORDER BOOK DEPTH (near target ±0.5%) ──────────────────────────",
+  "{orderBookBlock}",
+  "",
+  "── VOLUME ANALYSIS ────────────────────────────────────────────────",
+  "{volumeBlock}",
+  "",
+  "── FUTURES FUNDING RATE ───────────────────────────────────────────",
+  "{fundingBlock}",
   "",
   "── POLYMARKET ODDS ────────────────────────────────────────────────",
   "UP price  : {upPrice} ({upPct}% implied)",
@@ -400,6 +462,10 @@ const CRYPTO_PROMPT = [
   "5. Aligned: gap direction = momentum direction AND timeRemaining < 300s → MEDIUM/HIGH",
   "6. Market lag: market odds haven't caught up to clear gap+momentum signal → exploit mispricing",
   "7. Too uncertain: |effective gap| < 0.03% of price AND momentum is tiny → SKIP",
+  "",
+  "8. ORDER BOOK: Bid/ask ratio > 2 near target = strong bid support → reinforces UP. Ratio < 0.5 = strong ask wall → reinforces DOWN. Use as supporting evidence alongside gap+momentum.",
+  "9. VOLUME SPIKE: Last candle vol > 2× avg = strong conviction for current trend. Vol < 0.5× avg = weak signal, reduce confidence one level. Normal volume = no adjustment.",
+  "10. FUNDING RATE: Rate > +0.05%/8h = overcrowded longs → bearish pressure on price (supports DOWN). Rate < -0.02%/8h = overcrowded shorts → bullish squeeze pressure (supports UP). Near zero = neutral.",
   "",
   "Bet only when estimated true probability exceeds 60%. When in doubt, SKIP.",
   "",
@@ -443,14 +509,52 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
   // Price decimals: integers for large prices, 2dp for mid, 3dp for small
   const pd = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
 
+  const fmtQty = (q) => q >= 1e6 ? (q/1e6).toFixed(2)+"M" : q >= 1000 ? (q/1000).toFixed(1)+"K" : q.toFixed(2);
+
   const candleStr = candles.slice(0, 5).map(c => {
-    const hh = c.time.getUTCHours().toString().padStart(2, "0");
-    const mm = c.time.getUTCMinutes().toString().padStart(2, "0");
+    const hh  = c.time.getUTCHours().toString().padStart(2, "0");
+    const mm  = c.time.getUTCMinutes().toString().padStart(2, "0");
     const dir = c.close > c.open ? "▲" : c.close < c.open ? "▼" : "→";
-    return `  ${hh}:${mm}  O=${c.open.toFixed(pd)} H=${c.high.toFixed(pd)} L=${c.low.toFixed(pd)} C=${c.close.toFixed(pd)} ${dir}`;
+    const vol = c.volume != null ? `  Vol=${fmtQty(c.volume)}` : "";
+    return `  ${hh}:${mm}  O=${c.open.toFixed(pd)} H=${c.high.toFixed(pd)} L=${c.low.toFixed(pd)} C=${c.close.toFixed(pd)} ${dir}${vol}`;
   }).join("\n");
 
-  const fmtVol = v => v >= 1e6 ? (v/1e6).toFixed(1)+"M" : v >= 1e3 ? (v/1e3).toFixed(0)+"K" : String(Math.round(v));
+  // Order book block
+  let orderBookBlock = "N/A (unavailable)";
+  if (cryptoData.orderBook) {
+    const ob = analyzeOrderBook(cryptoData.orderBook, priceToBeat);
+    const lbStr = ob.largestBid.qty > 0
+      ? `${fmtQty(ob.largestBid.qty)} @ ${ob.largestBid.price.toFixed(pd)}`
+      : "none";
+    const laStr = ob.largestAsk.qty > 0
+      ? `${fmtQty(ob.largestAsk.qty)} @ ${ob.largestAsk.price.toFixed(pd)}`
+      : "none";
+    orderBookBlock = [
+      `Bids below target: ${fmtQty(ob.bidQty)} total | Asks above target: ${fmtQty(ob.askQty)} total | Ratio: ${ob.ratio.toFixed(2)}x`,
+      `Largest bid wall: ${lbStr} | Largest ask wall: ${laStr}`,
+      `Signal: ${ob.signal}`,
+    ].join("\n");
+  }
+
+  // Volume spike block
+  let volumeBlock = "N/A";
+  const volSpike = analyzeVolumeSpike(candles);
+  if (volSpike) {
+    volumeBlock = `Last 1-min vol: ${fmtQty(volSpike.recentVol)} | 4-min avg: ${fmtQty(volSpike.avgVol)} | Spike ratio: ${volSpike.ratio.toFixed(2)}x → ${volSpike.signal}`;
+  }
+
+  // Funding rate block
+  let fundingBlock = "N/A (unavailable)";
+  if (cryptoData.fundingRate != null) {
+    const fr    = cryptoData.fundingRate;
+    const frPct = (fr * 100).toFixed(4);
+    let frSignal;
+    if      (fr >  0.0005)  frSignal = "high positive — overcrowded longs, bearish pressure on spot";
+    else if (fr >  0.0001)  frSignal = "mildly positive — longs paying, slight bearish lean";
+    else if (fr < -0.0002)  frSignal = "negative — shorts paying, bullish squeeze pressure";
+    else                    frSignal = "near neutral — no strong positioning skew";
+    fundingBlock = `${frPct}%/8h → ${frSignal}`;
+  }
 
   const prompt = CRYPTO_PROMPT
     .replace(/{label}/g,            cfg.label)
@@ -471,11 +575,14 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     .replace("{trendLabel}",        trendLabel)
     .replace("{expectedDrift}",     (expectedDrift >= 0 ? "+" : "") + expectedDrift.toFixed(pd))
     .replace("{candles}",           candleStr)
+    .replace("{orderBookBlock}",    orderBookBlock)
+    .replace("{volumeBlock}",       volumeBlock)
+    .replace("{fundingBlock}",      fundingBlock)
     .replace("{upPrice}",           market.upPrice.toFixed(3))
     .replace("{upPct}",             (market.upPrice * 100).toFixed(1))
     .replace("{downPrice}",         market.downPrice.toFixed(3))
     .replace("{downPct}",           (market.downPrice * 100).toFixed(1))
-    .replace("{volume}",            fmtVol(market.volume))
+    .replace("{volume}",            fmtQty(market.volume))
     .replace("{momentumThreshold}", momentumThreshold);
 
   const metrics = { gap, volatility, timeRemaining, momentum, spot, priceToBeat };
