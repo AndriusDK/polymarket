@@ -12,6 +12,7 @@ const state = {
   trades: [],          // open positions
   sessionPnl: 0,
   realizedPnl: 0,
+  bootTime: null,      // set when first asset starts; used for startup cooldown
   btc: { timer: null, analyzed: new Map(), running: false },  // conditionId → endDateMs
   eth: { timer: null, analyzed: new Map(), running: false },
   sol: { timer: null, analyzed: new Map(), running: false },
@@ -147,6 +148,7 @@ function initSetup() {
       solMode:       $("#sol-mode-toggle")?.checked ?? false,
       solMaxBet:     parseFloat($("#sol-max-bet")?.value) || 5,
       solMinEdge:    parseFloat($("#sol-min-edge")?.value) || 0.06,
+      startupCooldown: parseInt($("#startup-cooldown")?.value) || 90,
     };
 
     initDashboard();
@@ -647,6 +649,14 @@ function startCryptoMode(asset) {
   if (btn) { btn.textContent = `■ ${cfg.ticker} STOP`; btn.classList.add("active"); }
   setStat(`${asset}-status`, "ACTIVE", ASSET_COLORS[asset]);
   setRunning(true);
+
+  // Record boot time once (first asset to start sets the clock for all)
+  if (!state.bootTime) {
+    const coolSecs = state.config?.startupCooldown ?? 90;
+    state.bootTime = Date.now();
+    logEntry("amber", `⏱ Startup cooldown: observing for ${coolSecs}s before trading`);
+  }
+
   logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — WS instant detection + 30s safety poll`);
 
   startMarketWS();
@@ -828,6 +838,17 @@ const runBtcCycle = () => runCryptoCycle("btc");
 function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   const c      = state.config;
   const cfg    = CRYPTO_CONFIG[asset];
+
+  // Startup cooldown: skip trading until the observation window has passed
+  if (state.bootTime) {
+    const coolMs  = (c.startupCooldown ?? 90) * 1000;
+    const elapsed = Date.now() - state.bootTime;
+    if (elapsed < coolMs) {
+      const secsLeft = Math.ceil((coolMs - elapsed) / 1000);
+      logEntry("amber", `  ↳ <span class="amber">cooldown</span> — observing ${secsLeft}s before first trade`);
+      return;
+    }
+  }
   const market = analysis.market;
   const isUp   = analysis.signal === "BUY_UP";
 
