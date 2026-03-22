@@ -139,7 +139,7 @@ function initSetup() {
       maxDaily:      parseFloat($("#max-daily").value) || 100,
       dryRun:        $("#dry-run-toggle").checked,
       takeProfitPct:    parseFloat($("#take-profit-pct")?.value) || 50,
-      takeProfitAmt:    parseFloat($("#take-profit-amt")?.value)  || 0,
+      stopLossPct:      parseFloat($("#stop-loss-pct")?.value)   || 25,
       minMarketVolume:  parseFloat($("#min-market-volume")?.value) || 1000,
       minEntryOdds:     parseFloat($("#min-entry-odds")?.value)    || 10,
       maxEntryOdds:     parseFloat($("#max-entry-odds")?.value)    || 87,
@@ -463,9 +463,8 @@ const priceStream = (() => {
         }
         if (changed) {
           // Read live from DOM so changes take effect instantly without restart
-          const stopLossPct   = (parseFloat($("#stop-loss-pct")?.value)   || state.config?.stopLossPct   || 50) / 100;
+          const stopLossPct   = (parseFloat($("#stop-loss-pct")?.value)   || state.config?.stopLossPct   || 25) / 100;
           const takeProfitPct = (parseFloat($("#take-profit-pct")?.value) || state.config?.takeProfitPct || 50) / 100;
-          const takeProfitAmt =  parseFloat($("#take-profit-amt")?.value) || 0;
           const toStopLoss = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             // Never stop-loss truly last-second entries — position resolves in seconds
@@ -474,22 +473,12 @@ const priceStream = (() => {
             // sit blind for half their remaining time (min 10s, max 30s)
             const grace = Math.min(30_000, Math.max(10_000, t.totalSecs * 120));
             if (Date.now() - t.entryTime < grace) return false;
-            // For high-priced tokens (>0.70 entry), stop-loss in dollar terms only:
-            // don't trigger on normal spread noise — require a real directional move
-            const stopThreshold = t.entryPrice > 0.70
-              ? -t.amount * 0.35          // 35% loss cap for high-confidence entries
-              : -t.amount * stopLossPct;  // 50% for mid/low priced tokens
-            return t.unrealizedPnl <= stopThreshold;
+            return t.unrealizedPnl <= -t.amount * stopLossPct;
           });
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
           const toTakeProfit = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
-            // Hard TP: fires at whichever target is hit first —
-            // fixed $ cap (if set) or % of amount — prevents leaving gains on the table
-            const tpTarget = takeProfitAmt > 0
-              ? Math.min(t.amount * takeProfitPct, takeProfitAmt)
-              : t.amount * takeProfitPct;
-            if (t.unrealizedPnl >= tpTarget) return true;
+            if (t.unrealizedPnl >= t.amount * takeProfitPct) return true;
             // Trailing stop: protect gains once peak gain is meaningful (>15% of amount)
             // Close if current PnL has fallen below 40% of peak PnL — locks in 40% of best gains
             const peakGain = t.peakPrice * t.shares - t.amount;
@@ -1095,16 +1084,13 @@ function startCryptoCountdown() {
     }
     // Periodic stop-loss safety net: catches positions where the price stream
     // stopped updating (token frozen at near-zero), so onMessage never fires.
-    const stopLossPct = (state.config?.stopLossPct ?? 50) / 100;
+    const stopLossPct = (parseFloat($("#stop-loss-pct")?.value) || state.config?.stopLossPct || 25) / 100;
     for (const t of [...cryptoTrades]) {
       if (t.totalSecs < 45) continue;
       // Scale grace period to entry window: short-duration entries get shorter grace
       const grace = Math.min(30_000, t.totalSecs * 120);
       if (Date.now() - t.entryTime < grace) continue;
-      const stopThreshold = t.entryPrice > 0.70
-        ? -t.amount * 0.35
-        : -t.amount * stopLossPct;
-      if (t.unrealizedPnl <= stopThreshold) { closePosition(t, "STOP LOSS"); refreshBtcCards(); updatePnlStat(); }
+      if (t.unrealizedPnl <= -t.amount * stopLossPct) { closePosition(t, "STOP LOSS"); refreshBtcCards(); updatePnlStat(); }
     }
     for (const t of cryptoTrades) {
       const cdEl  = $(`#cd-${t.id}`);
