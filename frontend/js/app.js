@@ -479,10 +479,10 @@ const priceStream = (() => {
           const toTakeProfit = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             if (t.unrealizedPnl >= t.amount * takeProfitPct) return true;
-            // Trailing stop: protect gains once peak gain is meaningful (>15% of amount)
-            // Close if current PnL has fallen below 40% of peak PnL — locks in 40% of best gains
+            // Trailing stop: arms at 8% gain (was 15%), locks in 55% of peak (was 40%)
+            // Arms sooner + retains more — less exposure on the way back down
             const peakGain = t.peakPrice * t.shares - t.amount;
-            if (peakGain >= t.amount * 0.15 && t.unrealizedPnl < peakGain * 0.40) return true;
+            if (peakGain >= t.amount * 0.08 && t.unrealizedPnl < peakGain * 0.55) return true;
             return false;
           });
           for (const t of toTakeProfit) closePosition(t, "TAKE PROFIT");
