@@ -12,6 +12,9 @@ const state = {
   trades: [],          // open positions
   sessionPnl: 0,
   realizedPnl: 0,
+  wins: 0,
+  losses: 0,
+  sessionStart: Date.now(),
   bootTime: null,      // set when first asset starts; used for startup cooldown
   btc: { timer: null, analyzed: new Map(), running: false },  // conditionId → endDateMs
   eth: { timer: null, analyzed: new Map(), running: false },
@@ -541,6 +544,7 @@ function closePosition(trade, reason) {
 
   const realized = trade.unrealizedPnl;
   state.realizedPnl = (state.realizedPnl || 0) + realized;
+  if (realized > 0) state.wins++; else state.losses++;
 
   const card = $(`#card-${trade.id}`);
   if (card) {
@@ -609,6 +613,24 @@ function updatePnlStat() {
     pnlEl.className   = `stat-val ${pnl > 0 ? "green" : pnl < 0 ? "red" : "dim"}`;
   }
   setStat("positions", String(state.trades.length));
+
+  // Win rate
+  const totalClosed = state.wins + state.losses;
+  const winRate = totalClosed > 0 ? Math.round((state.wins / totalClosed) * 100) : null;
+  const winRateEl = $("#stat-winrate");
+  if (winRateEl) {
+    winRateEl.textContent = winRate !== null ? `${state.wins}W/${state.losses}L (${winRate}%)` : "—";
+    winRateEl.className   = `stat-val ${winRate === null ? "dim" : winRate >= 50 ? "green" : "red"}`;
+  }
+
+  // Profit per hour (realized only, since open positions aren't locked in)
+  const hoursElapsed = (Date.now() - state.sessionStart) / 3_600_000;
+  const pph = hoursElapsed > 0 ? (state.realizedPnl || 0) / hoursElapsed : 0;
+  const pphEl = $("#stat-pph");
+  if (pphEl) {
+    pphEl.textContent = (pph >= 0 ? "+" : "") + "$" + pph.toFixed(2) + "/hr";
+    pphEl.className   = `stat-val ${pph > 0 ? "green" : pph < 0 ? "red" : "dim"}`;
+  }
 }
 
 // ── Crypto mode (BTC / ETH / SOL) ────────────────────────────────
