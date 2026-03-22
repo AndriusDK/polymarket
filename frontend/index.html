@@ -98,6 +98,12 @@
           <input type="number" id="max-entry-odds" class="neon-input" value="87" min="50" max="99" step="1" title="Skip trade if the chosen side is already priced above this % — avoids terrible risk/reward (e.g. buying at 97% has max gain of 3¢ but full downside risk)" />
         </div>
       </div>
+      <div class="row-2">
+        <div>
+          <label class="field-label">Startup Cooldown (s)</label>
+          <input type="number" id="startup-cooldown" class="neon-input" value="90" min="0" max="300" step="10" title="Observe markets for this many seconds after launch before placing any trades — avoids jumping into already-running markets" />
+        </div>
+      </div>
 
       <div class="switch-row">
         <span class="field-label">Dry Run (simulate trades)</span>
