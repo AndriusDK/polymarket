@@ -974,10 +974,10 @@ async function _runCryptoCycleInner(asset) {
 
     // Long-window low-conviction guard: near-50% odds with lots of time remaining means
     // the market is uncertain — require minimum conviction odds before entering.
-    // BTC is stricter: requires ≥60% odds with >600s remaining (volatility is harder to
+    // BTC is stricter: requires ≥58% odds with >900s remaining (volatility is harder to
     // predict over long windows and BTC gaps rarely flip in 5-min windows).
     const longWindowLowConv = asset === "btc"
-      ? (timeRemaining > 600 && entryOdds < 0.60)
+      ? (timeRemaining > 900 && entryOdds < 0.58)
       : (timeRemaining > 800 && entryOdds < 0.55);
 
     // Short-window MEDIUM guard: <200s left is high-volatility endgame territory.
@@ -991,13 +991,29 @@ async function _runCryptoCycleInner(asset) {
                                  signalAgainstGap &&
                                  Math.abs(analysis.gap) > 800;
 
+    // BTC short-window exception: the pump-skeptic crowd-reversion logic breaks down when
+    // BTC has a large gap, ≤500s remaining, HIGH confidence and strong edge (≥12%).
+    // In these endgame windows the gap physically can't close in time — override pump-skeptic.
+    const btcShortWindowException = asset === "btc" &&
+                                     timeRemaining < 500 &&
+                                     analysis.confidence === "HIGH" &&
+                                     analysis.absEdge >= 0.12 &&
+                                     !signalAgainstGap &&
+                                     entryOdds >= 0.45;
+
     // Pump-skeptic guard: when price has already moved in our signal direction (not a gap-flip)
     // but the market still prices the outcome below 50%, the crowd is pricing in a mean-reversion.
     // BTC +2156 at 47.5% UP and ETH +107 at 46% UP are typical pump-and-dump setups where
     // the AI overestimates edge ("gap is huge → safe") but the spike reverses before resolution.
     const pumpSkeptic = !signalAgainstGap &&
                          analysis.signal !== "SKIP" &&
-                         entryOdds < 0.50;
+                         entryOdds < 0.50 &&
+                         !btcShortWindowException;
+
+    // Near-res low-odds guard: at <120s remaining the prediction market price is volatile
+    // and a stop-loss fires easily on normal fluctuations even when the underlying gap is intact.
+    // Require ≥55% entry odds for near-resolution entries — 50% is too close to random.
+    const nearResLowOdds = timeRemaining < 120 && entryOdds < 0.55;
 
     // Stall guard: a large gap with near-zero momentum is "floating" — no force is sustaining
     // it above/below target, so gravity takes over and it reverts. Uses the same momentum
@@ -1022,6 +1038,7 @@ async function _runCryptoCycleInner(asset) {
       !btcMediumGapBlocked &&
       !pumpSkeptic &&
       !stalled &&
+      !nearResLowOdds &&
       (analysis.confidence === "HIGH" ||
        (analysis.confidence === "MEDIUM" && analysis.absEdge >= minEdge)) &&
       analysis.absEdge >= minEdge &&
@@ -1043,6 +1060,7 @@ async function _runCryptoCycleInner(asset) {
       if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
       if (pumpSkeptic) reasons.push(`pump-skeptic — price already ${analysis.signal === "BUY_UP" ? "above" : "below"} target but market prices it at ${(entryOdds * 100).toFixed(1)}% (<50%) — crowd expects reversion`);
       if (stalled) reasons.push(`stall guard — gap ${(stallGapPct * 100).toFixed(1)}% but momentum ≈0 (${(analysis.momentum ?? 0).toFixed(2)}/m < threshold ${momThresholdStall.toFixed(2)}/m) — no driving force`);
+      if (nearResLowOdds) reasons.push(`near-res low-odds — ${timeRemaining}s left but market only at ${(entryOdds * 100).toFixed(1)}% (need ≥55% for endgame entries)`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < minEdge)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}% required for MEDIUM`);
