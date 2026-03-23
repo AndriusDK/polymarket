@@ -19,6 +19,8 @@ const state = {
   btc: { timer: null, analyzed: new Map(), running: false },  // conditionId → endDateMs
   eth: { timer: null, analyzed: new Map(), running: false },
   sol: { timer: null, analyzed: new Map(), running: false },
+  recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
+  stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -652,6 +654,25 @@ function closePosition(trade, reason) {
     logEntry("info", `  🚫 ${trade.signal} veto active for ${vetoMins}min (BTC correlation)`);
   }
 
+  // Market-stress cool-down: track stop-loss events across all assets.
+  // If ≥3 stops fire within a 20-minute rolling window, pause new entries for 10 minutes.
+  // This catches market-dislocation events where prediction prices crash independently of spot
+  // (e.g. the 6:20–7:00 PM cluster that cost -$88.75 in a single session).
+  if (reason === "STOP LOSS" || reason === "CASCADE STOP LOSS") {
+    const now = Date.now();
+    const windowMs = 20 * 60_000;
+    state.recentStops = (state.recentStops ?? []).filter(t => now - t < windowMs);
+    state.recentStops.push(now);
+    if (state.recentStops.length >= 3 && now > (state.stressHoldUntil ?? 0)) {
+      const holdMins = 10;
+      state.stressHoldUntil = now + holdMins * 60_000;
+      logEntry("amber",
+        `  ⚠️ Market-stress cool-down — ${state.recentStops.length} stops in ${windowMs / 60_000}min. ` +
+        `Pausing new entries for ${holdMins}min.`
+      );
+    }
+  }
+
   setStat("positions", String(state.trades.length));
   updatePnlStat();
 }
@@ -972,6 +993,14 @@ async function _runCryptoCycleInner(asset) {
       continue;
     }
 
+    // Market-stress cool-down: multiple stops in a short window indicate prediction-market
+    // dislocation — prices can crash independently of spot. Pause new entries until cool-down expires.
+    if (Date.now() < (state.stressHoldUntil ?? 0)) {
+      const secsLeft = Math.ceil((state.stressHoldUntil - Date.now()) / 1000);
+      logEntry("info", `  ↳ <span class="amber">no trade</span> — market-stress hold ${secsLeft}s remaining`);
+      continue;
+    }
+
     // Long-window low-conviction guard: near-50% odds with lots of time remaining means
     // the market is uncertain — require minimum conviction odds before entering.
     // BTC is stricter: requires ≥58% odds with >900s remaining (volatility is harder to
@@ -979,6 +1008,15 @@ async function _runCryptoCycleInner(asset) {
     const longWindowLowConv = asset === "btc"
       ? (timeRemaining > 900 && entryOdds < 0.58)
       : (timeRemaining > 800 && entryOdds < 0.55);
+
+    // BTC mid-window minimum odds guard: 50-54.9% BTC entries with >250s remaining are
+    // consistently net-negative (-$19.31 at 250s, -$26.24 at 300s in session data).
+    // The crowd pricing below 55% indicates the market doesn't believe the gap will hold —
+    // and BTC's volatility gives reversion plenty of time to materialise.
+    const btcMidWindowLowOdds = asset === "btc" &&
+                                 timeRemaining > 250 &&
+                                 entryOdds >= 0.50 &&
+                                 entryOdds < 0.55;
 
     // Short-window MEDIUM guard: <200s left is high-volatility endgame territory.
     // A single price candle can flip everything — only HIGH confidence is worth the risk.
@@ -1009,12 +1047,14 @@ async function _runCryptoCycleInner(asset) {
     // BTC short-window exception: the pump-skeptic crowd-reversion logic breaks down when
     // BTC has a large gap, ≤500s remaining, HIGH confidence and strong edge (≥12%).
     // In these endgame windows the gap physically can't close in time — override pump-skeptic.
+    // Require ≥50% entry odds: sub-50% entries on BTC are net-negative (-$26.68/session)
+    // because the crowd reversion signal is stronger than the gap-persistence assumption.
     const btcShortWindowException = asset === "btc" &&
                                      timeRemaining < 500 &&
                                      analysis.confidence === "HIGH" &&
                                      analysis.absEdge >= 0.12 &&
                                      !signalAgainstGap &&
-                                     entryOdds >= 0.45;
+                                     entryOdds >= 0.50;
 
     // Pump-skeptic guard: when price has already moved in our signal direction (not a gap-flip)
     // but the market still prices the outcome below 50%, the crowd is pricing in a mean-reversion.
@@ -1049,6 +1089,7 @@ async function _runCryptoCycleInner(asset) {
       oddsOk &&
       crossable &&
       !longWindowLowConv &&
+      !btcMidWindowLowOdds &&
       !shortWindowMedium &&
       !btcMediumGapBlocked &&
       !gapFlipMidWindowBlocked &&
@@ -1072,6 +1113,7 @@ async function _runCryptoCycleInner(asset) {
       }
       if (!crossable) reasons.push(`gap $${Math.abs(gap).toFixed(pd)} too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})`);
       if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥${asset === "btc" ? "60" : "55"}% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
+      if (btcMidWindowLowOdds) reasons.push(`BTC mid-window low odds — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥55% (crowd reversion signal)`);
       if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM`);
       if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
       if (gapFlipMidWindowBlocked) reasons.push(`gap-flip momentum too weak — need ${momNeededToFlip.toFixed(3)}/m to close gap, got ${Math.abs(analysis.momentum ?? 0).toFixed(3)}/m (need ≥50%)`);
@@ -1126,7 +1168,12 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   // Linear reduction from 1.0× at 65% down to 0.40× at 87%, capped at 0.40 minimum.
   const oddsFraction = entryPrice > 0.65 ? Math.max(0.40, 1 - (entryPrice - 0.65) / 0.367) : 1.0;
   const maxBet = c[`${asset}MaxBet`] ?? c.btcMaxBet ?? 5;
-  const amount = Math.min(maxBet * timeFraction * oddsFraction, c.maxDaily - state.stats.spent);
+  const rawAmount = Math.min(maxBet * timeFraction * oddsFraction, c.maxDaily - state.stats.spent);
+  // Near-resolution size cap: prediction markets become illiquid in the final 120s and a stop
+  // can fire on a single bad tick even with a large underlying gap intact.  Cap exposure at $25
+  // to bound catastrophic stop losses that outweigh the edge (e.g. SOL -$33.53 at 156s).
+  const nearResCap = secsForSizing <= 120 ? 25 : Infinity;
+  const amount = Math.min(rawAmount, nearResCap);
   if (amount < 0.50) return;
 
   const tag      = c.dryRun ? "[SIM]" : "[LIVE]";
