@@ -588,7 +588,7 @@ function closePosition(trade, reason) {
 
   const realized = trade.unrealizedPnl;
   state.realizedPnl = (state.realizedPnl || 0) + realized;
-  if (realized > 0) state.wins++; else state.losses++;
+  if (realized > 0) state.wins++; else if (realized < 0) state.losses++;
 
   const card = $(`#card-${trade.id}`);
   if (card) {
@@ -991,6 +991,21 @@ async function _runCryptoCycleInner(asset) {
                                  signalAgainstGap &&
                                  Math.abs(analysis.gap) > 800;
 
+    // SOL/ETH mid-window gap-flip momentum guard: gap-flip trades (betting against the current
+    // price direction) need momentum strong enough to actually close the gap before expiry.
+    // With >300s remaining the prediction-market price has time to swing against us and hit
+    // the stop-loss even when momentum is real but too weak.  Require |momentum| ≥ 50% of the
+    // constant rate needed to close the gap in the remaining window.  Trades with ≤300s left
+    // are exempt — near-resolution arbs where stop-loss exposure is bounded in time.
+    const momNeededToFlip = timeRemaining > 0
+      ? Math.abs(analysis.gap ?? 0) / (timeRemaining / 60)
+      : Infinity;
+    const gapFlipMidWindowBlocked = signalAgainstGap &&
+                                     asset !== "btc" &&
+                                     analysis.confidence === "MEDIUM" &&
+                                     timeRemaining > 300 &&
+                                     Math.abs(analysis.momentum ?? 0) < momNeededToFlip * 0.5;
+
     // BTC short-window exception: the pump-skeptic crowd-reversion logic breaks down when
     // BTC has a large gap, ≤500s remaining, HIGH confidence and strong edge (≥12%).
     // In these endgame windows the gap physically can't close in time — override pump-skeptic.
@@ -1036,6 +1051,7 @@ async function _runCryptoCycleInner(asset) {
       !longWindowLowConv &&
       !shortWindowMedium &&
       !btcMediumGapBlocked &&
+      !gapFlipMidWindowBlocked &&
       !pumpSkeptic &&
       !stalled &&
       !nearResLowOdds &&
@@ -1058,6 +1074,7 @@ async function _runCryptoCycleInner(asset) {
       if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥${asset === "btc" ? "60" : "55"}% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
       if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM`);
       if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
+      if (gapFlipMidWindowBlocked) reasons.push(`gap-flip momentum too weak — need ${momNeededToFlip.toFixed(3)}/m to close gap, got ${Math.abs(analysis.momentum ?? 0).toFixed(3)}/m (need ≥50%)`);
       if (pumpSkeptic) reasons.push(`pump-skeptic — price already ${analysis.signal === "BUY_UP" ? "above" : "below"} target but market prices it at ${(entryOdds * 100).toFixed(1)}% (<50%) — crowd expects reversion`);
       if (stalled) reasons.push(`stall guard — gap ${(stallGapPct * 100).toFixed(1)}% but momentum ≈0 (${(analysis.momentum ?? 0).toFixed(2)}/m < threshold ${momThresholdStall.toFixed(2)}/m) — no driving force`);
       if (nearResLowOdds) reasons.push(`near-res low-odds — ${timeRemaining}s left but market only at ${(entryOdds * 100).toFixed(1)}% (need ≥55% for endgame entries)`);
