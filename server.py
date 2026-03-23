@@ -12,10 +12,14 @@ Usage:
 
 import sys
 import os
+import json
 import urllib.request
 import urllib.parse
 import urllib.error
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+
+# Allow importing from bot/
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "bot"))
 
 GAMMA_API = "https://gamma-api.polymarket.com"
 PROXY_PREFIX = "/api/gamma"
@@ -26,11 +30,65 @@ class ProxyHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=FRONTEND_DIR, **kwargs)
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
     def do_GET(self):
         if self.path.startswith(PROXY_PREFIX):
             self._proxy_gamma()
         else:
             super().do_GET()
+
+    def do_POST(self):
+        if self.path == "/trade":
+            self._handle_trade()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def _handle_trade(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+
+            token_id      = body["token_id"]
+            side          = body.get("side", "BUY")
+            amount_usdc   = float(body["amount_usdc"])
+            private_key   = body["private_key"]
+            api_key       = body["api_key"]
+            api_secret    = body["api_secret"]
+            api_passphrase = body["api_passphrase"]
+
+            from market_client import PolymarketClient
+            client = PolymarketClient(
+                api_key=api_key,
+                api_secret=api_secret,
+                api_passphrase=api_passphrase,
+                private_key=private_key,
+            )
+
+            result = client.place_market_order(token_id, side, amount_usdc, dry_run=False)
+            resp = json.dumps(result).encode()
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(resp)
+
+        except Exception as e:
+            err = json.dumps({"error": str(e)}).encode()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(err)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(err)
 
     def _proxy_gamma(self):
         # Strip /api/gamma prefix and forward to Gamma API

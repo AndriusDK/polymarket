@@ -1154,6 +1154,31 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   priceStream.subscribe(tokenId);
   startCryptoCountdown();
 
+  if (!c.dryRun) {
+    fetch("/trade", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token_id:       tokenId,
+        side:           "BUY",
+        amount_usdc:    amount,
+        private_key:    c.polyPrivateKey,
+        api_key:        c.polyApiKey,
+        api_secret:     c.polyApiSecret,
+        api_passphrase: c.polyPassphrase,
+      }),
+    })
+      .then(r => r.json())
+      .then(result => {
+        if (result.error) {
+          logEntry("warn", `  [LIVE] Order failed: ${result.error}`);
+        } else {
+          logEntry("info", `  [LIVE] Order confirmed: ${result.orderID ?? result.status ?? JSON.stringify(result)}`);
+        }
+      })
+      .catch(err => logEntry("warn", `  [LIVE] Order error: ${err.message}`));
+  }
+
   state.stats.trades++;
   state.stats.spent += amount;
   setStat("trades", String(state.stats.trades));
