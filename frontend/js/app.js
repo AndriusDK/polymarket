@@ -999,6 +999,20 @@ async function _runCryptoCycleInner(asset) {
                          analysis.signal !== "SKIP" &&
                          entryOdds < 0.50;
 
+    // Stall guard: a large gap with near-zero momentum is "floating" — no force is sustaining
+    // it above/below target, so gravity takes over and it reverts. Uses the same momentum
+    // threshold as the signal generator (spot × 0.00007). Does not apply to gap-flip trades
+    // or near-resolution windows (<120s) where time compression makes momentum less relevant.
+    const momThresholdStall = spot * 0.00007;
+    const stallGapPct = (analysis.priceToBeat ?? 0) > 0
+      ? Math.abs((analysis.gap ?? 0) / analysis.priceToBeat)
+      : 0;
+    const stalled = !signalAgainstGap &&
+                     analysis.signal !== "SKIP" &&
+                     stallGapPct > 0.030 &&
+                     Math.abs(analysis.momentum ?? Infinity) < momThresholdStall &&
+                     timeRemaining > 120;
+
     const qualifies =
       analysis.signal !== "SKIP" &&
       oddsOk &&
@@ -1007,6 +1021,7 @@ async function _runCryptoCycleInner(asset) {
       !shortWindowMedium &&
       !btcMediumGapBlocked &&
       !pumpSkeptic &&
+      !stalled &&
       (analysis.confidence === "HIGH" ||
        (analysis.confidence === "MEDIUM" && analysis.absEdge >= minEdge)) &&
       analysis.absEdge >= minEdge &&
@@ -1027,6 +1042,7 @@ async function _runCryptoCycleInner(asset) {
       if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM`);
       if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
       if (pumpSkeptic) reasons.push(`pump-skeptic — price already ${analysis.signal === "BUY_UP" ? "above" : "below"} target but market prices it at ${(entryOdds * 100).toFixed(1)}% (<50%) — crowd expects reversion`);
+      if (stalled) reasons.push(`stall guard — gap ${(stallGapPct * 100).toFixed(1)}% but momentum ≈0 (${(analysis.momentum ?? 0).toFixed(2)}/m < threshold ${momThresholdStall.toFixed(2)}/m) — no driving force`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < minEdge)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}% required for MEDIUM`);
