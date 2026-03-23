@@ -145,7 +145,7 @@ function initSetup() {
       maxEntryOdds:     parseFloat($("#max-entry-odds")?.value)    || 87,
       btcMode:       $("#btc-mode-toggle")?.checked ?? false,
       btcMaxBet:     parseFloat($("#btc-max-bet")?.value) || 5,
-      btcMinEdge:    parseFloat($("#btc-min-edge")?.value) || 0.06,
+      btcMinEdge:    parseFloat($("#btc-min-edge")?.value) || 0.12,
       ethMode:       $("#eth-mode-toggle")?.checked ?? false,
       ethMaxBet:     parseFloat($("#eth-max-bet")?.value) || 5,
       ethMinEdge:    parseFloat($("#eth-min-edge")?.value) || 0.06,
@@ -942,13 +942,24 @@ async function _runCryptoCycleInner(asset) {
       continue;
     }
 
-    // Long-window low-conviction guard: near-50% odds with >800s remaining means the
-    // market is uncertain and has ample time to reverse — require ≥55% conviction odds.
-    const longWindowLowConv = timeRemaining > 800 && entryOdds < 0.55;
+    // Long-window low-conviction guard: near-50% odds with lots of time remaining means
+    // the market is uncertain — require minimum conviction odds before entering.
+    // BTC is stricter: requires ≥60% odds with >600s remaining (volatility is harder to
+    // predict over long windows and BTC gaps rarely flip in 5-min windows).
+    const longWindowLowConv = asset === "btc"
+      ? (timeRemaining > 600 && entryOdds < 0.60)
+      : (timeRemaining > 800 && entryOdds < 0.55);
 
     // Short-window MEDIUM guard: <200s left is high-volatility endgame territory.
     // A single price candle can flip everything — only HIGH confidence is worth the risk.
     const shortWindowMedium = timeRemaining < 200 && analysis.confidence !== "HIGH";
+
+    // BTC gap-flip filter: MEDIUM confidence bets against a gap >800pts rarely flip in time.
+    // These produce high-frequency small wins but large stop-loss losses — negative EV overall.
+    const btcMediumGapBlocked = asset === "btc" &&
+                                 analysis.confidence === "MEDIUM" &&
+                                 signalAgainstGap &&
+                                 Math.abs(analysis.gap) > 800;
 
     const qualifies =
       analysis.signal !== "SKIP" &&
@@ -956,8 +967,9 @@ async function _runCryptoCycleInner(asset) {
       crossable &&
       !longWindowLowConv &&
       !shortWindowMedium &&
+      !btcMediumGapBlocked &&
       (analysis.confidence === "HIGH" ||
-       (analysis.confidence === "MEDIUM" && analysis.absEdge >= 0.05)) &&
+       (analysis.confidence === "MEDIUM" && analysis.absEdge >= minEdge)) &&
       analysis.absEdge >= minEdge &&
       state.stats.spent < c.maxDaily;
 
@@ -972,11 +984,12 @@ async function _runCryptoCycleInner(asset) {
           reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% < min ${(minOdds * 100).toFixed(0)}%`);
       }
       if (!crossable) reasons.push(`gap $${Math.abs(gap).toFixed(pd)} too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})`);
-      if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥55% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
+      if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥${asset === "btc" ? "60" : "55"}% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
       if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM`);
+      if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
-      else if (analysis.confidence === "MEDIUM" && analysis.absEdge < 0.05)
-        reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < 5% required for MEDIUM`);
+      else if (analysis.confidence === "MEDIUM" && analysis.absEdge < minEdge)
+        reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}% required for MEDIUM`);
       if (analysis.absEdge < minEdge)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < minEdge ${(minEdge * 100).toFixed(1)}%`);
       if (state.stats.spent >= c.maxDaily)
@@ -1010,11 +1023,14 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   const entryPrice = isUp ? market.upPrice   : market.downPrice;
   const tokenId    = isUp ? market.upTokenId : market.downTokenId;
 
-  // Scale bet size by time remaining — more time = more uncertainty = smaller bet
+  // Scale bet size by time remaining — more time = more uncertainty = smaller bet.
+  // Near-resolution arbs (≤90s, HIGH confidence only) get a size premium: the gap is
+  // almost impossible to close and the outcome is near-certain — maximise the edge.
   const secsForSizing = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
-  const timeFraction  = secsForSizing > 800 ? 0.40
-                      : secsForSizing > 400 ? 0.65
-                      : 1.0;
+  const timeFraction  = secsForSizing <= 90  ? 1.35   // near-resolution arb premium
+                      : secsForSizing <= 400 ? 1.0
+                      : secsForSizing <= 800 ? 0.65
+                      : 0.40;
   // Scale down size for high-odds entries — reversal is more costly when you paid a premium.
   // Linear reduction from 1.0× at 65% down to 0.40× at 87%, capped at 0.40 minimum.
   const oddsFraction = entryPrice > 0.65 ? Math.max(0.40, 1 - (entryPrice - 0.65) / 0.367) : 1.0;
