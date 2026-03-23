@@ -470,11 +470,15 @@ const priceStream = (() => {
             if (t.tokenId !== tokenId) return false;
             // Never stop-loss truly last-second entries — position resolves in seconds
             if (t.totalSecs < 45) return false;
-            // Grace period: short windows get a tighter grace so stop loss reacts
-            // faster — a 119s trade with 14s blindspot is too exposed to flash moves.
-            const grace = t.totalSecs < 200
-              ? Math.min(8_000,  Math.max(3_000, t.totalSecs * 40))
-              : Math.min(30_000, Math.max(10_000, t.totalSecs * 120));
+            // Grace period: short windows get a longer minimum grace now — a 147s trade with
+            // only 5.88s grace was getting nuked in 5 seconds before the position could breathe.
+            // Near-resolution arbs (< 90s) always get 25s since they're entered with high
+            // confidence and a single candle tick can temporarily move the price.
+            const grace = t.totalSecs < 90
+              ? 25_000                                                    // near-res: always 25s
+              : t.totalSecs < 200
+              ? Math.min(20_000, Math.max(15_000, t.totalSecs * 100))    // short window: 15-20s
+              : Math.min(30_000, Math.max(10_000, t.totalSecs * 120));   // normal unchanged
             if (Date.now() - t.entryTime < grace) return false;
             return t.unrealizedPnl <= -t.amount * stopLossPct;
           });
@@ -961,6 +965,14 @@ async function _runCryptoCycleInner(asset) {
                                  signalAgainstGap &&
                                  Math.abs(analysis.gap) > 800;
 
+    // Pump-skeptic guard: when price has already moved in our signal direction (not a gap-flip)
+    // but the market still prices the outcome below 50%, the crowd is pricing in a mean-reversion.
+    // BTC +2156 at 47.5% UP and ETH +107 at 46% UP are typical pump-and-dump setups where
+    // the AI overestimates edge ("gap is huge → safe") but the spike reverses before resolution.
+    const pumpSkeptic = !signalAgainstGap &&
+                         analysis.signal !== "SKIP" &&
+                         entryOdds < 0.50;
+
     const qualifies =
       analysis.signal !== "SKIP" &&
       oddsOk &&
@@ -968,6 +980,7 @@ async function _runCryptoCycleInner(asset) {
       !longWindowLowConv &&
       !shortWindowMedium &&
       !btcMediumGapBlocked &&
+      !pumpSkeptic &&
       (analysis.confidence === "HIGH" ||
        (analysis.confidence === "MEDIUM" && analysis.absEdge >= minEdge)) &&
       analysis.absEdge >= minEdge &&
@@ -987,6 +1000,7 @@ async function _runCryptoCycleInner(asset) {
       if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥${asset === "btc" ? "60" : "55"}% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
       if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM`);
       if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
+      if (pumpSkeptic) reasons.push(`pump-skeptic — price already ${analysis.signal === "BUY_UP" ? "above" : "below"} target but market prices it at ${(entryOdds * 100).toFixed(1)}% (<50%) — crowd expects reversion`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < minEdge)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}% required for MEDIUM`);
