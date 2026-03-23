@@ -585,7 +585,7 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     .replace("{volume}",            fmtQty(market.volume))
     .replace("{momentumThreshold}", momentumThreshold);
 
-  const metrics = { gap, volatility, timeRemaining, momentum, spot, priceToBeat };
+  const metrics = { gap, volatility, timeRemaining, momentum, spot, priceToBeat, volSpikeRatio: volSpike?.ratio ?? null };
 
   if (!anthropicKey) return analyzeCryptoHeuristic(market, metrics);
 
@@ -646,8 +646,9 @@ function analyzeCryptoHeuristic(market, { gap, volatility, timeRemaining, moment
 
   return {
     market, signal, confidence, edge, absEdge: Math.abs(edge),
-    reasoning: `Heuristic: gap=${gap.toFixed(2)}, effGap=${effectiveGap.toFixed(2)}, vol=±${volatility.toFixed(2)}, ${timeRemaining}s left`,
+    reasoning:     `Heuristic: gap=${gap.toFixed(2)}, effGap=${effectiveGap.toFixed(2)}, vol=±${volatility.toFixed(2)}, ${timeRemaining}s left`,
     timeRemaining, gap, priceToBeat: null, spot: null,
+    momentum, volatility, volSpikeRatio: null,
   };
 }
 
@@ -692,11 +693,14 @@ function parseCryptoResponse(raw, market, metrics) {
 
   return {
     market, signal, confidence, edge, absEdge: Math.abs(edge),
-    reasoning: parsed.reasoning || "",
+    reasoning:    parsed.reasoning || "",
     timeRemaining,
     gap,
-    priceToBeat: metrics.priceToBeat,
-    spot:        metrics.spot,
+    priceToBeat:   metrics.priceToBeat,
+    spot:          metrics.spot,
+    momentum:      metrics.momentum,
+    volatility:    metrics.volatility,
+    volSpikeRatio: metrics.volSpikeRatio,
   };
 }
 

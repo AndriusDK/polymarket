@@ -277,15 +277,23 @@ function addCryptoCard(trade) {
   const confClass = `conf-${trade.confidence.toLowerCase()}`;
   const secsLeft  = Math.max(0, Math.round((new Date(trade.endDate) - Date.now()) / 1000));
   const pct       = Math.min(100, Math.max(0, (secsLeft / trade.totalSecs) * 100));
-  const gap       = trade.gap ?? 0;
-  const gapSign   = gap >= 0 ? "+" : "";
-  const gapClass  = gap >= 0 ? "green" : "red";
-  const edgePct   = trade.edge != null ? `${trade.edge >= 0 ? "+" : ""}${(trade.edge * 100).toFixed(1)}%` : null;
-  const spot      = trade.spot ?? 0;
-  const priceFmt  = spot >= 1000 ? spot.toFixed(0) : spot.toFixed(2);
-  const targetFmt = (trade.priceToBeat ?? 0) >= 1000 ? (trade.priceToBeat ?? 0).toFixed(0) : (trade.priceToBeat ?? 0).toFixed(2);
-  const gapFmt    = spot >= 1000 ? Math.abs(gap).toFixed(0) : Math.abs(gap).toFixed(2);
+  const gap        = trade.gap ?? 0;
+  const gapSign    = gap >= 0 ? "+" : "";
+  const gapClass   = gap >= 0 ? "green" : "red";
+  const edgePct    = trade.edge != null ? `${trade.edge >= 0 ? "+" : ""}${(trade.edge * 100).toFixed(1)}%` : null;
+  const spot       = trade.spot ?? 0;
+  const priceFmt   = spot >= 1000 ? spot.toFixed(0) : spot.toFixed(2);
+  const targetFmt  = (trade.priceToBeat ?? 0) >= 1000 ? (trade.priceToBeat ?? 0).toFixed(0) : (trade.priceToBeat ?? 0).toFixed(2);
+  const gapFmt     = spot >= 1000 ? Math.abs(gap).toFixed(0) : Math.abs(gap).toFixed(2);
   const assetClass = `asset-${trade.type}`;
+  // Derived display values for analysis fields
+  const gapPct     = trade.priceToBeat ? (gap / trade.priceToBeat * 100) : 0;
+  const gapPctStr  = `${gapSign}${gapPct.toFixed(2)}%`;
+  const momVal     = trade.momentum;
+  const momStr     = momVal != null
+    ? `${momVal >= 0 ? "+" : ""}${spot >= 1000 ? momVal.toFixed(0) : momVal.toFixed(2)}/m`
+    : "—";
+  const momClass   = momVal == null ? "dim" : momVal >= 0 ? "green" : "red";
 
   div.innerHTML = `
     <div class="btc-card-scan"></div>
@@ -309,7 +317,7 @@ function addCryptoCard(trade) {
           <span class="btc-v">${(trade.entryPrice * 100).toFixed(1)}%</span>
         </div>
         <div class="btc-kv">
-          <span class="btc-k">CURRENT</span>
+          <span class="btc-k" id="clabel-${trade.id}">CURRENT</span>
           <span class="btc-v" id="tp-${trade.id}">${(trade.currentPrice * 100).toFixed(1)}%</span>
         </div>
         <div class="btc-kv">
@@ -331,6 +339,18 @@ function addCryptoCard(trade) {
         <div class="btc-kv">
           <span class="btc-k">DURATION</span>
           <span class="btc-v dim" id="dur-${trade.id}">0s</span>
+        </div>
+        <div class="btc-kv">
+          <span class="btc-k">SECS LEFT</span>
+          <span class="btc-v dim">${trade.totalSecs}s</span>
+        </div>
+        <div class="btc-kv">
+          <span class="btc-k">GAP %</span>
+          <span class="btc-v ${gapClass}">${gapPctStr}</span>
+        </div>
+        <div class="btc-kv">
+          <span class="btc-k">MOMENTUM</span>
+          <span class="btc-v ${momClass}">${momStr}</span>
         </div>
       </div>
     </div>
@@ -561,8 +581,10 @@ function closePosition(trade, reason) {
   const stillNeeded = state.trades.some(t => t.tokenId === trade.tokenId);
   if (!stillNeeded) priceStream.unsubscribe(trade.tokenId);
 
-  trade.exitTime = Date.now();
-  trade.duration = trade.exitTime - trade.entryTime;
+  trade.exitTime   = Date.now();
+  trade.duration   = trade.exitTime - trade.entryTime;
+  trade.exitPrice  = trade.currentPrice;
+  trade.secsAtClose = Math.max(0, Math.round((new Date(trade.endDate) - Date.now()) / 1000));
 
   const realized = trade.unrealizedPnl;
   state.realizedPnl = (state.realizedPnl || 0) + realized;
@@ -582,6 +604,10 @@ function closePosition(trade, reason) {
       <span class="btc-closed-dur dim">${fmtDuration(trade.duration)}</span>
     `;
     card.insertBefore(strip, card.firstChild);
+
+    // Flip CURRENT label → EXIT so the frozen value is clearly the exit price
+    const clabel = $(`#clabel-${trade.id}`);
+    if (clabel) clabel.textContent = "EXIT";
 
     // Freeze countdown display
     const cd = $(`#cd-${trade.id}`);
@@ -1091,13 +1117,20 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     endDate:       market.endDate,
     spot,
     priceToBeat,
-    gap:           analysis.gap,
-    edge:          analysis.edge,
-    reasoning:     analysis.reasoning ?? "",
-    priceHistory:  [],
-    totalSecs:     secsLeft,
-    entryTime:     Date.now(),
+    gap:             analysis.gap,
+    edge:            analysis.edge,
+    reasoning:       analysis.reasoning ?? "",
+    momentum:        analysis.momentum ?? null,      // pts/min at entry (for spike detection)
+    volatility:      analysis.volatility ?? null,    // ±pts/candle range at entry
+    volSpikeRatio:   analysis.volSpikeRatio ?? null, // last candle vol / avg (>2 = spike)
+    signalAgainstGap: (analysis.signal === "BUY_UP"   && (analysis.gap ?? 0) < 0) ||
+                      (analysis.signal === "BUY_DOWN" && (analysis.gap ?? 0) > 0), // gap-flip?
+    priceHistory:    [],
+    totalSecs:       secsLeft,
+    entryTime:       Date.now(),
     marketUrl,
+    exitPrice:       null,   // set on close
+    secsAtClose:     null,   // set on close
   };
 
   state.trades.push(trade);
