@@ -926,6 +926,20 @@ async function _runCryptoCycleInner(asset) {
 
   const pd = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
 
+  // BTC macro state: store BTC candle direction + momentum so ETH/SOL cycles can
+  // suppress trades that fight BTC's dominant trend.
+  if (asset === "btc") {
+    const refC   = candles.slice(1, 4);
+    const btcMom = refC.length ? refC.reduce((s, c) => s + (c.close - c.open), 0) / refC.length : 0;
+    const last5  = candles.slice(0, 5);
+    state.btcMacro = {
+      bullCount: last5.filter(c => c.close > c.open).length,
+      bearCount: last5.filter(c => c.close < c.open).length,
+      momentum:  btcMom,
+      updatedAt: Date.now(),
+    };
+  }
+
   for (const market of fresh) {
     state[asset].analyzed.set(market.conditionId, new Date(market.endDate).getTime());
 
@@ -1070,6 +1084,18 @@ async function _runCryptoCycleInner(asset) {
     // Require ≥55% entry odds for near-resolution entries — 50% is too close to random.
     const nearResLowOdds = timeRemaining < 120 && entryOdds < 0.55;
 
+    // BTC macro filter: when BTC shows a strong directional signal (≥3/5 candles aligned
+    // + momentum ≥ 20/min in that direction), altcoin trades that fight that trend have a
+    // high stop-loss failure rate (BTC leads alts).  Block BUY_UP on ETH/SOL when BTC is
+    // strongly bearish, and BUY_DOWN when BTC is strongly bullish.
+    // State expires after 5 minutes so stale BTC data doesn't block valid alt entries.
+    const btcMacro      = state.btcMacro;
+    const btcMacroFresh = btcMacro && (Date.now() - btcMacro.updatedAt) < 300_000;
+    const btcMacroVeto  = asset !== "btc" && btcMacroFresh && (
+      (analysis.signal === "BUY_UP"   && btcMacro.bearCount >= 3 && btcMacro.momentum <= -20) ||
+      (analysis.signal === "BUY_DOWN" && btcMacro.bullCount >= 3 && btcMacro.momentum >= 20)
+    );
+
     // Stall guard: a large gap with near-zero momentum is "floating" — no force is sustaining
     // it above/below target, so gravity takes over and it reverts. Uses the same momentum
     // threshold as the signal generator (spot × 0.00007). Does not apply to gap-flip trades
@@ -1093,6 +1119,7 @@ async function _runCryptoCycleInner(asset) {
       !shortWindowMedium &&
       !btcMediumGapBlocked &&
       !gapFlipMidWindowBlocked &&
+      !btcMacroVeto &&
       !pumpSkeptic &&
       !stalled &&
       !nearResLowOdds &&
@@ -1117,6 +1144,11 @@ async function _runCryptoCycleInner(asset) {
       if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM`);
       if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
       if (gapFlipMidWindowBlocked) reasons.push(`gap-flip momentum too weak — need ${momNeededToFlip.toFixed(3)}/m to close gap, got ${Math.abs(analysis.momentum ?? 0).toFixed(3)}/m (need ≥50%)`);
+      if (btcMacroVeto) {
+        const mDir = btcMacro.bearCount >= 3 ? "bearish" : "bullish";
+        const mCnt = btcMacro.bearCount >= 3 ? btcMacro.bearCount : btcMacro.bullCount;
+        reasons.push(`BTC macro veto — BTC ${mDir} (${mCnt}/5 candles, ${btcMacro.momentum.toFixed(1)}/min) opposes ${analysis.signal}`);
+      }
       if (pumpSkeptic) reasons.push(`pump-skeptic — price already ${analysis.signal === "BUY_UP" ? "above" : "below"} target but market prices it at ${(entryOdds * 100).toFixed(1)}% (<50%) — crowd expects reversion`);
       if (stalled) reasons.push(`stall guard — gap ${(stallGapPct * 100).toFixed(1)}% but momentum ≈0 (${(analysis.momentum ?? 0).toFixed(2)}/m < threshold ${momThresholdStall.toFixed(2)}/m) — no driving force`);
       if (nearResLowOdds) reasons.push(`near-res low-odds — ${timeRemaining}s left but market only at ${(entryOdds * 100).toFixed(1)}% (need ≥55% for endgame entries)`);
