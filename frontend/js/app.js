@@ -1082,7 +1082,7 @@ async function _runCryptoCycleInner(asset) {
     // Near-res low-odds guard: at <120s remaining the prediction market price is volatile
     // and a stop-loss fires easily on normal fluctuations even when the underlying gap is intact.
     // Require ≥55% entry odds for near-resolution entries — 50% is too close to random.
-    const nearResLowOdds = timeRemaining < 120 && entryOdds < 0.55;
+    const nearResLowOdds = timeRemaining < 200 && entryOdds < 0.55;
 
     // BTC macro filter: when BTC shows a strong directional signal (≥3/5 candles aligned
     // + momentum ≥ 20/min in that direction), altcoin trades that fight that trend have a
@@ -1151,7 +1151,7 @@ async function _runCryptoCycleInner(asset) {
       }
       if (pumpSkeptic) reasons.push(`pump-skeptic — price already ${analysis.signal === "BUY_UP" ? "above" : "below"} target but market prices it at ${(entryOdds * 100).toFixed(1)}% (<50%) — crowd expects reversion`);
       if (stalled) reasons.push(`stall guard — gap ${(stallGapPct * 100).toFixed(1)}% but momentum ≈0 (${(analysis.momentum ?? 0).toFixed(2)}/m < threshold ${momThresholdStall.toFixed(2)}/m) — no driving force`);
-      if (nearResLowOdds) reasons.push(`near-res low-odds — ${timeRemaining}s left but market only at ${(entryOdds * 100).toFixed(1)}% (need ≥55% for endgame entries)`);
+      if (nearResLowOdds) reasons.push(`near-res low-odds — ${timeRemaining}s left but market only at ${(entryOdds * 100).toFixed(1)}% (need ≥55% for near-res entries ≤200s)`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < minEdge)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}% required for MEDIUM`);
