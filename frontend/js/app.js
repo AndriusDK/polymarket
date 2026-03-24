@@ -1036,6 +1036,15 @@ async function _runCryptoCycleInner(asset) {
     // A single price candle can flip everything — only HIGH confidence is worth the risk.
     const shortWindowMedium = timeRemaining < 200 && analysis.confidence !== "HIGH";
 
+    // SOL mid-window MEDIUM guard: SOL has higher intra-candle volatility than ETH/BTC.
+    // Session data shows MEDIUM-confidence SOL entries with >400s remaining stop out in 1-3 min
+    // even when the gap+trend thesis is correct — require ≥60% entry odds for these entries
+    // to ensure the crowd signal is strong enough to offset SOL's whipsaw risk.
+    const solMediumLongWindow = asset === "sol" &&
+                                analysis.confidence === "MEDIUM" &&
+                                timeRemaining > 400 &&
+                                entryOdds < 0.60;
+
     // BTC gap-flip filter: MEDIUM confidence bets against a gap >800pts rarely flip in time.
     // These produce high-frequency small wins but large stop-loss losses — negative EV overall.
     const btcMediumGapBlocked = asset === "btc" &&
@@ -1117,6 +1126,7 @@ async function _runCryptoCycleInner(asset) {
       !longWindowLowConv &&
       !btcMidWindowLowOdds &&
       !shortWindowMedium &&
+      !solMediumLongWindow &&
       !btcMediumGapBlocked &&
       !gapFlipMidWindowBlocked &&
       !btcMacroVeto &&
@@ -1142,6 +1152,7 @@ async function _runCryptoCycleInner(asset) {
       if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥${asset === "btc" ? "60" : "55"}% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
       if (btcMidWindowLowOdds) reasons.push(`BTC mid-window low odds — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥55% (crowd reversion signal)`);
       if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM`);
+      if (solMediumLongWindow) reasons.push(`SOL mid-window MEDIUM — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥60% (SOL whipsaw risk too high for MEDIUM conviction)`);
       if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
       if (gapFlipMidWindowBlocked) reasons.push(`gap-flip momentum too weak — need ${momNeededToFlip.toFixed(3)}/m to close gap, got ${Math.abs(analysis.momentum ?? 0).toFixed(3)}/m (need ≥50%)`);
       if (btcMacroVeto) {
