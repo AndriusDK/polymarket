@@ -1094,6 +1094,21 @@ async function _runCryptoCycleInner(asset) {
     // Require ≥55% entry odds for near-resolution entries — 50% is too close to random.
     const nearResLowOdds = timeRemaining < 200 && entryOdds < 0.55;
 
+    // SOL large-gap BUY_UP guard: when SOL has already pumped >2% above target, the position
+    // is priced for perfection — any mean reversion drops SOL back toward the target and the
+    // UP token price crashes in lock-step, triggering stop-loss.  Session data: 5 BUY_UP losses
+    // totalling ~$56 when SOL was >2% above target during pump phases; 0 recoveries.
+    const solLargeGapUp = asset === "sol" &&
+                          analysis.signal === "BUY_UP" &&
+                          !signalAgainstGap &&
+                          stallGapPct > 0.020;
+
+    // Per-asset concurrent position limit: max 1 open position per asset at a time.
+    // Multiple simultaneous SOL or ETH positions in the same direction hit stop-loss
+    // together when the asset reverses, causing outsized correlated losses and triggering
+    // the market-stress cooldown (which then blocks subsequent valid entries too).
+    const assetPositionOpen = state.trades.some(t => t.type === asset);
+
     // BTC macro filter: when BTC shows a strong directional signal (≥3/5 candles aligned
     // + momentum ≥ 20/min in that direction), altcoin trades that fight that trend have a
     // high stop-loss failure rate (BTC leads alts).  Block BUY_UP on ETH/SOL when BTC is
@@ -1134,6 +1149,8 @@ async function _runCryptoCycleInner(asset) {
       !pumpSkeptic &&
       !stalled &&
       !nearResLowOdds &&
+      !solLargeGapUp &&
+      !assetPositionOpen &&
       (analysis.confidence === "HIGH" ||
        (analysis.confidence === "MEDIUM" && analysis.absEdge >= minEdge)) &&
       analysis.absEdge >= minEdge &&
@@ -1164,6 +1181,8 @@ async function _runCryptoCycleInner(asset) {
       if (pumpSkeptic) reasons.push(`pump-skeptic — price already ${analysis.signal === "BUY_UP" ? "above" : "below"} target but market prices it at ${(entryOdds * 100).toFixed(1)}% (<50%) — crowd expects reversion`);
       if (stalled) reasons.push(`stall guard — gap ${(stallGapPct * 100).toFixed(1)}% but momentum ≈0 (${(analysis.momentum ?? 0).toFixed(2)}/m < threshold ${momThresholdStall.toFixed(2)}/m) — no driving force`);
       if (nearResLowOdds) reasons.push(`near-res low-odds — ${timeRemaining}s left but market only at ${(entryOdds * 100).toFixed(1)}% (need ≥55% for near-res entries ≤200s)`);
+      if (solLargeGapUp) reasons.push(`SOL large-gap BUY_UP — SOL already ${(stallGapPct * 100).toFixed(1)}% above target (>2%) — pump reversal risk`);
+      if (assetPositionOpen) reasons.push(`${asset.toUpperCase()} position already open — max 1 per asset (correlated stop risk)`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < minEdge)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}% required for MEDIUM`);
