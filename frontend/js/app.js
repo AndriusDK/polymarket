@@ -503,7 +503,13 @@ const priceStream = (() => {
               : t.totalSecs < 500
               ? 60_000                                                    // mid-window (200-500s): 60s flat — let position breathe before first stop check
               : Math.min(60_000, Math.max(45_000, t.totalSecs * 60));    // long window (500s+): 45-60s
-            if (Date.now() - t.entryTime < grace) return false;
+            if (Date.now() - t.entryTime < grace) {
+              // Catastrophic loss override: bypass grace if loss exceeds 2× the normal stop.
+              // A 50%+ loss in seconds is a genuine collapse, not tick noise — letting it compound
+              // while waiting for grace to expire makes the final loss far worse.
+              const catastrophic = t.unrealizedPnl <= -t.amount * 0.50;
+              if (!catastrophic) return false;
+            }
             return t.unrealizedPnl <= -t.amount * stopLossPct;
           });
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
