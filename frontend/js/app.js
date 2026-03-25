@@ -1105,14 +1105,17 @@ async function _runCryptoCycleInner(asset) {
     // Require ≥55% entry odds for near-resolution entries — 50% is too close to random.
     const nearResLowOdds = timeRemaining < 200 && entryOdds < 0.55;
 
-    // SOL large-gap BUY_UP guard: when SOL has already pumped >2% above target, the position
-    // is priced for perfection — any mean reversion drops SOL back toward the target and the
-    // UP token price crashes in lock-step, triggering stop-loss.  Session data: 5 BUY_UP losses
-    // totalling ~$56 when SOL was >2% above target during pump phases; 0 recoveries.
+    // SOL large-gap BUY_UP guard: when SOL has just pumped >2% above target on a volume spike,
+    // the position is priced for perfection — the spike reverses and the UP token crashes.
+    // Session data: 5 BUY_UP losses totalling ~$56 during pump phases; 0 recoveries.
+    // Requires a volume spike (>1.8×) to distinguish fresh pumps from sustained trends:
+    // a sustained trend at 3%+ above target with normal volume is a legitimate BUY_UP opportunity,
+    // but a sudden spike with elevated volume is fragile and likely to mean-revert.
     const solLargeGapUp = asset === "sol" &&
                           analysis.signal === "BUY_UP" &&
                           !signalAgainstGap &&
-                          stallGapPct > 0.020;
+                          stallGapPct > 0.020 &&
+                          (analysis.volSpikeRatio ?? 0) > 1.8;
 
     // Per-asset concurrent position limit: max 1 open position per asset at a time.
     // Multiple simultaneous SOL or ETH positions in the same direction hit stop-loss
@@ -1192,7 +1195,7 @@ async function _runCryptoCycleInner(asset) {
       if (pumpSkeptic) reasons.push(`pump-skeptic — price already ${analysis.signal === "BUY_UP" ? "above" : "below"} target but market prices it at ${(entryOdds * 100).toFixed(1)}% (<50%) — crowd expects reversion`);
       if (stalled) reasons.push(`stall guard — gap ${(stallGapPct * 100).toFixed(1)}% but momentum ≈0 (${(analysis.momentum ?? 0).toFixed(2)}/m < threshold ${momThresholdStall.toFixed(2)}/m) — no driving force`);
       if (nearResLowOdds) reasons.push(`near-res low-odds — ${timeRemaining}s left but market only at ${(entryOdds * 100).toFixed(1)}% (need ≥55% for near-res entries ≤200s)`);
-      if (solLargeGapUp) reasons.push(`SOL large-gap BUY_UP — SOL already ${(stallGapPct * 100).toFixed(1)}% above target (>2%) — pump reversal risk`);
+      if (solLargeGapUp) reasons.push(`SOL large-gap BUY_UP — SOL ${(stallGapPct * 100).toFixed(1)}% above target with vol spike ${(analysis.volSpikeRatio ?? 0).toFixed(2)}× — fresh pump reversal risk`);
       if (assetPositionOpen) reasons.push(`${asset.toUpperCase()} position already open — max 1 per asset (correlated stop risk)`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < minEdge)
