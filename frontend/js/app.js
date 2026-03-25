@@ -500,7 +500,9 @@ const priceStream = (() => {
               ? 25_000                                                    // near-res: always 25s
               : t.totalSecs < 200
               ? Math.min(20_000, Math.max(15_000, t.totalSecs * 100))    // short window: 15-20s
-              : Math.min(30_000, Math.max(10_000, t.totalSecs * 120));   // normal unchanged
+              : t.totalSecs < 500
+              ? 60_000                                                    // mid-window (200-500s): 60s flat — let position breathe before first stop check
+              : Math.min(60_000, Math.max(45_000, t.totalSecs * 60));    // long window (500s+): 45-60s
             if (Date.now() - t.entryTime < grace) return false;
             return t.unrealizedPnl <= -t.amount * stopLossPct;
           });
