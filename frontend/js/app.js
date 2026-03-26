@@ -527,6 +527,20 @@ const priceStream = (() => {
           refreshBtcCards();
           updatePnlStat();
         }
+        // Shadow tracking: closed positions still monitoring for final direction resolution
+        for (const s of (state.shadowTrades || [])) {
+          if (s.tokenId !== tokenId || s.resolved) continue;
+          if (bid < s.minPriceAfterClose) s.minPriceAfterClose = bid;
+          s.lastKnownPrice = bid;
+          // Resolution: token converges to ~0 (wrong direction) or ~1 (correct direction)
+          if (bid >= 0.97 || bid <= 0.03) {
+            s.resolved = true;
+            s.finalResolutionPrice = bid;
+            s.directionCorrect = bid >= 0.97;
+            updateResolutionBadge(s);
+            cleanupShadowTrade(s);
+          }
+        }
       }
     }
   }
@@ -589,7 +603,33 @@ function closePosition(trade, reason) {
   if (idx === -1) return;
   state.trades.splice(idx, 1);
 
-  const stillNeeded = state.trades.some(t => t.tokenId === trade.tokenId);
+  // Post-close direction tracking: keep subscription alive until market resolves
+  const msToEnd = new Date(trade.endDate) - Date.now();
+  const willShadow = msToEnd > 5_000 && reason !== "RESOLVED";
+  if (willShadow) {
+    state.shadowTrades = state.shadowTrades || [];
+    const shadow = {
+      tradeId: trade.id,
+      tokenId: trade.tokenId,
+      minPriceAfterClose: trade.currentPrice,
+      lastKnownPrice: trade.currentPrice,
+      finalResolutionPrice: null,
+      resolved: false,
+      directionCorrect: null,
+      cleanupTimer: null,
+    };
+    shadow.cleanupTimer = setTimeout(() => {
+      if (!shadow.resolved) {
+        shadow.resolved = true;
+        shadow.finalResolutionPrice = shadow.lastKnownPrice;
+        shadow.directionCorrect = shadow.lastKnownPrice >= 0.5;
+        updateResolutionBadge(shadow);
+      }
+      cleanupShadowTrade(shadow);
+    }, msToEnd + 30_000);
+    state.shadowTrades.push(shadow);
+  }
+  const stillNeeded = state.trades.some(t => t.tokenId === trade.tokenId) || willShadow;
   if (!stillNeeded) priceStream.unsubscribe(trade.tokenId);
 
   trade.exitTime   = Date.now();
@@ -636,6 +676,28 @@ function closePosition(trade, reason) {
     card.classList.add(isWin ? "closed-win" : "closed-loss");
     const container = card.parentNode;
     if (container) container.appendChild(card);
+
+    // Resolution tracking section
+    const resDiv = document.createElement("div");
+    resDiv.className = "resolution-tracking";
+    if (willShadow) {
+      resDiv.innerHTML = `
+        <span id="resolution-badge-${trade.id}" class="resolution-badge pending">⏳ TRACKING DIRECTION</span>
+        <div class="resolution-data">
+          <span class="res-item">MIN AFTER CLOSE: <span id="res-min-${trade.id}" class="btc-v">$${trade.currentPrice.toFixed(3)}</span></span>
+          <span class="res-item">RESOLUTION: <span id="res-final-${trade.id}" class="btc-v dim">—</span></span>
+        </div>
+      `;
+    } else {
+      const correct = trade.currentPrice >= 0.5;
+      resDiv.innerHTML = `
+        <span class="resolution-badge ${correct ? "correct" : "wrong"}">${correct ? "✓ CORRECT DIR" : "✗ WRONG DIR"}</span>
+        <div class="resolution-data">
+          <span class="res-item">FINAL: <span class="btc-v">$${trade.currentPrice.toFixed(3)}</span></span>
+        </div>
+      `;
+    }
+    card.appendChild(resDiv);
   }
 
   // Only show empty state if no active trades AND no closed cards in DOM
@@ -684,6 +746,29 @@ function closePosition(trade, reason) {
 
   setStat("positions", String(state.trades.length));
   updatePnlStat();
+}
+
+function updateResolutionBadge(shadow) {
+  const badge = $(`#resolution-badge-${shadow.tradeId}`);
+  if (!badge) return;
+  const correct = shadow.directionCorrect;
+  badge.className = `resolution-badge ${correct ? "correct" : "wrong"}`;
+  badge.textContent = correct ? "✓ CORRECT DIR" : "✗ WRONG DIR";
+  const minEl = $(`#res-min-${shadow.tradeId}`);
+  if (minEl) minEl.textContent = `$${shadow.minPriceAfterClose.toFixed(3)}`;
+  const finalEl = $(`#res-final-${shadow.tradeId}`);
+  if (finalEl) {
+    finalEl.textContent = `$${shadow.finalResolutionPrice.toFixed(3)}`;
+    finalEl.className = "btc-v";
+  }
+}
+
+function cleanupShadowTrade(shadow) {
+  clearTimeout(shadow.cleanupTimer);
+  state.shadowTrades = (state.shadowTrades || []).filter(s => s !== shadow);
+  const stillNeeded = state.trades.some(t => t.tokenId === shadow.tokenId) ||
+                      (state.shadowTrades || []).some(s => s.tokenId === shadow.tokenId);
+  if (!stillNeeded) priceStream.unsubscribe(shadow.tokenId);
 }
 
 function updatePnlStat() {
