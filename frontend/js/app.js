@@ -1063,6 +1063,14 @@ async function _runCryptoCycleInner(asset) {
     const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
     const gap = spot - priceToBeat;
 
+    // Skip near-zero gaps — Binance and Chainlink (Polymarket's resolution source) diverge
+    // by ~0.07-0.10%, so any gap smaller than 0.15% of spot is indistinguishable from noise.
+    const minGap = spot * 0.0015;
+    if (Math.abs(gap) < minGap) {
+      logEntry("dim", `  → SKIP gap too small (${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} threshold) — Binance/Chainlink delta`);
+      continue;
+    }
+
     // Precompute maxMovement for post-analysis crossing check.
     // Floor: 0.1% of spot/min avoids underestimating movement during calm 1-min candles.
     const recentRange = candles.slice(-3).reduce((mx, c) => Math.max(mx, c.high - c.low), 0);
