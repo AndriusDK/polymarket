@@ -1037,11 +1037,26 @@ async function _runCryptoCycleInner(asset) {
   for (const market of fresh) {
     state[asset].analyzed.set(market.conditionId, new Date(market.endDate).getTime());
 
+    // Derive window duration from title e.g. "March 26, 4:55PM-5:10PM ET" → 15 min → 900s.
+    // Fallback to 300s (5 min) if parsing fails.
+    const windowMs = (() => {
+      const m = market.question.match(/(\d+:\d+)(AM|PM)-(\d+:\d+)(AM|PM)/i);
+      if (!m) return 300_000;
+      const toMin = (hhmm, ampm) => {
+        let [h, mm] = hhmm.split(":").map(Number);
+        if (ampm.toUpperCase() === "PM" && h !== 12) h += 12;
+        if (ampm.toUpperCase() === "AM" && h === 12) h = 0;
+        return h * 60 + mm;
+      };
+      const diff = (toMin(m[3], m[4]) - toMin(m[1], m[2]) + 1440) % 1440;
+      return diff * 60_000;
+    })();
+
     let priceToBeat = null;
     try {
-      // Use endDate - 300s as the window start time. market.startDate is the market series
-      // creation date (can be days old), not the current 5-minute window's opening time.
-      priceToBeat = await fetchCryptoOpenAtTime(cfg.symbol, new Date(market.endDate).getTime() - 300_000);
+      // Use endDate - windowMs to get the actual window opening time.
+      // market.startDate is the series creation date (can be days old), not the window start.
+      priceToBeat = await fetchCryptoOpenAtTime(cfg.symbol, new Date(market.endDate).getTime() - windowMs);
     } catch { /* fall through */ }
     if (!priceToBeat) priceToBeat = candles[candles.length - 1]?.open ?? spot;
 
