@@ -1085,7 +1085,10 @@ async function _runCryptoCycleInner(asset) {
     const minOdds     = (c.minEntryOdds ?? 10) / 100;
     const maxOdds     = (c.maxEntryOdds ?? 87) / 100;
     const entryOdds   = analysis.signal === "BUY_UP" ? market.upPrice : market.downPrice;
-    const oddsOk      = analysis.signal === "SKIP" || (entryOdds >= minOdds && entryOdds <= maxOdds);
+    // HIGH conf + strong edge exception: allow entry up to 82% even if maxOdds is set lower.
+    // Market has already priced the direction but AI still has ≥15% edge — worth entering.
+    const highConfHighOdds = analysis.confidence === "HIGH" && analysis.absEdge >= 0.15 && entryOdds <= 0.82;
+    const oddsOk      = analysis.signal === "SKIP" || (entryOdds >= minOdds && (entryOdds <= maxOdds || highConfHighOdds));
 
     // Gap-crossing guard: only applies when signal bets AGAINST the current gap direction.
     // (BUY_UP when price is below target, or BUY_DOWN when price is above target)
@@ -1188,7 +1191,10 @@ async function _runCryptoCycleInner(asset) {
     // Near-res low-odds guard: at <120s remaining the prediction market price is volatile
     // and a stop-loss fires easily on normal fluctuations even when the underlying gap is intact.
     // Require ≥55% entry odds for near-resolution entries — 50% is too close to random.
-    const nearResLowOdds = timeRemaining < 200 && entryOdds < 0.55;
+    // Exception: HIGH conf + ≥15% edge can enter at 40-54.9% — same rationale as BTC mid-window
+    // exception (UI lag, thin liquidity, market underpricing a near-certain gap outcome).
+    const nearResLowOdds = timeRemaining < 200 && entryOdds < 0.55 &&
+                           !(analysis.confidence === "HIGH" && analysis.absEdge >= 0.15);
 
     // SOL large-gap BUY_UP guard: when SOL has just pumped >2% above target on a volume spike,
     // the position is priced for perfection — the spike reverses and the UP token crashes.
