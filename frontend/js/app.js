@@ -808,11 +808,11 @@ const ASSET_COLORS = { btc: "amber", eth: "eth", sol: "sol" };
 // ── Market WebSocket — instant new_market detection ──────────────
 
 const WS_MARKET_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
-// Broader keywords for WS matching (exact filtering happens inside fetchCryptoMarkets)
+// Word-boundary regexes for WS matching — prevents "eth" matching "wetherholt" etc.
 const WS_KEYWORDS = {
-  btc: ["bitcoin", "btc"],
-  eth: ["ethereum", "eth"],
-  sol: ["solana", "sol"],
+  btc: [/\bbitcoin\b/, /\bbtc\b/],
+  eth: [/\bethereum\b/, /\beth\b/],
+  sol: [/\bsolana\b/, /\bsol\b/],
 };
 
 let _marketWs = null;
@@ -886,7 +886,7 @@ function _handleNewMarketEvent(msg) {
 
   for (const [asset, kws] of Object.entries(WS_KEYWORDS)) {
     if (!state[asset].timer) continue;
-    if (!kws.some(kw => question.includes(kw))) continue;
+    if (!kws.some(kw => kw.test(question))) continue;
     logEntry("cyan", `⚡ WS new_market → <span class="amber">${question.slice(0, 60)}</span> — running ${asset.toUpperCase()} cycle`);
     // Small delay so Gamma API has time to index the new market
     setTimeout(() => runCryptoCycle(asset), 800);
