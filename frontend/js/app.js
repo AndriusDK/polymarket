@@ -1065,7 +1065,7 @@ async function _runCryptoCycleInner(asset) {
 
     // Skip near-zero gaps — Binance and Chainlink (Polymarket's resolution source) diverge
     // by ~0.07-0.10%, so any gap smaller than 0.15% of spot is indistinguishable from noise.
-    const minGap = spot * 0.0015;
+    const minGap = spot * 0.0005;
     if (Math.abs(gap) < minGap) {
       logEntry("dim", `  → SKIP gap too small (${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} threshold) — Binance/Chainlink delta`);
       continue;
