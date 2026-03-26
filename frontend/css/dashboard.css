@@ -588,6 +588,48 @@
 .btc-closed-pnl   { font-size: 12px; font-variant-numeric: tabular-nums; }
 .btc-closed-dur   { font-size: 11px; opacity: 0.55; margin-left: auto; font-variant-numeric: tabular-nums; }
 
+/* ── Resolution tracking (post-close direction badge) ── */
+.resolution-tracking {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px 7px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  flex-wrap: wrap;
+}
+.resolution-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.resolution-badge.pending {
+  color: var(--dim, #888);
+  background: rgba(255,255,255,0.04);
+}
+.resolution-badge.correct {
+  color: var(--green, #00ff9f);
+  background: rgba(0,255,159,0.08);
+  border: 1px solid rgba(0,255,159,0.25);
+}
+.resolution-badge.wrong {
+  color: var(--red, #ff2d2d);
+  background: rgba(255,45,45,0.08);
+  border: 1px solid rgba(255,45,45,0.25);
+}
+.resolution-data {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.res-item {
+  font-size: 10px;
+  color: var(--dim, #888);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Stats panel ── */
 #stats-panel {
   grid-column: 2;
