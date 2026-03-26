@@ -1038,11 +1038,11 @@ async function _runCryptoCycleInner(asset) {
     state[asset].analyzed.set(market.conditionId, new Date(market.endDate).getTime());
 
     let priceToBeat = null;
-    if (market.startDate) {
-      try {
-        priceToBeat = await fetchCryptoOpenAtTime(cfg.symbol, new Date(market.startDate).getTime());
-      } catch { /* fall through */ }
-    }
+    try {
+      // Use endDate - 300s as the window start time. market.startDate is the market series
+      // creation date (can be days old), not the current 5-minute window's opening time.
+      priceToBeat = await fetchCryptoOpenAtTime(cfg.symbol, new Date(market.endDate).getTime() - 300_000);
+    } catch { /* fall through */ }
     if (!priceToBeat) priceToBeat = candles[candles.length - 1]?.open ?? spot;
 
     const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
