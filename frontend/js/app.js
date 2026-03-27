@@ -21,6 +21,7 @@ const state = {
   sol: { timer: null, analyzed: new Map(), running: false },
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
+  chainlinkPrices: { btc: null, eth: null, sol: null }, // live Chainlink prices from RTDS
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -191,6 +192,7 @@ function initDashboard() {
     });
   }
 
+  chainlinkStream.connect();
   startClock();
   logEntry("cyan", "POLYMARKET AI TRADING SYSTEM — ONLINE");
   logEntry("dim", "  ◈ Subdivisions: BTC · ETH · SOL  |  Clockwork Angels protocol active");
@@ -214,6 +216,7 @@ function initDashboard() {
 function stopBot() {
   if (state.abortCtrl) state.abortCtrl.abort();
   for (const asset of ["btc", "eth", "sol"]) stopCryptoMode(asset);
+  chainlinkStream.disconnect();
   setStat("status", "STOPPED", "amber");
   logEntry("warning", "Bot stopped.");
   setRunning(false);
@@ -596,6 +599,69 @@ const priceStream = (() => {
   };
 })();
 
+// ── Chainlink RTDS — live prices matching Polymarket's resolution source ──────
+// wss://ws-live-data.polymarket.com streams Chainlink oracle prices in real-time.
+// We use these as `spot` in gap calculations so both sides of the gap use the same
+// price source as Polymarket's resolution (eliminates Binance/Chainlink delta).
+const CHAINLINK_WS_URL = "wss://ws-live-data.polymarket.com";
+
+const chainlinkStream = (() => {
+  let ws = null;
+  let pingTimer = null;
+  let reconnectTimer = null;
+
+  function onMessage(evt) {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    if (msg.topic === "crypto_prices_chainlink" && msg.payload?.value != null) {
+      const sym = msg.payload.symbol;
+      const val = parseFloat(msg.payload.value);
+      if (!isNaN(val)) {
+        if      (sym === "btc/usd") state.chainlinkPrices.btc = val;
+        else if (sym === "eth/usd") state.chainlinkPrices.eth = val;
+        else if (sym === "sol/usd") state.chainlinkPrices.sol = val;
+      }
+    }
+  }
+
+  function sendSubs() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      action: "subscribe",
+      subscriptions: [
+        { topic: "crypto_prices_chainlink", type: "*", filters: '{"symbol":"btc/usd"}' },
+        { topic: "crypto_prices_chainlink", type: "*", filters: '{"symbol":"eth/usd"}' },
+        { topic: "crypto_prices_chainlink", type: "*", filters: '{"symbol":"sol/usd"}' },
+      ],
+    }));
+  }
+
+  function connect() {
+    if (ws && ws.readyState <= WebSocket.OPEN) return;
+    ws = new WebSocket(CHAINLINK_WS_URL);
+    ws.onopen = () => {
+      sendSubs();
+      pingTimer = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send("PING");
+      }, 5_000);
+    };
+    ws.onmessage = onMessage;
+    ws.onclose = () => {
+      clearInterval(pingTimer); pingTimer = null;
+      reconnectTimer = setTimeout(connect, 3_000);
+    };
+    ws.onerror = () => ws.close();
+  }
+
+  function disconnect() {
+    clearInterval(pingTimer); clearTimeout(reconnectTimer);
+    pingTimer = null; reconnectTimer = null;
+    if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  }
+
+  return { connect, disconnect };
+})();
+
 // ── Position management ──────────────────────────────────────────
 
 function closePosition(trade, reason) {
@@ -928,8 +994,8 @@ function startCryptoMode(asset) {
   if (state[asset].timer) return;
   // Prune only expired markets — keep active ones so restarts don't re-buy them
   const now = Date.now();
-  for (const [cid, endMs] of state[asset].analyzed)
-    if (endMs < now) state[asset].analyzed.delete(cid);
+  for (const [cid, data] of state[asset].analyzed)
+    if ((data?.endDateMs ?? data) < now) state[asset].analyzed.delete(cid);
 
   const cfg = CRYPTO_CONFIG[asset];
   const btn = $(`#btn-${asset}`);
@@ -1018,6 +1084,11 @@ async function _runCryptoCycleInner(asset) {
     return;
   }
 
+  // Prefer Chainlink live price as spot — same source as Polymarket resolution.
+  // Candles stay Binance (trend/momentum analysis only, source doesn't matter there).
+  const clSpot = state.chainlinkPrices[asset];
+  if (clSpot) spot = clSpot;
+
   const pd = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
 
   // BTC macro state: store BTC candle direction + momentum so ETH/SOL cycles can
@@ -1035,7 +1106,13 @@ async function _runCryptoCycleInner(asset) {
   }
 
   for (const market of fresh) {
-    state[asset].analyzed.set(market.conditionId, new Date(market.endDate).getTime());
+    // Snapshot Chainlink price at detection time — this is our price-to-beat.
+    // Detection happens within ~1-5s of window open (via WS new_market event),
+    // so this closely matches Polymarket's actual Chainlink reference price.
+    state[asset].analyzed.set(market.conditionId, {
+      endDateMs:            new Date(market.endDate).getTime(),
+      chainlinkPriceToBeat: state.chainlinkPrices[asset] ?? null,
+    });
 
     // Derive window duration from title e.g. "March 26, 4:55PM-5:10PM ET" → 15 min → 900s.
     // Fallback to 300s (5 min) if parsing fails.
@@ -1052,12 +1129,17 @@ async function _runCryptoCycleInner(asset) {
       return diff * 60_000;
     })();
 
-    let priceToBeat = null;
-    try {
-      // Use endDate - windowMs to get the actual window opening time.
-      // market.startDate is the series creation date (can be days old), not the window start.
-      priceToBeat = await fetchCryptoOpenAtTime(cfg.symbol, new Date(market.endDate).getTime() - windowMs);
-    } catch { /* fall through */ }
+    // Prefer the Chainlink price snapshotted when we first detected this market window.
+    // That snapshot happens within ~1-5s of window open (WS new_market event), so it's
+    // the closest approximation to Polymarket's actual Chainlink reference price.
+    // Fallback: Binance kline at window start (small delta vs Chainlink, but directionally correct).
+    const storedData = state[asset].analyzed.get(market.conditionId);
+    let priceToBeat = storedData?.chainlinkPriceToBeat ?? null;
+    if (!priceToBeat) {
+      try {
+        priceToBeat = await fetchCryptoOpenAtTime(cfg.symbol, new Date(market.endDate).getTime() - windowMs);
+      } catch { /* fall through */ }
+    }
     if (!priceToBeat) priceToBeat = candles[candles.length - 1]?.open ?? spot;
 
     const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
@@ -1358,8 +1440,11 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   // Scale down size for high-odds entries — reversal is more costly when you paid a premium.
   // Linear reduction from 1.0× at 65% down to 0.40× at 87%, capped at 0.40 minimum.
   const oddsFraction = entryPrice > 0.65 ? Math.max(0.40, 1 - (entryPrice - 0.65) / 0.367) : 1.0;
+  // MEDIUM confidence gets half size — near-50% entries with uncertain direction shouldn't
+  // get max exposure (e.g. the -$27.45 ETH loss at 51% MEDIUM with full $50 stake).
+  const confidenceFraction = analysis.confidence === "HIGH" ? 1.0 : 0.5;
   const maxBet = c[`${asset}MaxBet`] ?? c.btcMaxBet ?? 5;
-  const rawAmount = Math.min(maxBet * timeFraction * oddsFraction, c.maxDaily - state.stats.spent);
+  const rawAmount = Math.min(maxBet * timeFraction * oddsFraction * confidenceFraction, c.maxDaily - state.stats.spent);
   // Near-resolution size cap: prediction markets become illiquid in the final 120s and a stop
   // can fire on a single bad tick even with a large underlying gap intact.  Cap exposure at $25
   // to bound catastrophic stop losses that outweigh the edge (e.g. SOL -$33.53 at 156s).
