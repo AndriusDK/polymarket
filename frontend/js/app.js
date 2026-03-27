@@ -1199,10 +1199,13 @@ async function _runCryptoCycleInner(asset) {
     const minOdds     = (c.minEntryOdds ?? 10) / 100;
     const maxOdds     = (c.maxEntryOdds ?? 87) / 100;
     const entryOdds   = analysis.signal === "BUY_UP" ? market.upPrice : market.downPrice;
-    // HIGH conf + strong edge exception: allow entry up to 82% even if maxOdds is set lower.
-    // Market has already priced the direction but AI still has ≥15% edge — worth entering.
-    const highConfHighOdds = analysis.confidence === "HIGH" && analysis.absEdge >= 0.15 && entryOdds <= 0.82;
-    const oddsOk      = analysis.signal === "SKIP" || (entryOdds >= minOdds && (entryOdds <= maxOdds || highConfHighOdds));
+    // HIGH conf + edge exception: allow entry up to 92% when AI has ≥10% edge.
+    // Market has priced the direction but the AI has confirmed a clear gap — worth entering.
+    const highConfHighOdds = analysis.confidence === "HIGH" && analysis.absEdge >= 0.10 && entryOdds <= 0.92;
+    // Near-res exception: <120s + HIGH confidence = outcome is near-certain regardless of odds.
+    // maxEntryOdds cap is designed for uncertain mid-window entries, not endgame lock-ins.
+    const nearResHighConf  = timeRemaining < 120 && analysis.confidence === "HIGH" && entryOdds <= 0.95;
+    const oddsOk      = analysis.signal === "SKIP" || (entryOdds >= minOdds && (entryOdds <= maxOdds || highConfHighOdds || nearResHighConf));
 
     // Gap-crossing guard: only applies when signal bets AGAINST the current gap direction.
     // (BUY_UP when price is below target, or BUY_DOWN when price is above target)
