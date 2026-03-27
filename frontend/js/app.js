@@ -1145,11 +1145,14 @@ async function _runCryptoCycleInner(asset) {
     const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
     const gap = spot - priceToBeat;
 
-    // Skip near-zero gaps — Binance and Chainlink (Polymarket's resolution source) diverge
-    // by ~0.07-0.10%, so any gap smaller than 0.15% of spot is indistinguishable from noise.
-    const minGap = spot * 0.0005;
+    // Skip near-zero gaps — noise floor depends on price source.
+    // When Chainlink supplies both spot and priceToBeat the delta is ~0, so 0.01% is enough.
+    // Fall back to 0.05% when either value came from Binance (0.07-0.10% inter-source noise).
+    const usingChainlink = state.chainlinkPrices[asset] != null &&
+                           storedData?.chainlinkPriceToBeat != null;
+    const minGap = spot * (usingChainlink ? 0.0001 : 0.0005);
     if (Math.abs(gap) < minGap) {
-      logEntry("dim", `  → SKIP gap too small (${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} threshold) — Binance/Chainlink delta`);
+      logEntry("dim", `  → SKIP gap too small (${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} threshold) — ${usingChainlink ? "price noise" : "Binance/Chainlink delta"}`);
       continue;
     }
 
@@ -1237,9 +1240,10 @@ async function _runCryptoCycleInner(asset) {
                                  entryOdds < 0.55 &&
                                  !(analysis.confidence === "HIGH" && analysis.absEdge >= 0.12);
 
-    // Short-window MEDIUM guard: <200s left is high-volatility endgame territory.
+    // Short-window MEDIUM guard: <150s left is high-volatility endgame territory.
     // A single price candle can flip everything — only HIGH confidence is worth the risk.
-    const shortWindowMedium = timeRemaining < 200 && analysis.confidence !== "HIGH";
+    // 150-200s MEDIUM signals with 65%+ market odds have sufficient time buffer.
+    const shortWindowMedium = timeRemaining < 150 && analysis.confidence !== "HIGH";
 
     // SOL mid-window MEDIUM guard: SOL has higher intra-candle volatility than ETH/BTC.
     // Session data shows MEDIUM-confidence SOL entries with >400s remaining stop out in 1-3 min
@@ -1379,7 +1383,7 @@ async function _runCryptoCycleInner(asset) {
       if (!crossable) reasons.push(`gap $${Math.abs(gap).toFixed(pd)} too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})`);
       if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥${asset === "btc" ? "60" : "55"}% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
       if (btcMidWindowLowOdds) reasons.push(`BTC mid-window low odds — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥55% or HIGH conf + ≥12% edge (crowd reversion signal)`);
-      if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM`);
+      if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM (<150s)`);
       if (solMediumLongWindow) reasons.push(`SOL mid-window MEDIUM — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥60% (SOL whipsaw risk too high for MEDIUM conviction)`);
       if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
       if (gapFlipMidWindowBlocked) reasons.push(`gap-flip momentum too weak — need ${momNeededToFlip.toFixed(3)}/m to close gap, got ${Math.abs(analysis.momentum ?? 0).toFixed(3)}/m (need ≥50%)`);
