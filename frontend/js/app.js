@@ -65,6 +65,7 @@ const PERSIST_FIELDS = [
   ["markets-count",       "value"],
   ["take-profit-pct",     "value"],
   ["min-market-volume",   "value"],
+  ["min-gap-pct",         "value"],
   ["min-entry-odds",      "value"],
   ["max-entry-odds",      "value"],
   ["dry-run-toggle",      "checked"],
@@ -144,6 +145,7 @@ function initSetup() {
       takeProfitPct:    parseFloat($("#take-profit-pct")?.value) || 50,
       stopLossPct:      parseFloat($("#stop-loss-pct")?.value)   || 25,
       minMarketVolume:  parseFloat($("#min-market-volume")?.value) || 1000,
+      minGapPct:        parseFloat($("#min-gap-pct")?.value ?? ""),   // 0 = disabled
       minEntryOdds:     parseFloat($("#min-entry-odds")?.value)    || 10,
       maxEntryOdds:     parseFloat($("#max-entry-odds")?.value)    || 87,
       btcMode:       $("#btc-mode-toggle")?.checked ?? false,
@@ -1148,11 +1150,15 @@ async function _runCryptoCycleInner(asset) {
     // Skip near-zero gaps — noise floor depends on price source.
     // When Chainlink supplies both spot and priceToBeat the delta is ~0, so 0.01% is enough.
     // Fall back to 0.05% when either value came from Binance (0.07-0.10% inter-source noise).
+    // If minGapPct is set in config (> 0), that overrides the auto value. Set to 0 to disable.
     const usingChainlink = state.chainlinkPrices[asset] != null &&
                            storedData?.chainlinkPriceToBeat != null;
-    const minGap = spot * (usingChainlink ? 0.0001 : 0.0005);
-    if (Math.abs(gap) < minGap) {
-      logEntry("dim", `  → SKIP gap too small (${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} threshold) — ${usingChainlink ? "price noise" : "Binance/Chainlink delta"}`);
+    const configGap = c.minGapPct > 0 ? c.minGapPct / 100 : null;
+    const autoGap   = usingChainlink ? 0.0001 : 0.0005;
+    const minGapFrac = configGap ?? autoGap;
+    if (minGapFrac > 0 && Math.abs(gap) < spot * minGapFrac) {
+      const minGap = spot * minGapFrac;
+      logEntry("dim", `  → SKIP gap too small (${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} threshold) — ${configGap ? `config ${c.minGapPct}%` : usingChainlink ? "price noise" : "Binance/Chainlink delta"}`);
       continue;
     }
 
