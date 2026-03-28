@@ -1156,10 +1156,12 @@ async function _runCryptoCycleInner(asset) {
     // Skip near-zero gaps — noise floor depends on price source.
     // When Chainlink supplies both spot and priceToBeat the delta is ~0, so 0.01% is enough.
     // Fall back to 0.05% when either value came from Binance (0.07-0.10% inter-source noise).
-    // If minGapPct is set in config (> 0), that overrides the auto value. Set to 0 to disable.
+    // If minGapPct is explicitly set (including 0 = fully disabled), that overrides auto value.
     const usingChainlink = state.chainlinkPrices[asset] != null &&
                            storedData?.chainlinkPriceToBeat != null;
-    const configGap = c.minGapPct > 0 ? c.minGapPct / 100 : null;
+    // Use !isNaN so that 0 means "user explicitly disabled" (not "not configured").
+    // With > 0 check, typing 0 fell through to autoGap — filter never truly turned off.
+    const configGap = !isNaN(c.minGapPct) ? c.minGapPct / 100 : null;
     const autoGap   = usingChainlink ? 0.0001 : 0.0005;
     const minGapFrac = configGap ?? autoGap;
     if (minGapFrac > 0 && Math.abs(gap) < spot * minGapFrac) {
