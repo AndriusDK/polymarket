@@ -515,7 +515,13 @@ const priceStream = (() => {
               const catastrophic = t.unrealizedPnl <= -t.amount * 0.50;
               if (!catastrophic) return false;
             }
-            return t.unrealizedPnl <= -t.amount * stopLossPct;
+            // Near-res and short-window markets have thin order books — a single aggressive
+            // order can move the token ±30% momentarily even with the gap intact.
+            // Widen the effective stop for these entries to avoid exiting a correct trade.
+            const effectiveStop = t.totalSecs < 90  ? Math.max(stopLossPct, 0.40)  // near-res
+                                : t.totalSecs < 200 ? Math.max(stopLossPct, 0.32)  // short window
+                                : stopLossPct;
+            return t.unrealizedPnl <= -t.amount * effectiveStop;
           });
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
           const toTakeProfit = state.trades.filter(t => {
@@ -1583,12 +1589,22 @@ function startCryptoCountdown() {
     const stopLossPct = (parseFloat($("#stop-loss-pct")?.value) || state.config?.stopLossPct || 25) / 100;
     for (const t of [...cryptoTrades]) {
       if (t.totalSecs < 45) continue;
-      // Scale grace period to entry window: short windows get tighter grace
-      const grace = t.totalSecs < 200
-        ? Math.min(8_000,  Math.max(3_000, t.totalSecs * 40))
-        : Math.min(30_000, Math.max(10_000, t.totalSecs * 120));
+      // Grace must match the main WS handler so the safety net doesn't fire prematurely.
+      // The old formula (totalSecs * 40ms for <200s) gave only 3-8s grace, causing stops
+      // to fire in 5-7s on short-window trades that later resolved correctly.
+      const grace = t.totalSecs < 90
+        ? 25_000
+        : t.totalSecs < 200
+        ? Math.min(20_000, Math.max(15_000, t.totalSecs * 100))
+        : t.totalSecs < 500
+        ? 60_000
+        : Math.min(60_000, Math.max(45_000, t.totalSecs * 60));
       if (Date.now() - t.entryTime < grace) continue;
-      if (t.unrealizedPnl <= -t.amount * stopLossPct) { closePosition(t, "STOP LOSS"); refreshBtcCards(); updatePnlStat(); }
+      // Same widened thresholds as the WS handler for thin-book noise protection
+      const effectiveStop = t.totalSecs < 90  ? Math.max(stopLossPct, 0.40)
+                          : t.totalSecs < 200 ? Math.max(stopLossPct, 0.32)
+                          : stopLossPct;
+      if (t.unrealizedPnl <= -t.amount * effectiveStop) { closePosition(t, "STOP LOSS"); refreshBtcCards(); updatePnlStat(); }
     }
     for (const t of cryptoTrades) {
       const cdEl  = $(`#cd-${t.id}`);
