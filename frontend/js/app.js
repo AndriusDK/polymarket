@@ -1450,9 +1450,12 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
                       : secsForSizing <= 400 ? 1.0
                       : secsForSizing <= 800 ? 0.65
                       : 0.40;
-  // Scale down size for high-odds entries — reversal is more costly when you paid a premium.
-  // Linear reduction from 1.0× at 65% down to 0.40× at 87%, capped at 0.40 minimum.
-  const oddsFraction = entryPrice > 0.65 ? Math.max(0.40, 1 - (entryPrice - 0.65) / 0.367) : 1.0;
+  // Scale down size for high-odds entries (reversal costly when you paid premium) AND
+  // low-odds entries (gap-flip — market disagrees, token crashes hard when wrong).
+  // High end: 1.0× at 65% → 0.40× at 87%. Low end: 1.0× at 35% → 0.40× at 10%.
+  const oddsFraction = entryPrice > 0.65 ? Math.max(0.40, 1 - (entryPrice - 0.65) / 0.367)
+                     : entryPrice < 0.35 ? Math.max(0.40, 1 - (0.35 - entryPrice) / 0.250)
+                     : 1.0;
   // MEDIUM confidence gets half size — near-50% entries with uncertain direction shouldn't
   // get max exposure (e.g. the -$27.45 ETH loss at 51% MEDIUM with full $50 stake).
   const confidenceFraction = analysis.confidence === "HIGH" ? 1.0 : 0.5;
