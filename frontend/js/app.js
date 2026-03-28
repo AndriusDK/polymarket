@@ -1255,10 +1255,10 @@ async function _runCryptoCycleInner(asset) {
                                  entryOdds < 0.55 &&
                                  !(analysis.confidence === "HIGH" && analysis.absEdge >= 0.12);
 
-    // Short-window MEDIUM guard: <150s left is high-volatility endgame territory.
+    // Short-window MEDIUM guard: <120s left is high-volatility endgame territory.
     // A single price candle can flip everything — only HIGH confidence is worth the risk.
-    // 150-200s MEDIUM signals with 65%+ market odds have sufficient time buffer.
-    const shortWindowMedium = timeRemaining < 150 && analysis.confidence !== "HIGH";
+    // 120-200s MEDIUM signals with adequate market odds have sufficient time buffer.
+    const shortWindowMedium = timeRemaining < 120 && analysis.confidence !== "HIGH";
 
     // SOL mid-window MEDIUM guard: SOL has higher intra-candle volatility than ETH/BTC.
     // Session data shows MEDIUM-confidence SOL entries with >400s remaining stop out in 1-3 min
@@ -1312,12 +1312,12 @@ async function _runCryptoCycleInner(asset) {
                          entryOdds < 0.50 &&
                          !btcShortWindowException;
 
-    // Near-res low-odds guard: at <120s remaining the prediction market price is volatile
+    // Near-res low-odds guard: at <200s remaining the prediction market price is volatile
     // and a stop-loss fires easily on normal fluctuations even when the underlying gap is intact.
-    // Require ≥55% entry odds for near-resolution entries — 50% is too close to random.
-    // Exception: HIGH conf + ≥15% edge can enter at 40-54.9% — same rationale as BTC mid-window
+    // Require ≥50% entry odds — below 50% the crowd expects the opposite outcome.
+    // Exception: HIGH conf + ≥15% edge can enter at 40-49.9% — same rationale as BTC mid-window
     // exception (UI lag, thin liquidity, market underpricing a near-certain gap outcome).
-    const nearResLowOdds = timeRemaining < 200 && entryOdds < 0.55 &&
+    const nearResLowOdds = timeRemaining < 200 && entryOdds < 0.50 &&
                            !(analysis.confidence === "HIGH" && analysis.absEdge >= 0.15);
 
     // SOL large-gap BUY_UP guard: when SOL has just pumped >2% above target on a volume spike,
@@ -1398,7 +1398,7 @@ async function _runCryptoCycleInner(asset) {
       if (!crossable) reasons.push(`gap $${Math.abs(gap).toFixed(pd)} too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})`);
       if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥${asset === "btc" ? "60" : "55"}% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
       if (btcMidWindowLowOdds) reasons.push(`BTC mid-window low odds — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥55% or HIGH conf + ≥12% edge (crowd reversion signal)`);
-      if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM (<150s)`);
+      if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM (<120s)`);
       if (solMediumLongWindow) reasons.push(`SOL mid-window MEDIUM — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥60% (SOL whipsaw risk too high for MEDIUM conviction)`);
       if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
       if (gapFlipMidWindowBlocked) reasons.push(`gap-flip momentum too weak — need ${momNeededToFlip.toFixed(3)}/m to close gap, got ${Math.abs(analysis.momentum ?? 0).toFixed(3)}/m (need ≥50%)`);
@@ -1409,7 +1409,7 @@ async function _runCryptoCycleInner(asset) {
       }
       if (pumpSkeptic) reasons.push(`pump-skeptic — price already ${analysis.signal === "BUY_UP" ? "above" : "below"} target but market prices it at ${(entryOdds * 100).toFixed(1)}% (<50%) — crowd expects reversion`);
       if (stalled) reasons.push(`stall guard — gap ${(stallGapPct * 100).toFixed(1)}% but momentum ≈0 (${(analysis.momentum ?? 0).toFixed(2)}/m < threshold ${momThresholdStall.toFixed(2)}/m) — no driving force`);
-      if (nearResLowOdds) reasons.push(`near-res low-odds — ${timeRemaining}s left but market only at ${(entryOdds * 100).toFixed(1)}% (need ≥55% for near-res entries ≤200s)`);
+      if (nearResLowOdds) reasons.push(`near-res low-odds — ${timeRemaining}s left but market only at ${(entryOdds * 100).toFixed(1)}% (need ≥50% for near-res entries ≤200s)`);
       if (solLargeGapUp) reasons.push(`SOL large-gap BUY_UP — SOL ${(stallGapPct * 100).toFixed(1)}% above target with vol spike ${(analysis.volSpikeRatio ?? 0).toFixed(2)}× — fresh pump reversal risk`);
       if (assetPositionOpen) reasons.push(`${asset.toUpperCase()} position already open — max 1 per asset (correlated stop risk)`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
