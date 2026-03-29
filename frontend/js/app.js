@@ -1209,12 +1209,13 @@ async function _runCryptoCycleInner(asset) {
       continue;
     }
 
-    // Gap has cleared the noise floor — if this market was pending, promote it to analyzed now
-    if (isGapPending) {
+    // Gap has cleared the noise floor — promote from gapPending to analyzed
+    // Use live map lookup (not stale isGapPending) to catch markets just added this iteration
+    if (state[asset].gapPending.has(market.conditionId)) {
       const snap = state[asset].gapPending.get(market.conditionId);
       state[asset].analyzed.set(market.conditionId, snap);
       state[asset].gapPending.delete(market.conditionId);
-      logEntry("dim", `  → gap confirmed ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} — running analysis`);
+      if (isGapPending) logEntry("dim", `  → gap confirmed ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} — running analysis`);
     }
 
     // Precompute maxMovement for post-analysis crossing check.
