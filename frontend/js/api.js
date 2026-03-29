@@ -681,7 +681,18 @@ function parseCryptoResponse(raw, market, metrics) {
 
   if (signal !== "SKIP") {
     if (effectiveGap * gap <= 0) {
-      signal = "SKIP"; confidence = "LOW";
+      // Effective gap has flipped sign — momentum will drive price across the target.
+      // This is the gap-flip trade.  Allow it when:
+      //   1. The AI is betting WITH the effective-gap direction (not against it), AND
+      //   2. The flip is large enough to be meaningful (> 0.03% of price).
+      // Both failing → SKIP (signal contradicts data, or flip is noise-level).
+      const minFlip  = (spot || 70000) * 0.0003;   // 0.03% of price (~$20 BTC, $0.60 ETH, $0.025 SOL)
+      const aiWithFlip = (effectiveGap < 0 && signal === "BUY_DOWN") ||
+                         (effectiveGap > 0 && signal === "BUY_UP");
+      if (!aiWithFlip || Math.abs(effectiveGap) < minFlip) {
+        signal = "SKIP"; confidence = "LOW";
+      }
+      // else: gap-flip trade confirmed — keep AI signal unchanged
     }
     else if (!gapDominant && momentumConflicts && timeRemaining > 180 && Math.abs(momentum) > momThreshold) {
       signal = "SKIP"; confidence = "LOW";
