@@ -1363,6 +1363,13 @@ async function _runCryptoCycleInner(asset) {
                          entryOdds < 0.50 &&
                          !btcShortWindowException;
 
+    // Fractional gap vs price-to-beat — used by nearResSmallGap, midWindowSmallGap, solLargeGapUp,
+    // and the stall guard below.  Must be declared here (before first use) to avoid a temporal
+    // dead zone ReferenceError that was silently killing cycles after the signal log.
+    const stallGapPct = (analysis.priceToBeat ?? 0) > 0
+      ? Math.abs((analysis.gap ?? 0) / analysis.priceToBeat)
+      : 0;
+
     // Near-res low-odds guard: at <200s remaining the prediction market price is volatile
     // and a stop-loss fires easily on normal fluctuations even when the underlying gap is intact.
     // Require ≥50% entry odds — below 50% the crowd expects the opposite outcome.
@@ -1424,9 +1431,6 @@ async function _runCryptoCycleInner(asset) {
     // threshold as the signal generator (spot × 0.00007). Does not apply to gap-flip trades
     // or near-resolution windows (<120s) where time compression makes momentum less relevant.
     const momThresholdStall = spot * 0.00007;
-    const stallGapPct = (analysis.priceToBeat ?? 0) > 0
-      ? Math.abs((analysis.gap ?? 0) / analysis.priceToBeat)
-      : 0;
     const stalled = !signalAgainstGap &&
                      analysis.signal !== "SKIP" &&
                      stallGapPct > 0.030 &&
