@@ -527,11 +527,11 @@ const priceStream = (() => {
           const toTakeProfit = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             if (t.unrealizedPnl >= t.amount * takeProfitPct) return true;
-            // Trailing stop: arms at 15% gain, locks in 40% of peak
-            // Higher arm threshold prevents quick spikes from arming the trail prematurely
-            // 40% lock-in gives ~7pp breathing room vs 55% which was only 4pp — less harsh exits
+            // Trailing stop: arms at 15% gain, lock-in % scales with absolute peak gain
+            // Small gains: loose trail (40%) — let it run; large gains: tight trail (65%) — protect profit
             const peakGain = t.peakPrice * t.shares - t.amount;
-            if (peakGain >= t.amount * 0.15 && t.unrealizedPnl < peakGain * 0.40) return true;
+            const lockIn = peakGain >= 12 ? 0.65 : peakGain >= 6 ? 0.55 : 0.40;
+            if (peakGain >= t.amount * 0.15 && t.unrealizedPnl < peakGain * lockIn) return true;
             return false;
           });
           for (const t of toTakeProfit) closePosition(t, "TAKE PROFIT");
