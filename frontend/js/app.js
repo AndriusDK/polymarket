@@ -1180,7 +1180,7 @@ async function _runCryptoCycleInner(asset) {
     const minGapFrac = configGap ?? autoGap;
     if (minGapFrac > 0 && Math.abs(gap) < spot * minGapFrac) {
       const minGap = spot * minGapFrac;
-      if (timeRemaining < 90) {
+      if (timeRemaining < 60) {
         // Too close to resolution — give up watching, mark analyzed so we stop re-checking
         const snap = state[asset].gapPending.get(market.conditionId);
         if (snap) { state[asset].analyzed.set(market.conditionId, snap); state[asset].gapPending.delete(market.conditionId); }
@@ -1188,18 +1188,19 @@ async function _runCryptoCycleInner(asset) {
       } else {
         const pendSnap = state[asset].gapPending.get(market.conditionId);
         if (!isGapPending) {
-          // First detection — record timestamp and schedule an early re-check at 20s so we
-          // catch gaps that develop quickly, rather than waiting the full 30s cycle.
-          // A second natural re-check follows ~30s after that via the normal interval.
+          // First detection — record timestamp and schedule an early re-check at 15s, then
+          // a second early re-check at 35s so fast-developing gaps are caught quickly.
           pendSnap.firstSeenAt = Date.now();
           pendSnap.checkCount  = 0;
           if (!state[asset].pendingCheckTimer) {
             state[asset].pendingCheckTimer = setTimeout(() => {
               state[asset].pendingCheckTimer = null;
               runCryptoCycle(asset);
-            }, 20_000);
+              // Schedule a second early check 20s after the first
+              setTimeout(() => runCryptoCycle(asset), 20_000);
+            }, 15_000);
           }
-          logEntry("dim", `  → gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} (first check) — observing, early re-check in ~20s`);
+          logEntry("dim", `  → gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} (first check) — observing, early re-checks at ~15s and ~35s`);
         } else {
           pendSnap.checkCount = (pendSnap.checkCount ?? 0) + 1;
           const elapsed = Math.round((Date.now() - (pendSnap.firstSeenAt ?? Date.now())) / 1000);
@@ -1460,6 +1461,7 @@ async function _runCryptoCycleInner(asset) {
       placeCryptoTrade(asset, analysis, { spot, priceToBeat });
     } else if (analysis.signal !== "SKIP") {
       const reasons = [];
+      try {
       // Re-examined market whose gap grew but was blocked by a different filter — clean up watch.
       if (isGapWatched && !nearResSmallGap) state[asset].gapWatch.delete(market.conditionId);
       if (!oddsOk) {
@@ -1512,7 +1514,12 @@ async function _runCryptoCycleInner(asset) {
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < minEdge ${(minEdge * 100).toFixed(1)}%`);
       if (state.stats.spent >= c.maxDaily)
         reasons.push("daily budget exhausted");
+      if (reasons.length === 0)
+        reasons.push(`all filters ok but qualifies=false [oddsOk=${oddsOk} nearResSmallGap=${nearResSmallGap} midWindowSmallGap=${midWindowSmallGap} absEdge=${(analysis.absEdge??'?')} minEdge=${minEdge}]`);
       logEntry("info", `  ↳ <span class="amber">no trade</span> — ${reasons.join(", ")}`);
+      } catch (err) {
+        logEntry("dim", `  ↳ <span class="amber">no trade</span> — [reason build error: ${err.message}]`);
+      }
     }
   }
 
@@ -1565,7 +1572,10 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   // to bound catastrophic stop losses that outweigh the edge (e.g. SOL -$33.53 at 156s).
   const nearResCap = secsForSizing <= 120 ? 25 : Infinity;
   const amount = Math.min(rawAmount, nearResCap);
-  if (amount < 0.50) return;
+  if (amount < 0.50) {
+    logEntry("dim", `  ↳ <span class="dim">skipped</span> — computed size $${rawAmount.toFixed(2)} < $0.50 min (maxBet=${maxBet} time=${timeFraction.toFixed(2)} odds=${oddsFraction.toFixed(2)} conf=${confidenceFraction})`);
+    return;
+  }
 
   const tag      = c.dryRun ? "[SIM]" : "[LIVE]";
   const sigClass = isUp ? "green" : "red";
