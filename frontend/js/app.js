@@ -16,9 +16,9 @@ const state = {
   losses: 0,
   sessionStart: Date.now(),
   bootTime: null,      // set when first asset starts; used for startup cooldown
-  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, running: false },  // conditionId → endDateMs
-  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, running: false },
-  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, running: false },
+  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false },  // conditionId → endDateMs
+  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false },
+  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false },
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
   chainlinkPrices: { btc: null, eth: null, sol: null }, // live Chainlink prices from RTDS
@@ -1030,6 +1030,7 @@ function stopCryptoMode(asset) {
   if (!state[asset]?.timer) return;
   clearInterval(state[asset].timer);
   state[asset].timer = null;
+  if (state[asset].accelTimer) { clearTimeout(state[asset].accelTimer); state[asset].accelTimer = null; }
 
   const cfg = CRYPTO_CONFIG[asset];
   const btn = $(`#btn-${asset}`);
@@ -1525,6 +1526,28 @@ async function _runCryptoCycleInner(asset) {
         logEntry("dim", `  ↳ <span class="amber">no trade</span> — [reason build error: ${err.message}]`);
       }
     }
+  }
+
+  // Oracle-latency acceleration: Chainlink heartbeats every ~20-27s on-chain.
+  // When a market is <300s from resolution and still watching for a gap to develop
+  // (in gapPending) or waiting for a small gap to grow (in gapWatch), re-check in
+  // 10s rather than waiting the full 30s — this maximises the chance of catching
+  // the oracle update window before Polymarket odds reprice.
+  const nowMs2 = Date.now();
+  const hasUrgentGap = markets.some(m => {
+    const tr = (new Date(m.endDate) - nowMs2) / 1000;
+    return tr > 0 && tr < 300 &&
+      (state[asset].gapPending.has(m.conditionId) || state[asset].gapWatch.has(m.conditionId));
+  });
+  if (hasUrgentGap && !state[asset].accelTimer) {
+    state[asset].accelTimer = setTimeout(() => {
+      state[asset].accelTimer = null;
+      runCryptoCycle(asset);
+    }, 10_000);
+    logEntry("dim", `  ⚡ gap market <300s — accelerating to 10s re-check`);
+  } else if (!hasUrgentGap && state[asset].accelTimer) {
+    clearTimeout(state[asset].accelTimer);
+    state[asset].accelTimer = null;
   }
 
   setStat(`${asset}-status`, "WATCHING", "dim");
