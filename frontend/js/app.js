@@ -16,9 +16,9 @@ const state = {
   losses: 0,
   sessionStart: Date.now(),
   bootTime: null,      // set when first asset starts; used for startup cooldown
-  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), running: false },  // conditionId → endDateMs
-  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), running: false },
-  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), running: false },
+  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, running: false },  // conditionId → endDateMs
+  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, running: false },
+  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, running: false },
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
   chainlinkPrices: { btc: null, eth: null, sol: null }, // live Chainlink prices from RTDS
@@ -1186,10 +1186,25 @@ async function _runCryptoCycleInner(asset) {
         if (snap) { state[asset].analyzed.set(market.conditionId, snap); state[asset].gapPending.delete(market.conditionId); }
         logEntry("dim", `  → gap never grew (${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)}) — ${timeRemaining}s left, giving up`);
       } else {
-        const label = isGapPending ? `re-check ${Math.round((Date.now() - (state[asset].gapPending.get(market.conditionId)?.firstSeenAt ?? Date.now())) / 1000)}s` : "first check";
-        // Record firstSeenAt on first observation
-        if (!isGapPending) state[asset].gapPending.get(market.conditionId).firstSeenAt = Date.now();
-        logEntry("dim", `  → gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} (${label}) — observing until gap develops, next check ~30s`);
+        const pendSnap = state[asset].gapPending.get(market.conditionId);
+        if (!isGapPending) {
+          // First detection — record timestamp and schedule an early re-check at 20s so we
+          // catch gaps that develop quickly, rather than waiting the full 30s cycle.
+          // A second natural re-check follows ~30s after that via the normal interval.
+          pendSnap.firstSeenAt = Date.now();
+          pendSnap.checkCount  = 0;
+          if (!state[asset].pendingCheckTimer) {
+            state[asset].pendingCheckTimer = setTimeout(() => {
+              state[asset].pendingCheckTimer = null;
+              runCryptoCycle(asset);
+            }, 20_000);
+          }
+          logEntry("dim", `  → gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} (first check) — observing, early re-check in ~20s`);
+        } else {
+          pendSnap.checkCount = (pendSnap.checkCount ?? 0) + 1;
+          const elapsed = Math.round((Date.now() - (pendSnap.firstSeenAt ?? Date.now())) / 1000);
+          logEntry("dim", `  → gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} (re-check #${pendSnap.checkCount} at ${elapsed}s) — still watching, next check ~30s`);
+        }
       }
       continue;
     }
