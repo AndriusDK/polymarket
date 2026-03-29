@@ -1322,6 +1322,13 @@ async function _runCryptoCycleInner(asset) {
     const nearResLowOdds = timeRemaining < 200 && entryOdds < 0.50 &&
                            !(analysis.confidence === "HIGH" && analysis.absEdge >= 0.15);
 
+    // Near-res small-gap guard: when <200s remaining and the gap is near-zero (<0.05% of price),
+    // the outcome is essentially coin-flip regardless of trend/momentum signal.  The effective
+    // stop loss (32% at 90-200s) on a full-size position means one wrong coin-flip wipes
+    // multiple wins.  Session data: three <0.05% gap entries at 149-183s lost -$46, -$51, -$50.
+    // A $1 gap on ETH ($2000) is exactly 0.05% — that's the minimum "meaningful" gap threshold.
+    const nearResSmallGap = timeRemaining < 200 && stallGapPct < 0.0005;
+
     // SOL large-gap BUY_UP guard: when SOL has just pumped >2% above target on a volume spike,
     // the position is priced for perfection — the spike reverses and the UP token crashes.
     // Session data: 5 BUY_UP losses totalling ~$56 during pump phases; 0 recoveries.
@@ -1380,6 +1387,7 @@ async function _runCryptoCycleInner(asset) {
       !pumpSkeptic &&
       !stalled &&
       !nearResLowOdds &&
+      !nearResSmallGap &&
       !solLargeGapUp &&
       !assetPositionOpen &&
       (analysis.confidence === "HIGH" ||
@@ -1412,6 +1420,7 @@ async function _runCryptoCycleInner(asset) {
       if (pumpSkeptic) reasons.push(`pump-skeptic — price already ${analysis.signal === "BUY_UP" ? "above" : "below"} target but market prices it at ${(entryOdds * 100).toFixed(1)}% (<50%) — crowd expects reversion`);
       if (stalled) reasons.push(`stall guard — gap ${(stallGapPct * 100).toFixed(1)}% but momentum ≈0 (${(analysis.momentum ?? 0).toFixed(2)}/m < threshold ${momThresholdStall.toFixed(2)}/m) — no driving force`);
       if (nearResLowOdds) reasons.push(`near-res low-odds — ${timeRemaining}s left but market only at ${(entryOdds * 100).toFixed(1)}% (need ≥50% for near-res entries ≤200s)`);
+      if (nearResSmallGap) reasons.push(`near-res small gap — ${timeRemaining}s left but gap only ${(stallGapPct * 100).toFixed(3)}% of price (<0.05% threshold — coin-flip at near-res, stop loss too costly)`);
       if (solLargeGapUp) reasons.push(`SOL large-gap BUY_UP — SOL ${(stallGapPct * 100).toFixed(1)}% above target with vol spike ${(analysis.volSpikeRatio ?? 0).toFixed(2)}× — fresh pump reversal risk`);
       if (assetPositionOpen) reasons.push(`${asset.toUpperCase()} position already open — max 1 per asset (correlated stop risk)`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
