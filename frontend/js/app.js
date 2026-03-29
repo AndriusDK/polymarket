@@ -16,9 +16,9 @@ const state = {
   losses: 0,
   sessionStart: Date.now(),
   bootTime: null,      // set when first asset starts; used for startup cooldown
-  btc: { timer: null, analyzed: new Map(), running: false },  // conditionId → endDateMs
-  eth: { timer: null, analyzed: new Map(), running: false },
-  sol: { timer: null, analyzed: new Map(), running: false },
+  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), running: false },  // conditionId → endDateMs
+  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), running: false },
+  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), running: false },
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
   chainlinkPrices: { btc: null, eth: null, sol: null }, // live Chainlink prices from RTDS
@@ -1072,7 +1072,7 @@ async function _runCryptoCycleInner(asset) {
 
   const freshCount = markets.filter(m => !state[asset].analyzed.has(m.conditionId)).length;
 
-  const fresh = markets.filter(m => !state[asset].analyzed.has(m.conditionId));
+  const fresh = markets.filter(m => !state[asset].analyzed.has(m.conditionId) || state[asset].gapWatch.has(m.conditionId));
   if (!fresh.length) {
     setStat(`${asset}-status`, "WATCHING", "dim");
     return;
@@ -1114,13 +1114,19 @@ async function _runCryptoCycleInner(asset) {
   }
 
   for (const market of fresh) {
+    // Track whether this market is being re-examined after a near-res small-gap watch.
+    const isGapWatched = state[asset].gapWatch.has(market.conditionId);
+
     // Snapshot Chainlink price at detection time — this is our price-to-beat.
     // Detection happens within ~1-5s of window open (via WS new_market event),
     // so this closely matches Polymarket's actual Chainlink reference price.
-    state[asset].analyzed.set(market.conditionId, {
-      endDateMs:            new Date(market.endDate).getTime(),
-      chainlinkPriceToBeat: state.chainlinkPrices[asset] ?? null,
-    });
+    // Skip on re-examination to preserve the original priceToBeat snapshot.
+    if (!isGapWatched) {
+      state[asset].analyzed.set(market.conditionId, {
+        endDateMs:            new Date(market.endDate).getTime(),
+        chainlinkPriceToBeat: state.chainlinkPrices[asset] ?? null,
+      });
+    }
 
     // Derive window duration from title e.g. "March 26, 4:55PM-5:10PM ET" → 15 min → 900s.
     // Fallback to 300s (5 min) if parsing fails.
@@ -1396,9 +1402,12 @@ async function _runCryptoCycleInner(asset) {
       state.stats.spent < c.maxDaily;
 
     if (qualifies) {
+      state[asset].gapWatch.delete(market.conditionId);
       placeCryptoTrade(asset, analysis, { spot, priceToBeat });
     } else if (analysis.signal !== "SKIP") {
       const reasons = [];
+      // Re-examined market whose gap grew but was blocked by a different filter — clean up watch.
+      if (isGapWatched && !nearResSmallGap) state[asset].gapWatch.delete(market.conditionId);
       if (!oddsOk) {
         if (entryOdds > maxOdds)
           reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% > max ${(maxOdds * 100).toFixed(0)}% (bad risk/reward)`);
@@ -1420,7 +1429,17 @@ async function _runCryptoCycleInner(asset) {
       if (pumpSkeptic) reasons.push(`pump-skeptic — price already ${analysis.signal === "BUY_UP" ? "above" : "below"} target but market prices it at ${(entryOdds * 100).toFixed(1)}% (<50%) — crowd expects reversion`);
       if (stalled) reasons.push(`stall guard — gap ${(stallGapPct * 100).toFixed(1)}% but momentum ≈0 (${(analysis.momentum ?? 0).toFixed(2)}/m < threshold ${momThresholdStall.toFixed(2)}/m) — no driving force`);
       if (nearResLowOdds) reasons.push(`near-res low-odds — ${timeRemaining}s left but market only at ${(entryOdds * 100).toFixed(1)}% (need ≥50% for near-res entries ≤200s)`);
-      if (nearResSmallGap) reasons.push(`near-res small gap — ${timeRemaining}s left but gap only ${(stallGapPct * 100).toFixed(3)}% of price (<0.05% threshold — coin-flip at near-res, stop loss too costly)`);
+      if (nearResSmallGap) {
+        if (isGapWatched) {
+          // Second look: gap still hasn't grown — give up.
+          state[asset].gapWatch.delete(market.conditionId);
+          reasons.push(`near-res small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% still <0.05% after observation — skipping`);
+        } else {
+          // First time: gap is tiny but signal is present — observe one more cycle (~30s).
+          state[asset].gapWatch.set(market.conditionId, { signal: analysis.signal, startedAt: Date.now() });
+          reasons.push(`near-res small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% (<0.05%) — watching for gap expansion next cycle`);
+        }
+      }
       if (solLargeGapUp) reasons.push(`SOL large-gap BUY_UP — SOL ${(stallGapPct * 100).toFixed(1)}% above target with vol spike ${(analysis.volSpikeRatio ?? 0).toFixed(2)}× — fresh pump reversal risk`);
       if (assetPositionOpen) reasons.push(`${asset.toUpperCase()} position already open — max 1 per asset (correlated stop risk)`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
