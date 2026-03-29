@@ -16,9 +16,9 @@ const state = {
   losses: 0,
   sessionStart: Date.now(),
   bootTime: null,      // set when first asset starts; used for startup cooldown
-  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), running: false },  // conditionId → endDateMs
-  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), running: false },
-  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), running: false },
+  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), running: false },  // conditionId → endDateMs
+  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), running: false },
+  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), running: false },
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
   chainlinkPrices: { btc: null, eth: null, sol: null }, // live Chainlink prices from RTDS
@@ -1070,8 +1070,12 @@ async function _runCryptoCycleInner(asset) {
     return;
   }
 
+  // Expire gapPending entries whose market has already resolved
+  { const nowMs = Date.now(); for (const [id, d] of state[asset].gapPending) { if ((d.endDateMs ?? 0) < nowMs) state[asset].gapPending.delete(id); } }
+
   const freshCount = markets.filter(m => !state[asset].analyzed.has(m.conditionId)).length;
 
+  // Include gapWatch re-exams; gapPending markets are naturally fresh (not yet in analyzed)
   const fresh = markets.filter(m => !state[asset].analyzed.has(m.conditionId) || state[asset].gapWatch.has(m.conditionId));
   if (!fresh.length) {
     setStat(`${asset}-status`, "WATCHING", "dim");
@@ -1114,15 +1118,18 @@ async function _runCryptoCycleInner(asset) {
   }
 
   for (const market of fresh) {
-    // Track whether this market is being re-examined after a near-res small-gap watch.
-    const isGapWatched = state[asset].gapWatch.has(market.conditionId);
+    // Track re-examination states.
+    const isGapWatched  = state[asset].gapWatch.has(market.conditionId);
+    const isGapPending  = state[asset].gapPending.has(market.conditionId);
 
-    // Snapshot Chainlink price at detection time — this is our price-to-beat.
-    // Detection happens within ~1-5s of window open (via WS new_market event),
-    // so this closely matches Polymarket's actual Chainlink reference price.
-    // Skip on re-examination to preserve the original priceToBeat snapshot.
-    if (!isGapWatched) {
-      state[asset].analyzed.set(market.conditionId, {
+    // Snapshot Chainlink price on very first detection and store in gapPending.
+    // The market stays in gapPending (and therefore stays fresh) until the gap
+    // clears the noise floor, at which point it is promoted to analyzed and AI
+    // analysis runs.  This way a market with gap=0 at detection is observed on
+    // every subsequent 30s cycle until a real gap develops — rather than being
+    // analyzed once at $0 and discarded as SKIP/LOW forever.
+    if (!isGapWatched && !isGapPending) {
+      state[asset].gapPending.set(market.conditionId, {
         endDateMs:            new Date(market.endDate).getTime(),
         chainlinkPriceToBeat: state.chainlinkPrices[asset] ?? null,
       });
@@ -1147,7 +1154,8 @@ async function _runCryptoCycleInner(asset) {
     // That snapshot happens within ~1-5s of window open (WS new_market event), so it's
     // the closest approximation to Polymarket's actual Chainlink reference price.
     // Fallback: Binance kline at window start (small delta vs Chainlink, but directionally correct).
-    const storedData = state[asset].analyzed.get(market.conditionId);
+    const storedData = state[asset].analyzed.get(market.conditionId)
+                    ?? state[asset].gapPending.get(market.conditionId);
     let priceToBeat = storedData?.chainlinkPriceToBeat ?? null;
     if (!priceToBeat) {
       try {
@@ -1172,8 +1180,26 @@ async function _runCryptoCycleInner(asset) {
     const minGapFrac = configGap ?? autoGap;
     if (minGapFrac > 0 && Math.abs(gap) < spot * minGapFrac) {
       const minGap = spot * minGapFrac;
-      logEntry("dim", `  → SKIP gap too small (${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} threshold) — ${configGap ? `config ${c.minGapPct}%` : usingChainlink ? "price noise" : "Binance/Chainlink delta"}`);
+      if (timeRemaining < 90) {
+        // Too close to resolution — give up watching, mark analyzed so we stop re-checking
+        const snap = state[asset].gapPending.get(market.conditionId);
+        if (snap) { state[asset].analyzed.set(market.conditionId, snap); state[asset].gapPending.delete(market.conditionId); }
+        logEntry("dim", `  → gap never grew (${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)}) — ${timeRemaining}s left, giving up`);
+      } else {
+        const label = isGapPending ? `re-check ${Math.round((Date.now() - (state[asset].gapPending.get(market.conditionId)?.firstSeenAt ?? Date.now())) / 1000)}s` : "first check";
+        // Record firstSeenAt on first observation
+        if (!isGapPending) state[asset].gapPending.get(market.conditionId).firstSeenAt = Date.now();
+        logEntry("dim", `  → gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} (${label}) — observing until gap develops, next check ~30s`);
+      }
       continue;
+    }
+
+    // Gap has cleared the noise floor — if this market was pending, promote it to analyzed now
+    if (isGapPending) {
+      const snap = state[asset].gapPending.get(market.conditionId);
+      state[asset].analyzed.set(market.conditionId, snap);
+      state[asset].gapPending.delete(market.conditionId);
+      logEntry("dim", `  → gap confirmed ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} — running analysis`);
     }
 
     // Precompute maxMovement for post-analysis crossing check.
