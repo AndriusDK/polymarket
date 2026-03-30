@@ -1407,15 +1407,13 @@ async function _runCryptoCycleInner(asset) {
     // A $1 gap on ETH ($2000) is exactly 0.05% — that's the minimum "meaningful" gap threshold.
     const nearResSmallGap = timeRemaining < 200 && stallGapPct < 0.0005;
 
-    // Mid-window MEDIUM small-gap guard: MEDIUM confidence with a tiny actual gap (< 0.10% of price)
-    // at 200-600s remaining is a drift/momentum projection bet, not a gap bet.  In a flat market
-    // the projected "effective gap" evaporates the moment momentum pauses — the entry is a coin-flip.
-    // Session data: ETH Trades 1/3/5 (all losses) had $0-$1 gap (≤0.05%) at 270-400s, all WRONG DIR.
-    // The AI's drift calc (e.g. "effective +22pts") extrapolates current momentum which reverses fast.
-    // $2 on ETH at $2000 = 0.10% is the minimum gap that won't be noise-crossed in a 600s window.
+    // Mid-window small-gap guard: a tiny actual gap (< 0.10% of price) at 200-600s remaining
+    // is a drift/momentum projection bet, not a gap bet — regardless of confidence level.
+    // In a flat market the projected "effective gap" evaporates the moment momentum pauses.
+    // HIGH confidence on a $0 gap is the AI overweighting momentum; it is still a coin-flip.
+    // Session data: ETH gap=$0 at 275s HIGH conf → -$71.17; ETH Trades 1/3/5 at 270-400s all WRONG DIR.
     // Use gapWatch for one observation cycle: if gap grows to ≥0.10% on re-check, allow entry.
     const midWindowSmallGap = timeRemaining >= 200 && timeRemaining < 600 &&
-                              analysis.confidence === "MEDIUM" &&
                               stallGapPct < 0.001;
 
     // SOL large-gap BUY_UP guard: when SOL has just pumped >2% above target on a volume spike,
@@ -1527,10 +1525,10 @@ async function _runCryptoCycleInner(asset) {
       if (midWindowSmallGap) {
         if (isGapWatched) {
           state[asset].gapWatch.delete(market.conditionId);
-          reasons.push(`mid-window MEDIUM small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% still <0.10% after observation — skipping`);
+          reasons.push(`mid-window small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% still <0.10% after observation — skipping`);
         } else {
           state[asset].gapWatch.set(market.conditionId, { signal: analysis.signal, startedAt: Date.now() });
-          reasons.push(`mid-window MEDIUM small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% (<0.10%) — watching for gap expansion next cycle`);
+          reasons.push(`mid-window small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% (<0.10%) — watching for gap expansion next cycle`);
         }
       }
       if (solLargeGapUp) reasons.push(`SOL large-gap BUY_UP — SOL ${(stallGapPct * 100).toFixed(1)}% above target with vol spike ${(analysis.volSpikeRatio ?? 0).toFixed(2)}× — fresh pump reversal risk`);
