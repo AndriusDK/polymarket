@@ -501,19 +501,24 @@ const priceStream = (() => {
             // only 5.88s grace was getting nuked in 5 seconds before the position could breathe.
             // Near-resolution arbs (< 90s) always get 25s since they're entered with high
             // confidence and a single candle tick can temporarily move the price.
-            const grace = t.totalSecs < 90
+            // Gap-flip trades get a 75s minimum grace regardless of window size — the token
+            // oscillates steeply downward before price crosses the target, and the 15-20s grace
+            // for 90-200s windows fires the catastrophic stop on a correct-direction dip.
+            const baseGrace = t.totalSecs < 90
               ? 25_000                                                    // near-res: always 25s
               : t.totalSecs < 200
               ? Math.min(20_000, Math.max(15_000, t.totalSecs * 100))    // short window: 15-20s
               : t.totalSecs < 500
               ? 60_000                                                    // mid-window (200-500s): 60s flat — let position breathe before first stop check
               : Math.min(60_000, Math.max(45_000, t.totalSecs * 60));    // long window (500s+): 45-60s
+            const grace = t.signalAgainstGap ? Math.max(baseGrace, 75_000) : baseGrace;
             if (Date.now() - t.entryTime < grace) {
-              // Catastrophic loss override: bypass grace if loss exceeds 2× the normal stop.
-              // Gap-flip trades (signalAgainstGap) expect the token to oscillate downward before
-              // the price crosses the target — raise the catastrophic threshold so the position
-              // isn't killed mid-oscillation on a correct-direction trade.
-              const catThreshold = t.signalAgainstGap ? 0.70 : 0.50;
+              // Catastrophic loss override: bypass grace if loss exceeds threshold.
+              // Gap-flip trades raise this to 85% — the token dumps to 13-17 cents during
+              // the pre-crossing oscillation (observed MIN AFTER 0.130-0.150), which triggers
+              // the old 70% threshold on correct-direction trades. 85% only fires at ~8-9 cents,
+              // safely below the observed oscillation trough, protecting against true collapse.
+              const catThreshold = t.signalAgainstGap ? 0.85 : 0.50;
               const catastrophic = t.unrealizedPnl <= -t.amount * catThreshold;
               if (!catastrophic) return false;
             }
@@ -1743,13 +1748,15 @@ function startCryptoCountdown() {
       // Grace must match the main WS handler so the safety net doesn't fire prematurely.
       // The old formula (totalSecs * 40ms for <200s) gave only 3-8s grace, causing stops
       // to fire in 5-7s on short-window trades that later resolved correctly.
-      const grace = t.totalSecs < 90
+      // Gap-flip trades get 75s minimum grace — matches WS handler logic.
+      const baseGrace = t.totalSecs < 90
         ? 25_000
         : t.totalSecs < 200
         ? Math.min(20_000, Math.max(15_000, t.totalSecs * 100))
         : t.totalSecs < 500
         ? 60_000
         : Math.min(60_000, Math.max(45_000, t.totalSecs * 60));
+      const grace = t.signalAgainstGap ? Math.max(baseGrace, 75_000) : baseGrace;
       if (Date.now() - t.entryTime < grace) continue;
       // Same widened thresholds as the WS handler for thin-book noise protection.
       // Gap-flip trades use a wider 60% base stop — token oscillates before price crosses target.
