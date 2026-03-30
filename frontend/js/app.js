@@ -16,9 +16,9 @@ const state = {
   losses: 0,
   sessionStart: Date.now(),
   bootTime: null,      // set when first asset starts; used for startup cooldown
-  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false },  // conditionId → endDateMs
-  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false },
-  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false },
+  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },  // conditionId → endDateMs
+  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },
+  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
   chainlinkPrices: { btc: null, eth: null, sol: null }, // live Chainlink prices from RTDS
@@ -1236,10 +1236,17 @@ async function _runCryptoCycleInner(asset) {
       `<span class="${gap >= 0 ? "green" : "red"}">${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)}</span>`
     );
 
+    // Track Polymarket token price history (last 3 observations) for trend signal.
+    // Newest entry is prepended; older entries shift back. Keyed by conditionId.
+    const oddsHist = state[asset].oddsHistory;
+    const prevOdds = oddsHist.get(market.conditionId) || [];
+    const updatedOdds = [{ up: market.upPrice, ts: Date.now() }, ...prevOdds].slice(0, 3);
+    oddsHist.set(market.conditionId, updatedOdds);
+
     let analysis;
     try {
       analysis = await analyzeCryptoMarket(
-        market, { spot, candles, priceToBeat, orderBook, fundingRate }, c.anthropicKey, { model: c.model }, asset
+        market, { spot, candles, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds }, c.anthropicKey, { model: c.model }, asset
       );
     } catch (err) {
       logEntry("error", `  ${cfg.ticker} analysis failed: ${err.message}`);
