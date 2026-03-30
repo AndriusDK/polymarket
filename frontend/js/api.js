@@ -415,8 +415,10 @@ const CRYPTO_PROMPT = [
   "Price to beat ({ticker}/USD at market open): {priceToBeat}",
   "",
   "── LIVE BINANCE DATA ──────────────────────────────────────────────",
+  "UTC time        : {utcTime}",
   "Current {ticker}/USD : {currentPrice}",
   "Gap             : {gapSign}{gap} ({gapPct}%) — {ticker} is {direction} the target",
+  "Gap at candle close (newest→oldest): {gapTrendBlock}",
   "Momentum        : {momentumSign}{momentum}/min (avg last 3 closed candles)",
   "Avg volatility  : ±{volatility}/min (avg high-low range)",
   "Candle trend    : {bullCount} bullish, {bearCount} bearish of last 5 → {trendLabel}",
@@ -437,6 +439,7 @@ const CRYPTO_PROMPT = [
   "── POLYMARKET ODDS ────────────────────────────────────────────────",
   "UP price  : {upPrice} ({upPct}% implied)",
   "DOWN price: {downPrice} ({downPct}% implied)",
+  "UP token trend (newest→oldest cycles): {oddsTrendBlock}",
   "Volume    : {volume}",
   "",
   "── DECISION RULES ─────────────────────────────────────────────────",
@@ -466,6 +469,8 @@ const CRYPTO_PROMPT = [
   "8. ORDER BOOK: Bid/ask ratio > 2 near target = strong bid support → reinforces UP. Ratio < 0.5 = strong ask wall → reinforces DOWN. Use as supporting evidence alongside gap+momentum.",
   "9. VOLUME SPIKE: Last candle vol > 2× avg = strong conviction for current trend. Vol < 0.5× avg = weak signal, reduce confidence one level. Normal volume = no adjustment.",
   "10. FUNDING RATE: Rate > +0.05%/8h = overcrowded longs → bearish pressure on price (supports DOWN). Rate < -0.02%/8h = overcrowded shorts → bullish squeeze pressure (supports UP). Near zero = neutral.",
+  "11. GAP TREND: If gap at candle close is narrowing toward zero across candles, the leader is losing ground and a flip becomes more likely. If gap is widening or stable, the current leader is in control.",
+  "12. UP TOKEN TREND: If the UP token price is falling across cycles, market participants are selling UP (bearish signal). If rising, they are buying UP (bullish). Token trend confirms or contradicts the price gap.",
   "",
   "Bet only when estimated true probability exceeds 60%. When in doubt, SKIP.",
   "",
@@ -480,7 +485,7 @@ const CRYPTO_PROMPT = [
 
 async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "claude-haiku-4-5-20251001", signal } = {}, asset = "btc") {
   const cfg = CRYPTO_CONFIG[asset];
-  const { candles, spot, priceToBeat } = cryptoData;
+  const { candles, spot, priceToBeat, oddsHistory } = cryptoData;
   const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
   const gap       = spot - priceToBeat;
   const gapPct    = ((gap / priceToBeat) * 100);
@@ -518,6 +523,36 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     const vol = c.volume != null ? `  Vol=${fmtQty(c.volume)}` : "";
     return `  ${hh}:${mm}  O=${c.open.toFixed(pd)} H=${c.high.toFixed(pd)} L=${c.low.toFixed(pd)} C=${c.close.toFixed(pd)} ${dir}${vol}`;
   }).join("\n");
+
+  // UTC time (session context: thin liquidity at night vs active US/EU hours)
+  const utcTime = new Date().toUTCString().replace(/^.*, /, "").replace(/ GMT$/, " UTC");
+
+  // Gap trend: gap (price vs target) at each candle close, newest→oldest.
+  // Shows whether the gap is stable, narrowing (leader losing ground), or widening.
+  const gapAtCloses = candles.slice(0, 5).map(c => {
+    const g = c.close - priceToBeat;
+    return (g >= 0 ? "+" : "") + g.toFixed(pd);
+  });
+  const gapVals = gapAtCloses.map(parseFloat);
+  const avgDelta = gapVals.slice(0, -1).reduce((s, g, i) => s + (g - gapVals[i + 1]), 0) / (gapVals.length - 1);
+  const gapTrendLabel = Math.abs(avgDelta) < spot * 0.00004
+    ? "stable"
+    : avgDelta * Math.sign(gap) > 0
+      ? "widening (leader strengthening)"
+      : "narrowing (leader losing ground)";
+  const gapTrendBlock = `${gapAtCloses.join(", ")}  → ${gapTrendLabel}`;
+
+  // Polymarket UP token price trend: last 3 observed prices, newest→oldest.
+  // Rising = market buying UP; falling = market selling UP.
+  let oddsTrendBlock = "N/A (first observation)";
+  if (oddsHistory && oddsHistory.length >= 2) {
+    const trendPcts = oddsHistory.map(o => (o.up * 100).toFixed(1) + "%");
+    const delta = oddsHistory[0].up - oddsHistory[oddsHistory.length - 1].up;
+    const trendDir = Math.abs(delta) < 0.01 ? "stable"
+                   : delta > 0 ? `rising +${(delta * 100).toFixed(1)}% (market buying UP)`
+                   : `falling ${(delta * 100).toFixed(1)}% (market selling UP)`;
+    oddsTrendBlock = `${trendPcts.join(" → ")}  (${trendDir})`;
+  }
 
   // Order book block
   let orderBookBlock = "N/A (unavailable)";
@@ -576,6 +611,9 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     .replace("{expectedDrift}",     (expectedDrift >= 0 ? "+" : "") + expectedDrift.toFixed(pd))
     .replace("{candles}",           candleStr)
     .replace("{orderBookBlock}",    orderBookBlock)
+    .replace("{utcTime}",           utcTime)
+    .replace("{gapTrendBlock}",     gapTrendBlock)
+    .replace("{oddsTrendBlock}",    oddsTrendBlock)
     .replace("{volumeBlock}",       volumeBlock)
     .replace("{fundingBlock}",      fundingBlock)
     .replace("{upPrice}",           market.upPrice.toFixed(3))
