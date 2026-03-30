@@ -1348,6 +1348,15 @@ async function _runCryptoCycleInner(asset) {
                                      timeRemaining > 300 &&
                                      Math.abs(analysis.momentum ?? 0) < momNeededToFlip * 0.5;
 
+    // Near-resolution gap-flip with opposing momentum: with <90s left the price must reverse
+    // direction AND cross the gap before expiry. If momentum is actively running the WRONG way
+    // (e.g. BUY_DOWN but price moving up at +1/min), there is no time to reverse and flip.
+    // Applies at any confidence level — the AI can see bearish candles but momentum rules endgame.
+    const nearResGapFlipMomOpposed = signalAgainstGap &&
+                                     timeRemaining < 90 &&
+                                     ((analysis.signal === "BUY_DOWN" && (analysis.momentum ?? 0) > 0.5) ||
+                                      (analysis.signal === "BUY_UP"  && (analysis.momentum ?? 0) < -0.5));
+
     // BTC short-window exception: the pump-skeptic crowd-reversion logic breaks down when
     // BTC has a large gap, ≤500s remaining, HIGH confidence and strong edge (≥12%).
     // In these endgame windows the gap physically can't close in time — override pump-skeptic.
@@ -1453,6 +1462,7 @@ async function _runCryptoCycleInner(asset) {
       !solMediumLongWindow &&
       !btcMediumGapBlocked &&
       !gapFlipMidWindowBlocked &&
+      !nearResGapFlipMomOpposed &&
       !btcMacroVeto &&
       !pumpSkeptic &&
       !stalled &&
@@ -1487,6 +1497,7 @@ async function _runCryptoCycleInner(asset) {
       if (solMediumLongWindow) reasons.push(`SOL mid-window MEDIUM — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥60% (SOL whipsaw risk too high for MEDIUM conviction)`);
       if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
       if (gapFlipMidWindowBlocked) reasons.push(`gap-flip momentum too weak — need ${momNeededToFlip.toFixed(3)}/m to close gap, got ${Math.abs(analysis.momentum ?? 0).toFixed(3)}/m (need ≥50%)`);
+      if (nearResGapFlipMomOpposed) reasons.push(`near-res gap-flip blocked — momentum ${(analysis.momentum ?? 0).toFixed(2)}/m opposes ${analysis.signal} flip with only ${timeRemaining}s left`);
       if (btcMacroVeto) {
         const mDir = btcMacro.bearCount >= 3 ? "bearish" : "bullish";
         const mCnt = btcMacro.bearCount >= 3 ? btcMacro.bearCount : btcMacro.bullCount;
