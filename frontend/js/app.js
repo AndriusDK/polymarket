@@ -510,17 +510,22 @@ const priceStream = (() => {
               : Math.min(60_000, Math.max(45_000, t.totalSecs * 60));    // long window (500s+): 45-60s
             if (Date.now() - t.entryTime < grace) {
               // Catastrophic loss override: bypass grace if loss exceeds 2× the normal stop.
-              // A 50%+ loss in seconds is a genuine collapse, not tick noise — letting it compound
-              // while waiting for grace to expire makes the final loss far worse.
-              const catastrophic = t.unrealizedPnl <= -t.amount * 0.50;
+              // Gap-flip trades (signalAgainstGap) expect the token to oscillate downward before
+              // the price crosses the target — raise the catastrophic threshold so the position
+              // isn't killed mid-oscillation on a correct-direction trade.
+              const catThreshold = t.signalAgainstGap ? 0.70 : 0.50;
+              const catastrophic = t.unrealizedPnl <= -t.amount * catThreshold;
               if (!catastrophic) return false;
             }
-            // Near-res and short-window markets have thin order books — a single aggressive
-            // order can move the token ±30% momentarily even with the gap intact.
-            // Widen the effective stop for these entries to avoid exiting a correct trade.
-            const effectiveStop = t.totalSecs < 90  ? Math.max(stopLossPct, 0.40)  // near-res
-                                : t.totalSecs < 200 ? Math.max(stopLossPct, 0.32)  // short window
-                                : stopLossPct;
+            // Gap-flip trades (signalAgainstGap=true) bet that price currently on the wrong side
+            // of the target will cross before resolution. The prediction market token naturally
+            // drops while the price approaches from the wrong direction — a 25% flat stop fires
+            // at the token low even when the trade direction is ultimately correct.
+            // Use a wider 60% base stop for gap-flip entries to survive the pre-crossing dip.
+            const baseStop = t.signalAgainstGap ? Math.max(stopLossPct, 0.60) : stopLossPct;
+            const effectiveStop = t.totalSecs < 90  ? Math.max(baseStop, 0.40)  // near-res
+                                : t.totalSecs < 200 ? Math.max(baseStop, 0.32)  // short window
+                                : baseStop;
             return t.unrealizedPnl <= -t.amount * effectiveStop;
           });
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
@@ -1730,10 +1735,12 @@ function startCryptoCountdown() {
         ? 60_000
         : Math.min(60_000, Math.max(45_000, t.totalSecs * 60));
       if (Date.now() - t.entryTime < grace) continue;
-      // Same widened thresholds as the WS handler for thin-book noise protection
-      const effectiveStop = t.totalSecs < 90  ? Math.max(stopLossPct, 0.40)
-                          : t.totalSecs < 200 ? Math.max(stopLossPct, 0.32)
-                          : stopLossPct;
+      // Same widened thresholds as the WS handler for thin-book noise protection.
+      // Gap-flip trades use a wider 60% base stop — token oscillates before price crosses target.
+      const baseStop = t.signalAgainstGap ? Math.max(stopLossPct, 0.60) : stopLossPct;
+      const effectiveStop = t.totalSecs < 90  ? Math.max(baseStop, 0.40)
+                          : t.totalSecs < 200 ? Math.max(baseStop, 0.32)
+                          : baseStop;
       if (t.unrealizedPnl <= -t.amount * effectiveStop) { closePosition(t, "STOP LOSS"); refreshBtcCards(); updatePnlStat(); }
     }
     for (const t of cryptoTrades) {
