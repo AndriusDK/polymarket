@@ -225,6 +225,7 @@ function stopBot() {
   setStat("status", "STOPPED", "amber");
   logEntry("warning", "Bot stopped.");
   setRunning(false);
+  releaseWakeLock();
 }
 
 // ── UI helpers ───────────────────────────────────────────────────
@@ -1122,6 +1123,7 @@ function startCryptoMode(asset) {
   if (btn) { btn.textContent = `■ ${cfg.ticker} STOP`; btn.classList.add("active"); }
   setStat(`${asset}-status`, "ACTIVE", ASSET_COLORS[asset]);
   setRunning(true);
+  requestWakeLock();
 
   // Record boot time once (first asset to start sets the clock for all)
   if (!state.bootTime) {
@@ -2019,6 +2021,47 @@ async function generatePolyApiKey() {
     btn.disabled = false;
   }
 }
+
+// ── Wake Lock ────────────────────────────────────────────────────
+
+let wakeLock = null;
+
+async function requestWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    logEntry("info", "Wake lock acquired — screen will stay on.");
+    wakeLock.addEventListener('release', () => {
+      logEntry("warning", "Wake lock released.");
+      wakeLock = null;
+    });
+  } catch (err) {
+    logEntry("warning", `Wake lock unavailable: ${err.message}`);
+  }
+}
+
+async function releaseWakeLock() {
+  if (wakeLock) {
+    await wakeLock.release();
+    wakeLock = null;
+  }
+}
+
+// Re-acquire wake lock when tab becomes visible again (browser auto-releases on hide)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.running) {
+    requestWakeLock();
+  }
+});
+
+// ── Unload guard ─────────────────────────────────────────────────
+
+window.addEventListener('beforeunload', (e) => {
+  if (!state.running) return;
+  e.preventDefault();
+  // Modern browsers show their own generic message; setting returnValue triggers the dialog
+  e.returnValue = 'The bot is still running — positions may be open. Leave anyway?';
+});
 
 // ── Boot ─────────────────────────────────────────────────────────
 
