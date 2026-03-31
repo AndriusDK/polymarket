@@ -1476,14 +1476,15 @@ async function _runCryptoCycleInner(asset) {
                                       (analysis.signal === "BUY_UP"  && (analysis.momentum ?? 0) < -0.5));
 
     // Near-res gap-flip low-odds filter: gap-flip trades with <300s remaining and entry odds
-    // below 56% are strongly net-negative.  The market is pricing < 56% that the gap flips
-    // in the limited time left — when it's wrong the token collapses to ~$0.03 immediately.
-    // Session data: ETH BUY_UP losses at 48.5%/212s, 54.5%/148s, and 55%/268s all resolved
-    // at $0.03.  The 268s case slipped through the original 250s threshold — extending to 300s.
-    // A 56% floor still allows confident near-res gap-flips (crowd underpricing an imminent cross).
+    // below 58% are strongly net-negative.  The market is pricing < 58% that the gap flips
+    // in the limited time left — when it's wrong the token collapses to ~$0.03-$0.08 immediately.
+    // Session data: ETH BUY_UP losses at 48.5%/212s, 54.5%/148s, 55%/268s all resolved at $0.03;
+    // ETH BUY_DOWN at 56.5%/94s resolved at $0.08 (min after $0.08).  Threshold raised from
+    // 56% → 58% after the 56.5% case slipped through — need a clear buffer above the boundary.
+    // A 58% floor still allows confident near-res gap-flips (crowd underpricing an imminent cross).
     const nearResGapFlipLowOdds = signalAgainstGap &&
                                    timeRemaining < 300 &&
-                                   entryOdds < 0.56;
+                                   entryOdds < 0.58;
 
     // BTC short-window exception: the pump-skeptic crowd-reversion logic breaks down when
     // BTC has a large gap, ≤500s remaining, HIGH confidence and strong edge (≥12%).
