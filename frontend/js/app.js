@@ -1338,12 +1338,16 @@ async function _runCryptoCycleInner(asset) {
                                 timeRemaining > 400 &&
                                 entryOdds < 0.60;
 
-    // BTC gap-flip filter: MEDIUM confidence bets against a gap >800pts rarely flip in time.
-    // These produce high-frequency small wins but large stop-loss losses — negative EV overall.
+    // BTC gap-flip filter: MEDIUM confidence gap-flip bets on BTC are net-negative in two cases:
+    // (1) gap > 800pts — rarely flip in the window; (2) entry odds < 55% with any gap size —
+    // market pricing below 55% signals strong crowd skepticism about the flip materialising,
+    // and BTC's momentum-driven volatility makes stop-outs in 250-900s windows routine.
+    // Session data: BTC BUY_DOWN -$19.50 at 47.5%/702s/gap≈$0 — gap=0 made signalAgainstGap
+    // true (tiny float > 0), bypassing pumpSkeptic; nothing caught it in the 250-900s dead zone.
     const btcMediumGapBlocked = asset === "btc" &&
                                  analysis.confidence === "MEDIUM" &&
                                  signalAgainstGap &&
-                                 Math.abs(analysis.gap) > 800;
+                                 (Math.abs(analysis.gap) > 800 || entryOdds < 0.55);
 
     // SOL/ETH mid-window gap-flip momentum guard: gap-flip trades (betting against the current
     // price direction) need momentum strong enough to actually close the gap before expiry.
@@ -1369,14 +1373,14 @@ async function _runCryptoCycleInner(asset) {
                                      ((analysis.signal === "BUY_DOWN" && (analysis.momentum ?? 0) > 0.5) ||
                                       (analysis.signal === "BUY_UP"  && (analysis.momentum ?? 0) < -0.5));
 
-    // Near-res gap-flip low-odds filter: gap-flip trades with <250s remaining and entry odds
+    // Near-res gap-flip low-odds filter: gap-flip trades with <300s remaining and entry odds
     // below 56% are strongly net-negative.  The market is pricing < 56% that the gap flips
     // in the limited time left — when it's wrong the token collapses to ~$0.03 immediately.
-    // Session data: two ETH BUY_UP losses totaling -$170.89 (48.5%/212s and 54.5%/148s),
-    // both resolved at $0.03.  Neither had the momentum to close the gap before expiry.
+    // Session data: ETH BUY_UP losses at 48.5%/212s, 54.5%/148s, and 55%/268s all resolved
+    // at $0.03.  The 268s case slipped through the original 250s threshold — extending to 300s.
     // A 56% floor still allows confident near-res gap-flips (crowd underpricing an imminent cross).
     const nearResGapFlipLowOdds = signalAgainstGap &&
-                                   timeRemaining < 250 &&
+                                   timeRemaining < 300 &&
                                    entryOdds < 0.56;
 
     // BTC short-window exception: the pump-skeptic crowd-reversion logic breaks down when
@@ -1516,7 +1520,12 @@ async function _runCryptoCycleInner(asset) {
       if (btcMidWindowLowOdds) reasons.push(`BTC mid-window low odds — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥55% or HIGH conf + ≥12% edge (crowd reversion signal)`);
       if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM (<120s)`);
       if (solMediumLongWindow) reasons.push(`SOL mid-window MEDIUM — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥60% (SOL whipsaw risk too high for MEDIUM conviction)`);
-      if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
+      if (btcMediumGapBlocked) {
+        if (Math.abs(analysis.gap) > 800)
+          reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
+        else
+          reasons.push(`BTC gap-flip blocked — MEDIUM confidence gap-flip at ${(entryOdds * 100).toFixed(1)}% (<55%) with ${timeRemaining}s left — crowd skepticism too strong`);
+      }
       if (gapFlipMidWindowBlocked) reasons.push(`gap-flip momentum too weak — need ${momNeededToFlip.toFixed(3)}/m to close gap, got ${Math.abs(analysis.momentum ?? 0).toFixed(3)}/m (need ≥50%)`);
       if (nearResGapFlipMomOpposed) reasons.push(`near-res gap-flip blocked — momentum ${(analysis.momentum ?? 0).toFixed(2)}/m opposes ${analysis.signal} flip with only ${timeRemaining}s left`);
       if (nearResGapFlipLowOdds) reasons.push(`near-res gap-flip low-odds — ${(entryOdds * 100).toFixed(1)}% entry (<56%) with only ${timeRemaining}s left — market disagrees with gap-flip in limited time`);
