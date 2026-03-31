@@ -19,6 +19,7 @@ const state = {
   btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },  // conditionId → endDateMs
   eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },
   sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },
+  tradeHistory: [],    // { ts, pnl, asset, reason } — every closed position, used by profit chart
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
   chainlinkPrices: { btc: null, eth: null, sol: null }, // live Chainlink prices from RTDS
@@ -41,7 +42,9 @@ function showScreen(id) {
 function startClock() {
   const tick = () => {
     const el = $("#header-clock");
-    if (el) el.textContent = new Date().toUTCString().slice(-12, -4) + " UTC";
+    if (el) el.textContent = new Date().toLocaleTimeString('da-DK', {
+      timeZone: 'Europe/Copenhagen', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    }) + " CPH";
   };
   tick();
   setInterval(tick, 1000);
@@ -241,7 +244,9 @@ function setStat(key, value, color) {
 
 function logEntry(type, msg) {
   const log = $("#log-content");
-  const time = new Date().toUTCString().slice(-12, -4);
+  const time = new Date().toLocaleTimeString('da-DK', {
+    timeZone: 'Europe/Copenhagen', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+  });
   const div = document.createElement("div");
   div.className = `log-entry ${type}`;
   div.innerHTML = `<span class="log-time">${time}</span><span class="log-msg">${msg}</span>`;
@@ -724,6 +729,7 @@ function closePosition(trade, reason) {
   const realized = trade.unrealizedPnl;
   state.realizedPnl = (state.realizedPnl || 0) + realized;
   if (realized > 0) state.wins++; else if (realized < 0) state.losses++;
+  state.tradeHistory.push({ ts: Date.now(), pnl: realized, asset: trade.type, reason });
 
   const card = $(`#card-${trade.id}`);
   if (card) {
@@ -855,6 +861,101 @@ function cleanupShadowTrade(shadow) {
   if (!stillNeeded) priceStream.unsubscribe(shadow.tokenId);
 }
 
+// ── Profitability chart ──────────────────────────────────────────
+// Renders hourly PnL bars (Europe/Copenhagen time) + cumulative line.
+// Called after every position close.
+function updateProfitChart() {
+  const svg = document.getElementById('profit-chart-svg');
+  const totalLabel = document.getElementById('chart-total-label');
+  if (!svg) return;
+
+  const history = state.tradeHistory;
+  if (!history.length) return;
+
+  // Bucket each trade into its Copenhagen hour
+  const hourlyPnl = {};
+  for (const t of history) {
+    const h = parseInt(new Date(t.ts).toLocaleString('en-US', {
+      timeZone: 'Europe/Copenhagen', hour: 'numeric', hour12: false
+    }));
+    hourlyPnl[h] = (hourlyPnl[h] || 0) + t.pnl;
+  }
+
+  const hours = Object.keys(hourlyPnl).map(Number).sort((a, b) => a - b);
+  // Fill every hour from first to last so gaps show as empty
+  const allHours = [];
+  for (let h = hours[0]; h <= hours[hours.length - 1]; h++) allHours.push(h);
+  const pnls = allHours.map(h => hourlyPnl[h] || 0);
+
+  const W = svg.clientWidth || 700;
+  const H = 88;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  const padL = 38, padR = 6, padT = 8, padB = 16;
+  const cW = W - padL - padR;
+  const cH = H - padT - padB;
+  const midY = padT + cH / 2;
+  const maxAbs = Math.max(1, ...pnls.map(Math.abs));
+  const yScale = (cH / 2 - 2) / maxAbs;
+  const slotW = cW / allHours.length;
+  const barW = Math.max(4, Math.floor(slotW * 0.65));
+
+  let out = '';
+
+  // Baseline & y-axis
+  out += `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + cH}" stroke="#252525" stroke-width="1"/>`;
+  out += `<line x1="${padL}" y1="${midY}" x2="${padL + cW}" y2="${midY}" stroke="#2d2d2d" stroke-width="1" stroke-dasharray="4,4"/>`;
+  out += `<text x="${padL - 3}" y="${padT + 5}" text-anchor="end" font-size="7" fill="#444">+$${maxAbs.toFixed(0)}</text>`;
+  out += `<text x="${padL - 3}" y="${padT + cH + 4}" text-anchor="end" font-size="7" fill="#444">-$${maxAbs.toFixed(0)}</text>`;
+  out += `<text x="${padL - 3}" y="${midY + 3}" text-anchor="end" font-size="7" fill="#444">$0</text>`;
+
+  // Bars
+  allHours.forEach((h, i) => {
+    const pnl = pnls[i];
+    const cx = padL + i * slotW + slotW / 2;
+    const bx = cx - barW / 2;
+    const bh = Math.max(1, Math.abs(pnl) * yScale);
+    const by = pnl >= 0 ? midY - bh : midY;
+    const color = pnl > 0 ? '#39ff14' : pnl < 0 ? '#ff4444' : '#333';
+    out += `<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${barW}" height="${bh.toFixed(1)}" fill="${color}" opacity="0.78"/>`;
+    // PnL label inside bar (only if tall enough)
+    if (bh > 12) {
+      const sign = pnl > 0 ? '+' : '';
+      const ty = pnl >= 0 ? by + bh / 2 + 3 : by + bh / 2 + 3;
+      out += `<text x="${cx.toFixed(1)}" y="${ty.toFixed(1)}" text-anchor="middle" font-size="6.5" fill="#000" opacity="0.7">${sign}$${Math.abs(pnl).toFixed(0)}</text>`;
+    }
+    // Hour label
+    out += `<text x="${cx.toFixed(1)}" y="${H - 2}" text-anchor="middle" font-size="7" fill="#555">${h < 10 ? '0' + h : h}:00</text>`;
+  });
+
+  // Cumulative line
+  let cum = 0;
+  const pts = [];
+  allHours.forEach((h, i) => {
+    cum += pnls[i];
+    const x = padL + i * slotW + slotW / 2;
+    const y = Math.max(padT + 2, Math.min(padT + cH - 2, midY - cum * yScale * 0.9));
+    pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+  });
+  if (pts.length > 1) {
+    out += `<polyline points="${pts.join(' ')}" fill="none" stroke="#ffffff" stroke-width="1.5" opacity="0.45"/>`;
+  }
+  if (pts.length >= 1) {
+    const [lx, ly] = pts[pts.length - 1].split(',');
+    out += `<circle cx="${lx}" cy="${ly}" r="2.5" fill="#ffffff" opacity="0.6"/>`;
+  }
+
+  svg.innerHTML = out;
+
+  // Update total label
+  if (totalLabel) {
+    const total = pnls.reduce((a, b) => a + b, 0);
+    const sign = total >= 0 ? '+' : '';
+    totalLabel.textContent = `${sign}$${total.toFixed(2)} total`;
+    totalLabel.className = `chart-total-label ${total >= 0 ? 'green' : 'red'}`;
+  }
+}
+
 function updatePnlStat() {
   const unrealized = state.trades.reduce((s, t) => s + t.unrealizedPnl, 0);
   const pnl = unrealized + (state.realizedPnl || 0);
@@ -883,6 +984,7 @@ function updatePnlStat() {
     pphEl.textContent = (pph >= 0 ? "+" : "") + "$" + pph.toFixed(2) + "/hr";
     pphEl.className   = `stat-val ${pph > 0 ? "green" : pph < 0 ? "red" : "dim"}`;
   }
+  updateProfitChart();
 }
 
 // ── Crypto mode (BTC / ETH / SOL) ────────────────────────────────
