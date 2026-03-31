@@ -1528,13 +1528,16 @@ async function _runCryptoCycleInner(asset) {
     // A $1 gap on ETH ($2000) is exactly 0.05% — that's the minimum "meaningful" gap threshold.
     const nearResSmallGap = timeRemaining < 200 && stallGapPct < 0.0005;
 
-    // Mid-window small-gap guard: a tiny actual gap (< 0.10% of price) at 200-600s remaining
+    // Mid-window small-gap guard: a tiny actual gap (< 0.10% of price) at 200-900s remaining
     // is a drift/momentum projection bet, not a gap bet — regardless of confidence level.
     // In a flat market the projected "effective gap" evaporates the moment momentum pauses.
     // HIGH confidence on a $0 gap is the AI overweighting momentum; it is still a coin-flip.
     // Session data: ETH gap=$0 at 275s HIGH conf → -$71.17; ETH Trades 1/3/5 at 270-400s all WRONG DIR.
+    // BTC gap=$0 at 631s HIGH conf +18% edge → entered early before direction confirmed, -$5.68 unrealized.
+    // Upper bound extended from 600s → 900s to close the 600-900s dead zone where longWindowLowConv
+    // hasn't kicked in yet but midWindowSmallGap had already stopped watching.
     // Use gapWatch for one observation cycle: if gap grows to ≥0.10% on re-check, allow entry.
-    const midWindowSmallGap = timeRemaining >= 200 && timeRemaining < 600 &&
+    const midWindowSmallGap = timeRemaining >= 200 && timeRemaining < 900 &&
                               stallGapPct < 0.001;
 
     // SOL large-gap BUY_UP guard: when SOL has just pumped >2% above target on a volume spike,
