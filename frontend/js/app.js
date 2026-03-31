@@ -1369,6 +1369,16 @@ async function _runCryptoCycleInner(asset) {
                                      ((analysis.signal === "BUY_DOWN" && (analysis.momentum ?? 0) > 0.5) ||
                                       (analysis.signal === "BUY_UP"  && (analysis.momentum ?? 0) < -0.5));
 
+    // Near-res gap-flip low-odds filter: gap-flip trades with <250s remaining and entry odds
+    // below 56% are strongly net-negative.  The market is pricing < 56% that the gap flips
+    // in the limited time left — when it's wrong the token collapses to ~$0.03 immediately.
+    // Session data: two ETH BUY_UP losses totaling -$170.89 (48.5%/212s and 54.5%/148s),
+    // both resolved at $0.03.  Neither had the momentum to close the gap before expiry.
+    // A 56% floor still allows confident near-res gap-flips (crowd underpricing an imminent cross).
+    const nearResGapFlipLowOdds = signalAgainstGap &&
+                                   timeRemaining < 250 &&
+                                   entryOdds < 0.56;
+
     // BTC short-window exception: the pump-skeptic crowd-reversion logic breaks down when
     // BTC has a large gap, ≤500s remaining, HIGH confidence and strong edge (≥12%).
     // In these endgame windows the gap physically can't close in time — override pump-skeptic.
@@ -1473,6 +1483,7 @@ async function _runCryptoCycleInner(asset) {
       !btcMediumGapBlocked &&
       !gapFlipMidWindowBlocked &&
       !nearResGapFlipMomOpposed &&
+      !nearResGapFlipLowOdds &&
       !btcMacroVeto &&
       !pumpSkeptic &&
       !stalled &&
@@ -1508,6 +1519,7 @@ async function _runCryptoCycleInner(asset) {
       if (btcMediumGapBlocked) reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
       if (gapFlipMidWindowBlocked) reasons.push(`gap-flip momentum too weak — need ${momNeededToFlip.toFixed(3)}/m to close gap, got ${Math.abs(analysis.momentum ?? 0).toFixed(3)}/m (need ≥50%)`);
       if (nearResGapFlipMomOpposed) reasons.push(`near-res gap-flip blocked — momentum ${(analysis.momentum ?? 0).toFixed(2)}/m opposes ${analysis.signal} flip with only ${timeRemaining}s left`);
+      if (nearResGapFlipLowOdds) reasons.push(`near-res gap-flip low-odds — ${(entryOdds * 100).toFixed(1)}% entry (<56%) with only ${timeRemaining}s left — market disagrees with gap-flip in limited time`);
       if (btcMacroVeto) {
         const mDir = btcMacro.bearCount >= 3 ? "bearish" : "bullish";
         const mCnt = btcMacro.bearCount >= 3 ? btcMacro.bearCount : btcMacro.bullCount;
@@ -1624,7 +1636,14 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   // can fire on a single bad tick even with a large underlying gap intact.  Cap exposure at $25
   // to bound catastrophic stop losses that outweigh the edge (e.g. SOL -$33.53 at 156s).
   const nearResCap = secsForSizing <= 120 ? 25 : Infinity;
-  const amount = Math.min(rawAmount, nearResCap);
+  // Gap-flip size cap: gap-flip trades bet against the current price direction — the token crashes
+  // hard to ~$0.03 when wrong, with no partial recovery.  Cap at $50 to limit worst-case losses
+  // while still allowing meaningful upside on the higher-frequency correct-direction wins.
+  // Session data: -$85.57 and -$85.32 on full-size gap-flip entries; winning gap-flips avg ~$40.
+  const signalAgainstGapSizing = (analysis.signal === "BUY_UP"   && (analysis.gap ?? 0) < 0) ||
+                                  (analysis.signal === "BUY_DOWN" && (analysis.gap ?? 0) > 0);
+  const gapFlipCap = signalAgainstGapSizing ? 50 : Infinity;
+  const amount = Math.min(rawAmount, nearResCap, gapFlipCap);
   if (amount < 0.50) {
     logEntry("dim", `  ↳ <span class="dim">skipped</span> — computed size $${rawAmount.toFixed(2)} < $0.50 min (maxBet=${maxBet} time=${timeFraction.toFixed(2)} odds=${oddsFraction.toFixed(2)} conf=${confidenceFraction})`);
     return;
