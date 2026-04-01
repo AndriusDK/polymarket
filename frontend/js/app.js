@@ -1478,15 +1478,19 @@ async function _runCryptoCycleInner(asset) {
                                       (analysis.signal === "BUY_UP"  && (analysis.momentum ?? 0) < -0.5));
 
     // Near-res gap-flip low-odds filter: gap-flip trades with <300s remaining and entry odds
-    // below 58% are strongly net-negative.  The market is pricing < 58% that the gap flips
-    // in the limited time left — when it's wrong the token collapses to ~$0.03-$0.08 immediately.
-    // Session data: ETH BUY_UP losses at 48.5%/212s, 54.5%/148s, 55%/268s all resolved at $0.03;
-    // ETH BUY_DOWN at 56.5%/94s resolved at $0.08 (min after $0.08).  Threshold raised from
-    // 56% → 58% after the 56.5% case slipped through — need a clear buffer above the boundary.
-    // A 58% floor still allows confident near-res gap-flips (crowd underpricing an imminent cross).
+    // below 72% are strongly net-negative — the gap needs to physically cross target in under
+    // 5 minutes, and the 58–72% range has failed consistently across multiple sessions:
+    //   ETH BUY_UP at 68%/169s  → wrong dir $0.030 (-$30.33)
+    //   SOL BUY_UP at 58.5%/171s → correct dir but stopped, resolved $0.970 (-$21.46)
+    //   ETH BUY_UP at 63.5%/81s  → wrong dir $0.030 (-$21)
+    //   Earlier: ETH losses at 48.5%/212s, 54.5%/148s, 55%/268s, 56.5%/94s all at $0.03-$0.08
+    // Market pricing in the 58–72% range reflects genuine uncertainty about whether the gap
+    // flips in time — when the crowd is that undecided on a gap-flip, we shouldn't bet on it.
+    // Threshold raised: 56% → 58% → 72% as each boundary case surfaced in session data.
+    // Entries at ≥72% odds are still allowed (crowd has high conviction the gap will cross).
     const nearResGapFlipLowOdds = signalAgainstGap &&
                                    timeRemaining < 300 &&
-                                   entryOdds < 0.58;
+                                   entryOdds < 0.72;
 
     // BTC short-window exception: the pump-skeptic crowd-reversion logic breaks down when
     // BTC has a large gap, ≤500s remaining, HIGH confidence and strong edge (≥12%).
@@ -1636,7 +1640,7 @@ async function _runCryptoCycleInner(asset) {
       }
       if (gapFlipMidWindowBlocked) reasons.push(`gap-flip momentum too weak — need ${momNeededToFlip.toFixed(3)}/m to close gap, got ${Math.abs(analysis.momentum ?? 0).toFixed(3)}/m (need ≥50%)`);
       if (nearResGapFlipMomOpposed) reasons.push(`near-res gap-flip blocked — momentum ${(analysis.momentum ?? 0).toFixed(2)}/m opposes ${analysis.signal} flip with only ${timeRemaining}s left`);
-      if (nearResGapFlipLowOdds) reasons.push(`near-res gap-flip low-odds — ${(entryOdds * 100).toFixed(1)}% entry (<56%) with only ${timeRemaining}s left — market disagrees with gap-flip in limited time`);
+      if (nearResGapFlipLowOdds) reasons.push(`near-res gap-flip low-odds — ${(entryOdds * 100).toFixed(1)}% entry (<72%) with only ${timeRemaining}s left — market uncertainty too high for gap-flip in limited time`);
       if (btcMacroVeto) {
         const mDir = btcMacro.bearCount >= 3 ? "bearish" : "bullish";
         const mCnt = btcMacro.bearCount >= 3 ? btcMacro.bearCount : btcMacro.bullCount;
