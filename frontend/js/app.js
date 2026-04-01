@@ -204,6 +204,19 @@ function initDashboard() {
   logEntry("info",
     `Mode: ${c.dryRun ? "DRY RUN" : "⚡ LIVE"}  |  BTC/ETH/SOL 5-min & 15-min  |  Budget $${c.maxDaily}`
   );
+  if (!c.dryRun) {
+    console.log("[LIVE] Bot starting in LIVE mode", {
+      maxDaily: c.maxDaily,
+      btcMode: c.btcMode, btcMaxBet: c.btcMaxBet,
+      ethMode: c.ethMode, ethMaxBet: c.ethMaxBet,
+      solMode: c.solMode, solMaxBet: c.solMaxBet,
+      apiKeyPresent: !!c.polyApiKey,
+      apiSecretPresent: !!c.polyApiSecret,
+      passphrasePresent: !!c.polyPassphrase,
+      privateKeyPresent: !!c.polyPrivateKey,
+      // NOTE: exits hold to resolution — no sell orders are placed on stop-loss/take-profit
+    });
+  }
 
   for (const asset of ["btc", "eth", "sol"]) {
     if (c[`${asset}Mode`]) {
@@ -692,6 +705,22 @@ function closePosition(trade, reason) {
   const idx = state.trades.indexOf(trade);
   if (idx === -1) return;
   state.trades.splice(idx, 1);
+
+  // LIVE MODE NOTE: exits are not sold on-chain — position holds to market resolution.
+  // The P&L shown here reflects the token price at exit trigger, not actual settlement.
+  // Real settlement happens when the market resolves (token → $1 or $0 in your wallet).
+  if (trade.mode === "LIVE") {
+    console.log(`[LIVE] closePosition triggered — NO sell order placed (holds to resolution)`, {
+      reason,
+      asset: trade.type,
+      token_id: trade.tokenId,
+      entryPrice: (trade.entryPrice * 100).toFixed(1) + "%",
+      exitPrice: (trade.currentPrice * 100).toFixed(1) + "%",
+      unrealizedPnl: trade.unrealizedPnl?.toFixed(2),
+      secsLeft: Math.max(0, Math.round((new Date(trade.endDate) - Date.now()) / 1000)),
+      market: trade.question?.slice(0, 60),
+    });
+  }
 
   // Post-close direction tracking: keep subscription alive until market resolves
   const msToEnd = new Date(trade.endDate) - Date.now();
@@ -1831,28 +1860,42 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   startCryptoCountdown();
 
   if (!c.dryRun) {
+    const orderPayload = {
+      token_id:       tokenId,
+      side:           "BUY",
+      amount_usdc:    amount,
+      private_key:    c.polyPrivateKey,
+      api_key:        c.polyApiKey,
+      api_secret:     c.polyApiSecret,
+      api_passphrase: c.polyPassphrase,
+    };
+    console.log(`[LIVE] Placing BUY order`, {
+      token_id: tokenId,
+      asset,
+      amount_usdc: amount,
+      entryOdds: (entryPrice * 100).toFixed(1) + "%",
+      signal: analysis.signal,
+      market: market.question.slice(0, 60),
+    });
     fetch("/trade", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        token_id:       tokenId,
-        side:           "BUY",
-        amount_usdc:    amount,
-        private_key:    c.polyPrivateKey,
-        api_key:        c.polyApiKey,
-        api_secret:     c.polyApiSecret,
-        api_passphrase: c.polyPassphrase,
-      }),
+      body: JSON.stringify(orderPayload),
     })
       .then(r => r.json())
       .then(result => {
         if (result.error) {
+          console.error(`[LIVE] Order FAILED`, result);
           logEntry("warn", `  [LIVE] Order failed: ${result.error}`);
         } else {
+          console.log(`[LIVE] Order CONFIRMED`, result);
           logEntry("info", `  [LIVE] Order confirmed: ${result.orderID ?? result.status ?? JSON.stringify(result)}`);
         }
       })
-      .catch(err => logEntry("warn", `  [LIVE] Order error: ${err.message}`));
+      .catch(err => {
+        console.error(`[LIVE] Order fetch error`, err);
+        logEntry("warn", `  [LIVE] Order error: ${err.message}`);
+      });
   }
 
   state.stats.trades++;
