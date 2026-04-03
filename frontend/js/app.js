@@ -699,6 +699,21 @@ const chainlinkStream = (() => {
   return { connect, disconnect };
 })();
 
+// ── Fill price parsing ───────────────────────────────────────────
+
+// Extract actual fill price from a Polymarket CLOB FOK order response.
+// For BUY: makingAmount = USDC spent, takingAmount = tokens received → price = making/taking
+// For SELL: makingAmount = tokens sold, takingAmount = USDC received → price = taking/making
+function parseFillPrice(result, side) {
+  const making = parseFloat(result.makingAmount);
+  const taking = parseFloat(result.takingAmount);
+  if (making > 0 && taking > 0) {
+    return side === "SELL" ? taking / making : making / taking;
+  }
+  if (result.price != null) return parseFloat(result.price);
+  return null;
+}
+
 // ── Position management ──────────────────────────────────────────
 
 function closePosition(trade, reason) {
@@ -706,20 +721,49 @@ function closePosition(trade, reason) {
   if (idx === -1) return;
   state.trades.splice(idx, 1);
 
-  // LIVE MODE NOTE: exits are not sold on-chain — position holds to market resolution.
-  // The P&L shown here reflects the token price at exit trigger, not actual settlement.
-  // Real settlement happens when the market resolves (token → $1 or $0 in your wallet).
-  if (trade.mode === "LIVE") {
-    console.log(`[LIVE] closePosition triggered — NO sell order placed (holds to resolution)`, {
+  // LIVE MODE: place a SELL order on-chain to exit the position.
+  if (trade.mode === "LIVE" && trade.tokenId && (trade.shares ?? 0) > 0) {
+    const c = state.config;
+    const sellPayload = {
+      token_id:       trade.tokenId,
+      side:           "SELL",
+      amount_usdc:    trade.shares,  // for SELL, amount = shares (tokens), not USDC
+      private_key:    c.polyPrivateKey,
+      api_key:        c.polyApiKey,
+      api_secret:     c.polyApiSecret,
+      api_passphrase: c.polyPassphrase,
+    };
+    console.log(`[LIVE] Placing SELL order`, {
       reason,
-      asset: trade.type,
-      token_id: trade.tokenId,
-      entryPrice: (trade.entryPrice * 100).toFixed(1) + "%",
-      exitPrice: (trade.currentPrice * 100).toFixed(1) + "%",
+      asset:         trade.type,
+      token_id:      trade.tokenId,
+      shares:        trade.shares?.toFixed(4),
+      entryPrice:    (trade.entryPrice * 100).toFixed(1) + "%",
+      currentPrice:  (trade.currentPrice * 100).toFixed(1) + "%",
       unrealizedPnl: trade.unrealizedPnl?.toFixed(2),
-      secsLeft: Math.max(0, Math.round((new Date(trade.endDate) - Date.now()) / 1000)),
-      market: trade.question?.slice(0, 60),
+      secsLeft:      Math.max(0, Math.round((new Date(trade.endDate) - Date.now()) / 1000)),
+      market:        trade.question?.slice(0, 60),
     });
+    fetch("/trade", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(sellPayload),
+    })
+      .then(r => r.json())
+      .then(result => {
+        if (result.error) {
+          console.error(`[LIVE] SELL FAILED`, result);
+          logEntry("warn", `  [LIVE] SELL failed: ${result.error}`);
+        } else {
+          const fillPrice = parseFillPrice(result, "SELL");
+          console.log(`[LIVE] SELL CONFIRMED`, result, fillPrice ? `fill: ${(fillPrice*100).toFixed(1)}%` : "");
+          logEntry("info", `  [LIVE] SELL confirmed: ${result.orderID ?? result.status ?? JSON.stringify(result)}`);
+        }
+      })
+      .catch(err => {
+        console.error(`[LIVE] SELL fetch error`, err);
+        logEntry("warn", `  [LIVE] SELL error: ${err.message}`);
+      });
   }
 
   // Post-close direction tracking: keep subscription alive until market resolves
@@ -1890,6 +1934,23 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
         } else {
           console.log(`[LIVE] Order CONFIRMED`, result);
           logEntry("info", `  [LIVE] Order confirmed: ${result.orderID ?? result.status ?? JSON.stringify(result)}`);
+
+          // Update trade with actual fill price so P&L, stop-loss, trailing stop use real numbers
+          const fillPrice = parseFillPrice(result, "BUY");
+          if (fillPrice && fillPrice > 0 && fillPrice < 1) {
+            const prev = trade.entryPrice;
+            trade.entryPrice  = fillPrice;
+            trade.currentPrice = fillPrice;
+            trade.peakPrice   = fillPrice;
+            trade.shares       = trade.amount / fillPrice;
+            console.log(`[LIVE] Entry price updated from fill: ${(prev*100).toFixed(1)}% → ${(fillPrice*100).toFixed(1)}%`, {
+              shares: trade.shares.toFixed(4),
+              amount: trade.amount.toFixed(2),
+            });
+            logEntry("info", `  [LIVE] Fill price: ${(fillPrice*100).toFixed(1)}% (was ${(prev*100).toFixed(1)}%)`);
+          } else {
+            console.warn(`[LIVE] Could not parse fill price from response`, result);
+          }
         }
       })
       .catch(err => {

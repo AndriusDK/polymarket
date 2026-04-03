@@ -253,6 +253,7 @@ class PolymarketClient:
 
         try:
             from py_clob_client.clob_types import MarketOrderArgs, OrderType
+            from py_clob_client.order_builder.constants import BUY, SELL
         except ImportError:
             raise RuntimeError("py-clob-client is not installed.")
 
@@ -260,7 +261,8 @@ class PolymarketClient:
 
         order_args = MarketOrderArgs(
             token_id=token_id,
-            amount=amount_usdc,
+            amount=amount_usdc,  # USDC for BUY; token shares for SELL
+            side=BUY if side.upper() == "BUY" else SELL,
         )
         signed_order = client.create_market_order(order_args)
         response = client.post_order(signed_order, OrderType.FOK)
