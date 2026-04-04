@@ -533,7 +533,10 @@ const priceStream = (() => {
       if (msg.event_type === "best_bid_ask" || msg.type === "best_bid_ask") {
         const tokenId = msg.asset_id;
         const bid = parseFloat(msg.best_bid ?? msg.bid ?? 0);
-        if (!tokenId || !bid) continue;
+        // Polymarket order books momentarily show best_bid ≈ 0 when no bids are queued.
+        // A bid of <5¢ on a ~50-80% odds token is clearly a stale/empty-book artefact —
+        // using it would spike unrealizedPnl to near -$amount and trigger a phantom stop.
+        if (!tokenId || bid < 0.05) continue;
         let changed = false;
         for (const t of state.trades) {
           if (t.tokenId !== tokenId) continue;
@@ -816,6 +819,28 @@ function closePosition(trade, reason) {
             const fillPrice = parseFillPrice(result, "SELL");
             console.log(`[LIVE] SELL CONFIRMED${label}`, result, fillPrice ? `fill: ${(fillPrice*100).toFixed(1)}%` : "");
             logEntry("info", `  [LIVE] SELL confirmed${label}: ${result.orderID ?? result.status ?? JSON.stringify(result)}`);
+            // Reconcile realized PnL from actual fill price — the snapshot at stop-trigger
+            // time can be based on a stale/thin bid (e.g. bid=1¢ → shows -$4.92 when
+            // actual fill was 58¢ → real loss -$0.66). Update card and session totals.
+            if (fillPrice && fillPrice > 0.05 && trade.shares > 0) {
+              const actualRealized = trade.shares * fillPrice - trade.amount;
+              const delta = actualRealized - trade.realizedPnl;
+              if (Math.abs(delta) > 0.01) {
+                state.realizedPnl = (state.realizedPnl || 0) + delta;
+                trade.realizedPnl = actualRealized;
+                const cardEl = $(`#card-${trade.id}`);
+                if (cardEl) {
+                  const pnlEl = cardEl.querySelector(".btc-closed-pnl");
+                  if (pnlEl) {
+                    const sign = actualRealized >= 0 ? "+" : "";
+                    pnlEl.textContent = `${sign}$${actualRealized.toFixed(2)} REALIZED`;
+                    pnlEl.className = `btc-closed-pnl ${actualRealized >= 0 ? "green" : "red"}`;
+                  }
+                }
+                updatePnlStat();
+                logEntry("info", `  [LIVE] PnL reconciled from fill: $${actualRealized.toFixed(2)} (was $${(actualRealized - delta).toFixed(2)})`);
+              }
+            }
           }
         })
         .catch(err => {
@@ -861,6 +886,7 @@ function closePosition(trade, reason) {
   trade.secsAtClose = Math.max(0, Math.round((new Date(trade.endDate) - Date.now()) / 1000));
 
   const realized = trade.unrealizedPnl;
+  trade.realizedPnl = realized;  // stored so SELL fill reconciliation can update it
   state.realizedPnl = (state.realizedPnl || 0) + realized;
   if (realized > 0) state.wins++; else if (realized < 0) state.losses++;
   state.tradeHistory.push({ ts: Date.now(), pnl: realized, asset: trade.type, reason });
