@@ -1869,10 +1869,10 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   const tokenId    = isUp ? market.upTokenId : market.downTokenId;
 
   // Scale bet size by time remaining — more time = more uncertainty = smaller bet.
-  // Near-resolution arbs (≤90s, HIGH confidence only) get a size premium: the gap is
-  // almost impossible to close and the outcome is near-certain — maximise the edge.
+  // Near-res markets are illiquid: large FOK orders fail and exit slippage is severe.
+  // Use smaller sizes in the final 150s to match available book depth (~$3-5).
   const secsForSizing = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
-  const timeFraction  = secsForSizing <= 90  ? 1.35   // near-resolution arb premium
+  const timeFraction  = secsForSizing <= 150 ? 0.50   // thin book near expiry — keep small
                       : secsForSizing <= 400 ? 1.0
                       : secsForSizing <= 800 ? 0.65
                       : 0.40;
@@ -1890,7 +1890,7 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   // Near-resolution size cap: prediction markets become illiquid in the final 120s and a stop
   // can fire on a single bad tick even with a large underlying gap intact.  Cap exposure at $25
   // to bound catastrophic stop losses that outweigh the edge (e.g. SOL -$33.53 at 156s).
-  const nearResCap = secsForSizing <= 120 ? 25 : Infinity;
+  const nearResCap = secsForSizing <= 150 ? 5 : secsForSizing <= 300 ? 15 : Infinity;
   // Gap-flip size cap: gap-flip trades bet against the current price direction — the token crashes
   // hard to ~$0.03 when wrong, with no partial recovery.  Cap at $50 to limit worst-case losses
   // while still allowing meaningful upside on the higher-frequency correct-direction wins.
