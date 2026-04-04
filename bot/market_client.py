@@ -252,16 +252,34 @@ class PolymarketClient:
             }
 
         try:
-            from py_clob_client.clob_types import MarketOrderArgs, OrderType
+            from py_clob_client.clob_types import MarketOrderArgs, OrderType, BalanceAllowanceParams, AssetType
             from py_clob_client.order_builder.constants import BUY, SELL
         except ImportError:
             raise RuntimeError("py-clob-client is not installed.")
 
         client = self._get_clob_client()
 
+        if side.upper() == "SELL":
+            # Query actual on-chain token balance — takingAmount from buy is approximate
+            try:
+                params = BalanceAllowanceParams(
+                    asset_type=AssetType.CONDITIONAL,
+                    token_id=token_id,
+                    signature_type=0,
+                )
+                bal = client.get_balance_allowance(params=params)
+                actual_shares = float(bal.get("balance", 0)) / 1e6
+                if actual_shares > 0:
+                    logger.info("SELL: using actual token balance %.6f (requested %.6f)", actual_shares, amount_usdc)
+                    amount_usdc = actual_shares
+                else:
+                    logger.warning("SELL: on-chain balance is 0, falling back to requested amount %.6f", amount_usdc)
+            except Exception as e:
+                logger.warning("SELL: could not fetch token balance (%s), using requested amount", e)
+
         order_args = MarketOrderArgs(
             token_id=token_id,
-            amount=amount_usdc,  # USDC for BUY; token shares for SELL
+            amount=amount_usdc,  # USDC for BUY; actual token shares for SELL
             side=BUY if side.upper() == "BUY" else SELL,
         )
         signed_order = client.create_market_order(order_args)
