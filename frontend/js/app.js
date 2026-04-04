@@ -1957,6 +1957,13 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           const idx = state.trades.indexOf(trade);
           if (idx !== -1) state.trades.splice(idx, 1);
           priceStream.unsubscribe(tokenId);
+          // Undo the stats that were charged synchronously
+          state.stats.trades = Math.max(0, state.stats.trades - 1);
+          state.stats.spent  = Math.max(0, state.stats.spent - amount);
+          setStat("trades",    String(state.stats.trades));
+          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          setStat("positions", String(state.trades.length));
           console.error(`[LIVE] Order FAILED — no card created`, result);
           logEntry("warn", `  [LIVE] Order failed: ${result.error}`);
         } else {
@@ -1990,6 +1997,13 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
         const idx = state.trades.indexOf(trade);
         if (idx !== -1) state.trades.splice(idx, 1);
         priceStream.unsubscribe(tokenId);
+        // Undo the stats that were charged synchronously
+        state.stats.trades = Math.max(0, state.stats.trades - 1);
+        state.stats.spent  = Math.max(0, state.stats.spent - amount);
+        setStat("trades",    String(state.stats.trades));
+        setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+        setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+        setStat("positions", String(state.trades.length));
         console.error(`[LIVE] Order fetch error — no card created`, err);
         logEntry("warn", `  [LIVE] Order error: ${err.message}`);
       });
