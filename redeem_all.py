@@ -217,7 +217,11 @@ def main(private_key: str):
         seen_conditions.add(cond_id)
 
         # Redeem both index sets — winning tokens return $1, losing return $0
-        cond_bytes = bytes.fromhex(cond_id.lstrip("0x"))
+        cond_hex = cond_id.lstrip("0x").lower()
+        # Pad to 64 hex chars (32 bytes) if needed
+        cond_hex = cond_hex.zfill(64)
+        cond_bytes = bytes.fromhex(cond_hex)
+        print(f"    conditionId: 0x{cond_hex}")
         print(f"    Redeeming conditionId {cond_id[:16]}...", end=" ", flush=True)
         try:
             tx = ctf.functions.redeemPositions(
