@@ -291,14 +291,48 @@ class PolymarketClient:
             logger.info("%s price limit: %.4f (quoted %.4f, max slippage %.0f%%)",
                         side, price_limit, entry_price, max_slippage * 100)
 
-        order_args = MarketOrderArgs(
-            token_id=token_id,
-            amount=amount_usdc,  # USDC for BUY; actual token shares for SELL
-            side=BUY if side.upper() == "BUY" else SELL,
-            **({"price": price_limit} if price_limit is not None else {}),
-        )
-        signed_order = client.create_market_order(order_args)
-        response = client.post_order(signed_order, OrderType.FOK)
+        # FOK retry strategy: if the full order can't be filled at the price limit,
+        # progressively relax constraints. SELL retries are more aggressive because
+        # holding a losing position is always worse than accepting a slightly worse fill.
+        side_const = BUY if side.upper() == "BUY" else SELL
+        if side.upper() == "BUY":
+            retry_configs = [
+                (amount_usdc, price_limit),   # 1st: with price limit
+                (amount_usdc, None),           # 2nd: drop price limit (accept market)
+                (amount_usdc * 0.5, None),     # 3rd: half size, no limit
+            ]
+        else:
+            retry_configs = [
+                (amount_usdc, price_limit),    # 1st: with price limit
+                (amount_usdc, None),           # 2nd: drop price limit
+                (amount_usdc * 0.75, None),    # 3rd: 75% size, no limit
+                (amount_usdc * 0.5, None),     # 4th: 50% size, no limit (must exit)
+            ]
 
-        logger.info("Order placed: %s", response)
-        return response
+        last_error = None
+        for attempt_num, (attempt_amount, attempt_limit) in enumerate(retry_configs):
+            try:
+                if attempt_num > 0:
+                    logger.info(
+                        "FOK retry #%d: amount=%.4f limit=%s",
+                        attempt_num, attempt_amount, attempt_limit,
+                    )
+                order_args = MarketOrderArgs(
+                    token_id=token_id,
+                    amount=attempt_amount,
+                    side=side_const,
+                    **({"price": attempt_limit} if attempt_limit is not None else {}),
+                )
+                signed_order = client.create_market_order(order_args)
+                response = client.post_order(signed_order, OrderType.FOK)
+                logger.info("Order placed: %s", response)
+                return response
+            except Exception as e:
+                err_str = str(e).lower()
+                if "fully filled" in err_str or "fok" in err_str:
+                    last_error = e
+                    logger.warning("FOK attempt #%d failed: %s", attempt_num, e)
+                    continue
+                raise  # non-FOK error, propagate immediately
+
+        raise last_error  # all retries exhausted
