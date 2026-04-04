@@ -16,7 +16,13 @@ NEG_RISK_ADAPTER      = "0xd91E80cF2EA7be683d6e2C87B9DaAe82D2Beb9a8"
 # USDC on Polygon (native USDC — not bridged USDC.e)
 USDC = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
 
-POLYGON_RPC = "https://polygon-rpc.com"
+POLYGON_RPCS = [
+    "https://rpc.ankr.com/polygon",
+    "https://polygon.llamarpc.com",
+    "https://polygon-bor-rpc.publicnode.com",
+    "https://polygon-rpc.com",
+    "https://1rpc.io/matic",
+]
 
 ERC20_APPROVE_ABI = [
     {
@@ -59,9 +65,18 @@ def approve(private_key: str):
         print("ERROR: web3 not installed. Run: pip install web3")
         sys.exit(1)
 
-    w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
-    if not w3.is_connected():
-        print("ERROR: Could not connect to Polygon RPC")
+    w3 = None
+    for rpc in POLYGON_RPCS:
+        try:
+            candidate = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 8}))
+            if candidate.is_connected():
+                print(f"Connected via {rpc}")
+                w3 = candidate
+                break
+        except Exception:
+            continue
+    if w3 is None:
+        print("ERROR: Could not connect to any Polygon RPC")
         sys.exit(1)
 
     account = Account.from_key(private_key)
