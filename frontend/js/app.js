@@ -756,6 +756,7 @@ function closePosition(trade, reason) {
       token_id:       trade.tokenId,
       side:           "SELL",
       amount_usdc:    trade.shares,  // for SELL, amount = shares (tokens), not USDC
+      entry_price:    trade.currentPrice,  // sell limit: don't accept more than 8% below current
       private_key:    c.polyPrivateKey,
       api_key:        c.polyApiKey,
       api_secret:     c.polyApiSecret,
@@ -1939,6 +1940,7 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
       token_id:       tokenId,
       side:           "BUY",
       amount_usdc:    amount,
+      entry_price:    entryPrice,   // used server-side to cap slippage
       private_key:    c.polyPrivateKey,
       api_key:        c.polyApiKey,
       api_secret:     c.polyApiSecret,

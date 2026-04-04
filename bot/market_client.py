@@ -226,6 +226,8 @@ class PolymarketClient:
         side: str,  # "BUY" or "SELL"
         amount_usdc: float,
         dry_run: bool = True,
+        entry_price: float | None = None,
+        max_slippage: float = 0.08,  # reject fills more than 8% worse than quoted price
     ) -> dict:
         """
         Place a market order.
@@ -277,10 +279,23 @@ class PolymarketClient:
             except Exception as e:
                 logger.warning("SELL: could not fetch token balance (%s), using requested amount", e)
 
+        # Price limit: cap slippage so we get "no match" instead of a terrible fill.
+        # BUY limit  = entry_price + max_slippage  (don't pay more than this)
+        # SELL limit = entry_price - max_slippage  (don't accept less than this)
+        price_limit = None
+        if entry_price is not None and 0 < entry_price < 1:
+            if side.upper() == "BUY":
+                price_limit = round(min(entry_price + max_slippage, 0.97), 4)
+            else:
+                price_limit = round(max(entry_price - max_slippage, 0.03), 4)
+            logger.info("%s price limit: %.4f (quoted %.4f, max slippage %.0f%%)",
+                        side, price_limit, entry_price, max_slippage * 100)
+
         order_args = MarketOrderArgs(
             token_id=token_id,
             amount=amount_usdc,  # USDC for BUY; actual token shares for SELL
             side=BUY if side.upper() == "BUY" else SELL,
+            **({"price": price_limit} if price_limit is not None else {}),
         )
         signed_order = client.create_market_order(order_args)
         response = client.post_order(signed_order, OrderType.FOK)
