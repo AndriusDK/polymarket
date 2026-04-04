@@ -20,8 +20,14 @@ POLYGON_RPCS = [
     "https://rpc.ankr.com/polygon",
     "https://polygon.llamarpc.com",
     "https://polygon-bor-rpc.publicnode.com",
-    "https://polygon-rpc.com",
+    "https://polygon.meowrpc.com",
+    "https://polygon.drpc.org",
+    "https://polygon.gateway.tenderly.co",
+    "https://gateway.tenderly.co/public/polygon",
     "https://1rpc.io/matic",
+    "https://polygon-rpc.com",
+    "https://endpoints.omniatech.io/v1/matic/mainnet/public",
+    "https://matic-mainnet.chainstacklabs.com",
 ]
 
 ERC20_APPROVE_ABI = [
