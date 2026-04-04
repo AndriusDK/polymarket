@@ -132,7 +132,39 @@ def approve(private_key: str):
             print(f"✗ FAILED (tx: {tx_hash.hex()})")
         nonce += 1
 
-    print("\nAll approvals done. The bot can now place orders.")
+    print("\nAll USDC.e approvals done.\n")
+
+    # ── ERC1155 setApprovalForAll (needed for SELL orders) ──
+    print("Setting ERC1155 approvals (required for SELL orders)...")
+    CTF_TOKEN = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+    ERC1155_ABI = [
+        {"name": "setApprovalForAll", "type": "function", "inputs": [{"name": "operator", "type": "address"}, {"name": "approved", "type": "bool"}], "outputs": [], "stateMutability": "nonpayable"},
+        {"name": "isApprovedForAll",  "type": "function", "inputs": [{"name": "account", "type": "address"}, {"name": "operator", "type": "address"}], "outputs": [{"name": "", "type": "bool"}], "stateMutability": "view"},
+    ]
+    ctf = w3.eth.contract(address=Web3.to_checksum_address(CTF_TOKEN), abi=ERC1155_ABI)
+    for name, addr in contracts_to_approve:
+        cs = Web3.to_checksum_address(addr)
+        if ctf.functions.isApprovedForAll(wallet, cs).call():
+            print(f"✓ {name}: ERC1155 already approved")
+            continue
+        print(f"  Setting ERC1155 approval for {name}...", end=" ", flush=True)
+        tx = ctf.functions.setApprovalForAll(cs, True).build_transaction({
+            "from":     wallet,
+            "nonce":    nonce,
+            "gas":      100_000,
+            "gasPrice": w3.eth.gas_price,
+            "chainId":  137,
+        })
+        signed  = w3.eth.account.sign_transaction(tx, private_key)
+        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        if receipt.status == 1:
+            print(f"✓ confirmed (tx: {tx_hash.hex()})")
+        else:
+            print(f"✗ FAILED (tx: {tx_hash.hex()})")
+        nonce += 1
+
+    print("\nAll approvals done. The bot can now place BUY and SELL orders.")
 
 
 if __name__ == "__main__":
