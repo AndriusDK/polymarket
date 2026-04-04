@@ -177,18 +177,25 @@ def main(private_key: str):
     seen_conditions = set()
 
     for pos in positions:
-        token_id  = str(pos.get("asset_id") or pos.get("token_id") or pos.get("tokenId") or "")
+        token_id  = str(pos.get("asset") or pos.get("asset_id") or pos.get("token_id") or "")
         cond_id   = pos.get("conditionId") or pos.get("condition_id") or ""
         market    = pos.get("title") or pos.get("market") or token_id[:20] + "..."
+        redeemable = pos.get("redeemable", True)
 
         if not token_id:
+            print(f"  SKIP (no token_id in: {list(pos.keys())})")
+            continue
+
+        if not redeemable:
+            print(f"  SKIP {market[:50]} — not yet redeemable")
             continue
 
         # Check on-chain balance
         try:
             balance = ctf.functions.balanceOf(wallet, int(token_id)).call()
-        except Exception:
-            balance = 0
+        except Exception as e:
+            print(f"  SKIP {market[:50]} — balance check failed: {e}")
+            continue
 
         if balance == 0:
             print(f"  SKIP {market[:50]} — balance 0")
