@@ -38,7 +38,13 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path.startswith(PROXY_PREFIX):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+        elif self.path.startswith(PROXY_PREFIX):
             self._proxy_gamma()
         else:
             super().do_GET()
