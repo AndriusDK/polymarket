@@ -214,8 +214,30 @@ function initDashboard() {
       apiSecretPresent: !!c.polyApiSecret,
       passphrasePresent: !!c.polyPassphrase,
       privateKeyPresent: !!c.polyPrivateKey,
-      // NOTE: exits hold to resolution — no sell orders are placed on stop-loss/take-profit
     });
+
+    // Check that the trade server (server.py) is reachable before any orders fire.
+    fetch("/health", { method: "GET" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(() => {
+        logEntry("info", "  ✓ Trade server online — live orders ready");
+        console.log("[LIVE] Trade server health check passed");
+      })
+      .catch(() => {
+        const msg = "⚠ TRADE SERVER OFFLINE — live orders will fail! " +
+                    "SSH in and run: cd /var/www/html/polymarket && " +
+                    "nohup /var/www/html/polymarket/venv/bin/python3 server.py &";
+        logEntry("warn", msg);
+        console.error("[LIVE] Trade server health check FAILED — server.py is not running");
+        // Show a persistent alert so it's impossible to miss
+        setTimeout(() => alert(
+          "⚠️ TRADE SERVER OFFLINE\n\n" +
+          "Live orders will silently fail.\n\n" +
+          "SSH into your server and run:\n\n" +
+          "cd /var/www/html/polymarket\n" +
+          "nohup /var/www/html/polymarket/venv/bin/python3 server.py &"
+        ), 500);
+      });
   }
 
   for (const asset of ["btc", "eth", "sol"]) {
