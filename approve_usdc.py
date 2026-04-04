@@ -13,8 +13,9 @@ CTF_EXCHANGE          = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
 NEG_RISK_CTF_EXCHANGE = "0xC5d563A36AE78145C45a50134d48A1215220f80a"
 NEG_RISK_ADAPTER      = "0xd91E80cF2EA7be683d6e2C87B9DaAe82D2Beb9a8"
 
-# USDC on Polygon (native USDC — not bridged USDC.e)
-USDC = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
+# Polymarket uses USDC.e (bridged USDC) — NOT native USDC
+# py-clob-client config.py confirms: collateral = 0x2791Bca1...
+USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 
 POLYGON_RPCS = [
     "https://rpc.ankr.com/polygon",
@@ -95,16 +96,8 @@ def approve(private_key: str):
     print(f"USDC balance: {balance / 1e6:.2f} USDC")
 
     if balance == 0:
-        print("\nWARNING: Wallet has 0 native USDC (0x3c499c...). Checking USDC.e...")
-        USDCE = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
-        usdce = w3.eth.contract(address=Web3.to_checksum_address(USDCE), abi=ERC20_APPROVE_ABI)
-        bal_e = usdce.functions.balanceOf(wallet).call()
-        print(f"USDC.e balance: {bal_e / 1e6:.2f} USDC.e")
-        if bal_e > 0:
-            print("You have USDC.e (bridged). Polymarket needs native USDC.")
-            print("Swap USDC.e → USDC on Polygon via https://app.uniswap.org or similar.")
-        else:
-            print("No USDC found. Deposit USDC to your wallet first.")
+        print("\nERROR: Wallet has 0 USDC.e. Polymarket requires USDC.e (bridged USDC).")
+        print("Swap your native USDC → USDC.e on https://app.1inch.io (Polygon network).")
         sys.exit(1)
 
     contracts_to_approve = [
