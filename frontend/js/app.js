@@ -773,26 +773,43 @@ function closePosition(trade, reason) {
       secsLeft:      Math.max(0, Math.round((new Date(trade.endDate) - Date.now()) / 1000)),
       market:        trade.question?.slice(0, 60),
     });
-    fetch("/trade", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify(sellPayload),
-    })
-      .then(r => r.json())
-      .then(result => {
-        if (result.error) {
-          console.error(`[LIVE] SELL FAILED`, result);
-          logEntry("warn", `  [LIVE] SELL failed: ${result.error}`);
-        } else {
-          const fillPrice = parseFillPrice(result, "SELL");
-          console.log(`[LIVE] SELL CONFIRMED`, result, fillPrice ? `fill: ${(fillPrice*100).toFixed(1)}%` : "");
-          logEntry("info", `  [LIVE] SELL confirmed: ${result.orderID ?? result.status ?? JSON.stringify(result)}`);
-        }
+    // SELL retry: server does FOK retries internally; if ALL server retries fail,
+    // retry from the frontend after a short delay, dropping price limit on 2nd+ attempt.
+    const attemptSell = (payload, attempt) => {
+      const label = attempt === 0 ? "" : ` (retry #${attempt})`;
+      fetch("/trade", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(payload),
       })
-      .catch(err => {
-        console.error(`[LIVE] SELL fetch error`, err);
-        logEntry("warn", `  [LIVE] SELL error: ${err.message}`);
-      });
+        .then(r => r.json())
+        .then(result => {
+          if (result.error) {
+            console.error(`[LIVE] SELL FAILED${label}`, result);
+            logEntry("warn", `  [LIVE] SELL failed${label}: ${result.error}`);
+            if (attempt < 2) {
+              const delay = (attempt + 1) * 2000;
+              logEntry("warn", `  [LIVE] SELL retry in ${delay / 1000}s (no price limit)…`);
+              setTimeout(() => {
+                // Drop price limit on retry — must exit at any price
+                const retryPayload = { ...payload, entry_price: undefined };
+                attemptSell(retryPayload, attempt + 1);
+              }, delay);
+            } else {
+              logEntry("warn", `  [LIVE] SELL gave up after ${attempt + 1} attempts — position may still be open`);
+            }
+          } else {
+            const fillPrice = parseFillPrice(result, "SELL");
+            console.log(`[LIVE] SELL CONFIRMED${label}`, result, fillPrice ? `fill: ${(fillPrice*100).toFixed(1)}%` : "");
+            logEntry("info", `  [LIVE] SELL confirmed${label}: ${result.orderID ?? result.status ?? JSON.stringify(result)}`);
+          }
+        })
+        .catch(err => {
+          console.error(`[LIVE] SELL fetch error${label}`, err);
+          logEntry("warn", `  [LIVE] SELL error${label}: ${err.message}`);
+        });
+    };
+    attemptSell(sellPayload, 0);
   }
 
   // Post-close direction tracking: keep subscription alive until market resolves
@@ -1646,8 +1663,9 @@ async function _runCryptoCycleInner(asset) {
     // Upper bound extended from 600s → 900s to close the 600-900s dead zone where longWindowLowConv
     // hasn't kicked in yet but midWindowSmallGap had already stopped watching.
     // Use gapWatch for one observation cycle: if gap grows to ≥0.10% on re-check, allow entry.
+    const midGapThreshold = analysis.confidence === "HIGH" ? 0.0005 : 0.001;
     const midWindowSmallGap = timeRemaining >= 200 && timeRemaining < 900 &&
-                              stallGapPct < 0.001;
+                              stallGapPct < midGapThreshold;
 
     // SOL large-gap BUY_UP guard: when SOL has just pumped >2% above target on a volume spike,
     // the position is priced for perfection — the spike reverses and the UP token crashes.
