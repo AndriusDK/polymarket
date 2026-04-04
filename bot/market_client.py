@@ -227,7 +227,7 @@ class PolymarketClient:
         amount_usdc: float,
         dry_run: bool = True,
         entry_price: float | None = None,
-        max_slippage: float = 0.08,  # reject fills more than 8% worse than quoted price
+        max_slippage: float = 0.05,  # reject fills more than 5% worse than quoted price
     ) -> dict:
         """
         Place a market order.
@@ -292,21 +292,27 @@ class PolymarketClient:
                         side, price_limit, entry_price, max_slippage * 100)
 
         # FOK retry strategy: if the full order can't be filled at the price limit,
-        # progressively relax constraints. SELL retries are more aggressive because
-        # holding a losing position is always worse than accepting a slightly worse fill.
+        # progressively widen the limit — never drop it entirely on SELL to avoid
+        # filling at catastrophically low prices (e.g. stop fires at 53%, fill at 29%).
         side_const = BUY if side.upper() == "BUY" else SELL
         if side.upper() == "BUY":
             retry_configs = [
-                (amount_usdc, price_limit),   # 1st: with price limit
-                (amount_usdc, None),           # 2nd: drop price limit (accept market)
-                (amount_usdc * 0.5, None),     # 3rd: half size, no limit
+                (amount_usdc, price_limit),            # 1st: tight limit
+                (amount_usdc, None),                   # 2nd: no limit (BUY: worse fill ok)
+                (amount_usdc * 0.5, None),             # 3rd: half size, no limit
             ]
         else:
+            # SELL: progressively widen the floor — never go completely unlimited
+            # to avoid exit fills at near-zero prices in thin books.
+            def _sell_limit(pct_below):
+                if entry_price is None:
+                    return None
+                return round(max(entry_price - pct_below, 0.03), 4)
             retry_configs = [
-                (amount_usdc, price_limit),    # 1st: with price limit
-                (amount_usdc, None),           # 2nd: drop price limit
-                (amount_usdc * 0.75, None),    # 3rd: 75% size, no limit
-                (amount_usdc * 0.5, None),     # 4th: 50% size, no limit (must exit)
+                (amount_usdc,        price_limit),          # 1st: -8%  floor
+                (amount_usdc,        _sell_limit(0.18)),    # 2nd: -18% floor
+                (amount_usdc * 0.75, _sell_limit(0.30)),    # 3rd: -30% floor, 75% size
+                (amount_usdc * 0.5,  _sell_limit(0.40)),    # 4th: -40% floor, 50% size
             ]
 
         last_error = None
