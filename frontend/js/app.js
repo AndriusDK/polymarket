@@ -1921,11 +1921,13 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   };
 
   state.trades.push(trade);
-  addCryptoCard(trade);
   priceStream.subscribe(tokenId);
-  startCryptoCountdown();
 
-  if (!c.dryRun) {
+  if (c.dryRun) {
+    // Dry run: card appears immediately (no real order to wait for)
+    addCryptoCard(trade);
+    startCryptoCountdown();
+  } else {
     const orderPayload = {
       token_id:       tokenId,
       side:           "BUY",
@@ -1951,19 +1953,24 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
       .then(r => r.json())
       .then(result => {
         if (result.error) {
-          console.error(`[LIVE] Order FAILED`, result);
+          // Order failed — remove from state, no card shown
+          const idx = state.trades.indexOf(trade);
+          if (idx !== -1) state.trades.splice(idx, 1);
+          priceStream.unsubscribe(tokenId);
+          console.error(`[LIVE] Order FAILED — no card created`, result);
           logEntry("warn", `  [LIVE] Order failed: ${result.error}`);
         } else {
+          // Order confirmed — now show the card
           console.log(`[LIVE] Order CONFIRMED`, result);
           logEntry("info", `  [LIVE] Order confirmed: ${result.orderID ?? result.status ?? JSON.stringify(result)}`);
 
-          // Update trade with actual fill price so P&L, stop-loss, trailing stop use real numbers
+          // Update with actual fill price before card renders
           const fillPrice = parseFillPrice(result, "BUY");
           if (fillPrice && fillPrice > 0 && fillPrice < 1) {
             const prev = trade.entryPrice;
-            trade.entryPrice  = fillPrice;
+            trade.entryPrice   = fillPrice;
             trade.currentPrice = fillPrice;
-            trade.peakPrice   = fillPrice;
+            trade.peakPrice    = fillPrice;
             trade.shares       = trade.amount / fillPrice;
             console.log(`[LIVE] Entry price updated from fill: ${(prev*100).toFixed(1)}% → ${(fillPrice*100).toFixed(1)}%`, {
               shares: trade.shares.toFixed(4),
@@ -1973,10 +1980,17 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           } else {
             console.warn(`[LIVE] Could not parse fill price from response`, result);
           }
+
+          addCryptoCard(trade);
+          startCryptoCountdown();
         }
       })
       .catch(err => {
-        console.error(`[LIVE] Order fetch error`, err);
+        // Network error — remove from state, no card
+        const idx = state.trades.indexOf(trade);
+        if (idx !== -1) state.trades.splice(idx, 1);
+        priceStream.unsubscribe(tokenId);
+        console.error(`[LIVE] Order fetch error — no card created`, err);
         logEntry("warn", `  [LIVE] Order error: ${err.message}`);
       });
   }
