@@ -547,6 +547,29 @@
   text-shadow: 0 0 8px var(--cyan);
 }
 
+/* ── Manual sell button ── */
+.manual-sell-btn {
+  font-size: 9px;
+  font-family: inherit;
+  letter-spacing: 1px;
+  color: var(--red);
+  background: rgba(255, 45, 45, 0.1);
+  border: 1px solid rgba(255, 45, 45, 0.3);
+  border-radius: 3px;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+.manual-sell-btn:hover:not(:disabled) {
+  background: rgba(255, 45, 45, 0.22);
+  border-color: var(--red);
+}
+.manual-sell-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* ── Closed (audit) cards ── */
 .btc-card.closed-win,
 .btc-card.closed-loss {

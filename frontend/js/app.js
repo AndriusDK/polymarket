@@ -428,11 +428,25 @@ function addCryptoCard(trade) {
     <div class="btc-card-foot">
       <span>${ticker} $${priceFmt}&nbsp; vs &nbsp;target $${targetFmt}
       &nbsp;|&nbsp; Gap: <span class="${gapClass}">${gapSign}$${gapFmt}</span></span>
-      <a href="${trade.marketUrl}" target="_blank" rel="noopener" class="btc-market-link">↗ POLYMARKET</a>
+      <div style="display:flex;gap:10px;align-items:center">
+        ${trade.mode === "LIVE" ? `<button class="manual-sell-btn" data-id="${trade.id}" title="Sell now at market price">⬛ SELL NOW</button>` : ""}
+        <a href="${trade.marketUrl}" target="_blank" rel="noopener" class="btc-market-link">↗ POLYMARKET</a>
+      </div>
     </div>
   `;
 
   cards.insertBefore(div, cards.firstChild);
+
+  // Wire up manual sell button
+  const sellBtn = div.querySelector(".manual-sell-btn");
+  if (sellBtn) {
+    sellBtn.addEventListener("click", () => {
+      if (!confirm(`Sell ${trade.type?.toUpperCase()} position now at market price?\n\nCurrent: ${(trade.currentPrice * 100).toFixed(1)}%  |  Unrealized: $${(trade.unrealizedPnl ?? 0).toFixed(2)}`)) return;
+      sellBtn.disabled = true;
+      sellBtn.textContent = "SELLING…";
+      closePosition(trade, "MANUAL");
+    });
+  }
 }
 
 const addBtcCard = addCryptoCard;
@@ -1532,8 +1546,8 @@ async function _runCryptoCycleInner(asset) {
     // BTC is stricter: requires ≥58% odds with >900s remaining (volatility is harder to
     // predict over long windows and BTC gaps rarely flip in 5-min windows).
     const longWindowLowConv = asset === "btc"
-      ? (timeRemaining > 900 && entryOdds < 0.58)
-      : (timeRemaining > 800 && entryOdds < 0.55);
+      ? (timeRemaining > 900 && entryOdds < 0.55)
+      : (timeRemaining > 800 && entryOdds < 0.52);
 
     // BTC mid-window minimum odds guard: 50-54.9% BTC entries with >250s remaining are
     // consistently net-negative (-$19.31 at 250s, -$26.24 at 300s in session data).
@@ -1544,13 +1558,13 @@ async function _runCryptoCycleInner(asset) {
     const btcMidWindowLowOdds = asset === "btc" &&
                                  timeRemaining > 250 &&
                                  entryOdds >= 0.50 &&
-                                 entryOdds < 0.55 &&
-                                 !(analysis.confidence === "HIGH" && analysis.absEdge >= 0.12);
+                                 entryOdds < 0.52 &&
+                                 !(analysis.confidence === "HIGH" && analysis.absEdge >= 0.10);
 
     // Short-window MEDIUM guard: <120s left is high-volatility endgame territory.
     // A single price candle can flip everything — only HIGH confidence is worth the risk.
     // 120-200s MEDIUM signals with adequate market odds have sufficient time buffer.
-    const shortWindowMedium = timeRemaining < 120 && analysis.confidence !== "HIGH";
+    const shortWindowMedium = timeRemaining < 90 && analysis.confidence !== "HIGH";
 
     // SOL mid-window MEDIUM guard: SOL has higher intra-candle volatility than ETH/BTC.
     // Session data shows MEDIUM-confidence SOL entries with >400s remaining stop out in 1-3 min
@@ -1558,8 +1572,8 @@ async function _runCryptoCycleInner(asset) {
     // to ensure the crowd signal is strong enough to offset SOL's whipsaw risk.
     const solMediumLongWindow = asset === "sol" &&
                                 analysis.confidence === "MEDIUM" &&
-                                timeRemaining > 400 &&
-                                entryOdds < 0.60;
+                                timeRemaining > 600 &&
+                                entryOdds < 0.57;
 
     // BTC gap-flip filter: MEDIUM confidence gap-flip bets on BTC are net-negative in two cases:
     // (1) gap > 800pts — rarely flip in the window; (2) entry odds < 55% with any gap size —
