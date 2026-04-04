@@ -292,14 +292,17 @@ class PolymarketClient:
                         side, price_limit, entry_price, max_slippage * 100)
 
         # FOK retry strategy: if the full order can't be filled at the price limit,
-        # progressively widen the limit — never drop it entirely on SELL to avoid
-        # filling at catastrophically low prices (e.g. stop fires at 53%, fill at 29%).
+        # progressively widen the limit — never drop it entirely to avoid fills at
+        # catastrophically bad prices (e.g. BUY at 81% quote → fills at 98% on retry).
         side_const = BUY if side.upper() == "BUY" else SELL
         if side.upper() == "BUY":
+            # Hard cap: never pay more than entry + 10%, absolute max 90%.
+            # At 90%+ the risk/reward collapses — 10% left to make vs 90% to lose.
+            hard_cap = round(min((entry_price or 0.80) + 0.10, 0.90), 4)
             retry_configs = [
-                (amount_usdc, price_limit),            # 1st: tight limit
-                (amount_usdc, None),                   # 2nd: no limit (BUY: worse fill ok)
-                (amount_usdc * 0.5, None),             # 3rd: half size, no limit
+                (amount_usdc,        price_limit),  # 1st: entry + 5%
+                (amount_usdc,        hard_cap),     # 2nd: entry + 10%, max 90%
+                (amount_usdc * 0.5,  hard_cap),     # 3rd: half size, same cap
             ]
         else:
             # SELL: progressively widen the floor — never go completely unlimited
