@@ -739,6 +739,12 @@ function parseFillPrice(result, side) {
 // ── Position management ──────────────────────────────────────────
 
 function closePosition(trade, reason) {
+  // Don't exit a live position before the BUY has confirmed on-chain —
+  // tokens don't exist yet so the SELL will fail with balance: 0.
+  if (trade.mode === "LIVE" && !trade.confirmed) {
+    console.warn(`[LIVE] closePosition blocked — BUY not yet confirmed (reason: ${reason})`);
+    return;
+  }
   const idx = state.trades.indexOf(trade);
   if (idx === -1) return;
   state.trades.splice(idx, 1);
@@ -1902,6 +1908,7 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     mode:          c.dryRun ? "SIM" : "LIVE",
     type:          asset,
     endDate:       market.endDate,
+    confirmed:     c.dryRun,  // live trades stay false until BUY confirms on-chain
     spot,
     priceToBeat,
     gap:             analysis.gap,
@@ -1968,6 +1975,7 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           logEntry("warn", `  [LIVE] Order failed: ${result.error}`);
         } else {
           // Order confirmed — now show the card
+          trade.confirmed = true;
           console.log(`[LIVE] Order CONFIRMED`, result);
           logEntry("info", `  [LIVE] Order confirmed: ${result.orderID ?? result.status ?? JSON.stringify(result)}`);
 
