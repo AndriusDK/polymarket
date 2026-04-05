@@ -1542,6 +1542,21 @@ async function _runCryptoCycleInner(asset) {
       continue;
     }
 
+    // Volume floor — thin books cause massive fill slippage (e.g. SOL $800 vol → 71.5% → 16.8%).
+    // Require at least $2k total volume before calling AI; SOL/XRP 5-min markets routinely land
+    // below this and almost always produce BAD FILL losses even on immediate exit.
+    // Also saves AI tokens on clearly untradeble markets.
+    {
+      const minVol    = c.minEntryVolume ?? 2000;
+      const marketVol = market.volume ?? 0;
+      if (marketVol < minVol) {
+        const snap = state[asset].analyzed.get(market.conditionId);
+        if (snap) state[asset].analyzed.set(market.conditionId, snap);
+        logEntry("dim", `  → <span class="amber">thin market</span> — vol $${marketVol.toFixed(0)} < $${minVol.toFixed(0)} floor — skipping (saves AI tokens)`);
+        continue;
+      }
+    }
+
     // Precompute maxMovement for post-analysis crossing check.
     // Floor: 0.1% of spot/min avoids underestimating movement during calm 1-min candles.
     const recentRange = candles.slice(-3).reduce((mx, c) => Math.max(mx, c.high - c.low), 0);
@@ -1654,6 +1669,19 @@ async function _runCryptoCycleInner(asset) {
                                 analysis.confidence === "MEDIUM" &&
                                 timeRemaining > 600 &&
                                 entryOdds < 0.57;
+
+    // BTC near-coin-flip block: entries in the 46–54% odds range are essentially coin-flips for BTC.
+    // At these odds the AI's expressed HIGH confidence is unreliable — BTC is driven by macro and
+    // momentum factors that 5-min candles can't fully resolve, making 50% real uncertainty.
+    // Session evidence: BTC BUY_DOWN at 49.5–51% with HIGH conf resolved $0.06 (UP won) repeatedly.
+    // The current btcMidWindowLowOdds guard allows HIGH conf + ≥10% edge — but at 50% odds, a 10%
+    // edge claim simply means the AI says 60% vs 50% market, which is within its error range.
+    // Require ≥18% edge for coin-flip zone entries — only enter if the AI sees a genuinely strong
+    // directional signal (e.g. huge gap + strong momentum + volume spike all aligned).
+    const btcCoinFlipBlocked = asset === "btc" &&
+                               entryOdds >= 0.46 &&
+                               entryOdds <= 0.54 &&
+                               !(analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= 0.18);
 
     // BTC gap-flip filter: MEDIUM confidence gap-flip bets on BTC are net-negative in two cases:
     // (1) gap > 800pts — rarely flip in the window; (2) entry odds < 55% with any gap size —
@@ -1837,6 +1865,7 @@ async function _runCryptoCycleInner(asset) {
       crossable &&
       !longWindowLowConv &&
       !btcMidWindowLowOdds &&
+      !btcCoinFlipBlocked &&
       !shortWindowMedium &&
       !solMediumLongWindow &&
       !btcMediumGapBlocked &&
@@ -1875,6 +1904,8 @@ async function _runCryptoCycleInner(asset) {
       if (!crossable) reasons.push(`gap $${Math.abs(gap).toFixed(pd)} too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})`);
       if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥${asset === "btc" ? "60" : "55"}% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
       if (btcMidWindowLowOdds) reasons.push(`BTC mid-window low odds — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥55% or HIGH conf + ≥12% edge (crowd reversion signal)`);
+      if (btcCoinFlipBlocked) reasons.push(`BTC coin-flip zone — ${(entryOdds * 100).toFixed(1)}% is near 50/50; need HIGH conf + ≥18% edge to enter (AI overconfidence risk at these odds, session evidence)`);
+
       if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM (<120s)`);
       if (solMediumLongWindow) reasons.push(`SOL mid-window MEDIUM — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥60% (SOL whipsaw risk too high for MEDIUM conviction)`);
       if (btcMediumGapBlocked) {
@@ -2012,8 +2043,8 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
                                   (analysis.signal === "BUY_DOWN" && (analysis.gap ?? 0) > 0);
   const gapFlipCap = signalAgainstGapSizing ? 50 : Infinity;
   const amount = Math.min(rawAmount, nearResCap, gapFlipCap);
-  if (amount < 0.50) {
-    logEntry("dim", `  ↳ <span class="dim">skipped</span> — computed size $${rawAmount.toFixed(2)} < $0.50 min (maxBet=${maxBet} time=${timeFraction.toFixed(2)} odds=${oddsFraction.toFixed(2)} conf=${confidenceFraction})`);
+  if (amount < 1.00) {
+    logEntry("dim", `  ↳ <span class="dim">skipped</span> — computed size $${amount.toFixed(2)} < $1.00 Polymarket minimum (maxBet=${maxBet} time=${timeFraction.toFixed(2)} odds=${oddsFraction.toFixed(2)} conf=${confidenceFraction})`);
     return;
   }
 
