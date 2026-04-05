@@ -1422,6 +1422,8 @@ async function _runCryptoCycleInner(asset) {
       state[asset].gapPending.set(market.conditionId, {
         endDateMs:            new Date(market.endDate).getTime(),
         chainlinkPriceToBeat: state.chainlinkPrices[asset] ?? null,
+        firstSeenAt:          Date.now(),
+        firstSeenVolume:      market.volume ?? 0,
       });
     }
 
@@ -1498,6 +1500,22 @@ async function _runCryptoCycleInner(asset) {
         }
       }
       continue;
+    }
+
+    // Oracle observation gate — when a market is brand-new AND the gap is tiny (<0.2%),
+    // the Chainlink price-to-beat may not have been published yet (typical 1-2 min lag on
+    // new windows).  Deferring the AI call until volume picks up ($200+ delta) OR the market
+    // is ≥90s old avoids premature momentum entries on ghost data AND saves AI tokens.
+    {
+      const freshSnap   = state[asset].gapPending.get(market.conditionId);
+      const gapFrac     = priceToBeat > 0 ? Math.abs(gap) / priceToBeat : 1;
+      const volumeDelta = market.volume - (freshSnap?.firstSeenVolume ?? market.volume);
+      const marketAge   = Date.now() - (freshSnap?.firstSeenAt ?? 0);
+      if (gapFrac < 0.002 && volumeDelta < 200 && marketAge < 90_000) {
+        const ageS = Math.round(marketAge / 1000);
+        logEntry("dim", `  → <span class="amber">oracle gate</span> — ${ageS}s old, vol +$${volumeDelta.toFixed(0)} (need $200 or 90s) — deferring AI`);
+        continue; // stay in gapPending; retried next cycle
+      }
     }
 
     // Gap has cleared the noise floor — promote from gapPending to analyzed
