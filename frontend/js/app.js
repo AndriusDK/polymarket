@@ -1664,9 +1664,14 @@ async function _runCryptoCycleInner(asset) {
     // flips in time — when the crowd is that undecided on a gap-flip, we shouldn't bet on it.
     // Threshold raised: 56% → 58% → 72% as each boundary case surfaced in session data.
     // Entries at ≥72% odds are still allowed (crowd has high conviction the gap will cross).
+    // Exception: HIGH confidence + ≥15% edge = AI has strong conviction the gap will flip
+    // in time. The historical failures were MEDIUM/LOW confidence entries. A HIGH conf signal
+    // at +18% edge with 250-300s is a genuinely different situation — allow it down to 50%.
+    const nearResGapFlipHighConf = analysis.confidence === "HIGH" && analysis.absEdge >= 0.15;
     const nearResGapFlipLowOdds = signalAgainstGap &&
                                    timeRemaining < 300 &&
-                                   entryOdds < 0.72;
+                                   entryOdds < 0.72 &&
+                                   !nearResGapFlipHighConf;
 
     // BTC short-window exception: the pump-skeptic crowd-reversion logic breaks down when
     // BTC has a large gap, ≤500s remaining, HIGH confidence and strong edge (≥12%).
@@ -1742,16 +1747,18 @@ async function _runCryptoCycleInner(asset) {
     // the market-stress cooldown (which then blocks subsequent valid entries too).
     const assetPositionOpen = state.trades.some(t => t.type === asset);
 
-    // BTC macro filter: when BTC shows a strong directional signal (≥3/5 candles aligned
+    // BTC macro filter: when BTC shows a strong directional signal (≥4/5 candles aligned
     // + momentum ≥ 20/min in that direction), altcoin trades that fight that trend have a
     // high stop-loss failure rate (BTC leads alts).  Block BUY_UP on ETH/SOL when BTC is
     // strongly bearish, and BUY_DOWN when BTC is strongly bullish.
     // State expires after 5 minutes so stale BTC data doesn't block valid alt entries.
+    // Threshold raised from 3/5 → 4/5: 3/5 is only 60% bullish/bearish (coin-flip level)
+    // and was blocking too many HIGH confidence alt trades. 4/5 = 80% = genuine trend.
     const btcMacro      = state.btcMacro;
     const btcMacroFresh = btcMacro && (Date.now() - btcMacro.updatedAt) < 300_000;
     const btcMacroVeto  = asset !== "btc" && btcMacroFresh && (
-      (analysis.signal === "BUY_UP"   && btcMacro.bearCount >= 3 && btcMacro.momentum <= -20) ||
-      (analysis.signal === "BUY_DOWN" && btcMacro.bullCount >= 3 && btcMacro.momentum >= 20)
+      (analysis.signal === "BUY_UP"   && btcMacro.bearCount >= 4 && btcMacro.momentum <= -20) ||
+      (analysis.signal === "BUY_DOWN" && btcMacro.bullCount >= 4 && btcMacro.momentum >= 20)
     );
 
     // Stall guard: a large gap with near-zero momentum is "floating" — no force is sustaining
