@@ -285,7 +285,7 @@ class PolymarketClient:
         price_limit = None
         if entry_price is not None and 0 < entry_price < 1:
             if side.upper() == "BUY":
-                price_limit = round(min(entry_price + max_slippage, 0.97), 4)
+                price_limit = round(min(entry_price + max_slippage, 0.92), 4)
             else:
                 price_limit = round(max(entry_price - max_slippage, 0.03), 4)
             logger.info("%s price limit: %.4f (quoted %.4f, max slippage %.0f%%)",
