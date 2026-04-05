@@ -1768,9 +1768,7 @@ async function _runCryptoCycleInner(asset) {
       !midWindowSmallGap &&
       !solLargeGapUp &&
       !assetPositionOpen &&
-      (analysis.confidence === "HIGH" ||
-       (analysis.confidence === "MEDIUM" && analysis.absEdge >= minEdge)) &&
-      analysis.absEdge >= minEdge &&
+      (analysis.confidence === "HIGH" || analysis.absEdge >= minEdge) &&
       state.stats.spent < c.maxDaily;
 
     if (qualifies) {
