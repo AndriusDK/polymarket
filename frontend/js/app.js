@@ -16,10 +16,10 @@ const state = {
   losses: 0,
   sessionStart: Date.now(),
   bootTime: null,      // set when first asset starts; used for startup cooldown
-  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },  // conditionId → endDateMs
-  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },
-  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },
-  xrp: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },
+  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map() },  // conditionId → endDateMs
+  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map() },
+  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map() },
+  xrp: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map() },
   tradeHistory: [],    // { ts, pnl, asset, reason } — every closed position, used by profit chart
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
@@ -1542,18 +1542,31 @@ async function _runCryptoCycleInner(asset) {
       continue;
     }
 
-    // Volume floor — thin books cause massive fill slippage (e.g. SOL $800 vol → 71.5% → 16.8%).
-    // $1k floor: ETH 5-min markets land in $800-$1800 range and trade well; SOL/XRP stay under $700.
-    // Keeps SOL/XRP blocked (consistently $200-$700) while allowing ETH/BTC 5-min markets through.
-    // Also saves AI tokens on clearly untradeble markets.
+    // Liquidity gate — two ways a market can pass:
+    //   (A) Total volume ≥ floor ($1k) — market has built up deep book over its lifetime.
+    //   (B) Volume velocity ≥ threshold ($40/min) — real bettors are active RIGHT NOW even if
+    //       total vol is still low (e.g. fresh 5-min market 4 minutes in: $200 total but +$60/min).
+    // This replaces the naive total-volume floor which blocked liquid near-expiry markets and
+    // allowed dead $1k-total-but-$0-now markets through simultaneously.
+    // SOL/XRP stay blocked in practice — they're thin all the way through ($200 total, 0/min).
     {
-      const minVol    = c.minEntryVolume ?? 1000;
-      const marketVol = market.volume ?? 0;
-      if (marketVol < minVol) {
-        const snap = state[asset].analyzed.get(market.conditionId);
-        if (snap) state[asset].analyzed.set(market.conditionId, snap);
-        logEntry("dim", `  → <span class="amber">thin market</span> — vol $${marketVol.toFixed(0)} < $${minVol.toFixed(0)} floor — skipping (saves AI tokens)`);
+      const marketVol  = market.volume ?? 0;
+      const minVol     = c.minEntryVolume    ?? 1000;   // $/total
+      const minVeloc   = c.minVolumeVelocity ?? 40;     // $/min
+      const volT       = state[asset].volTrack;
+      const prev       = volT.get(market.conditionId);
+      const nowMs      = Date.now();
+      const deltaVol   = prev ? marketVol - prev.vol : 0;
+      const deltaMs    = prev ? nowMs - prev.at : 30_000;  // assume 30s first cycle
+      const velocPerMin = deltaMs > 0 ? (deltaVol / deltaMs) * 60_000 : 0;
+      // Update tracker for next cycle
+      volT.set(market.conditionId, { vol: marketVol, at: nowMs });
+      if (marketVol < minVol && velocPerMin < minVeloc) {
+        logEntry("dim", `  → <span class="amber">thin market</span> — vol $${marketVol.toFixed(0)} vel +$${velocPerMin.toFixed(0)}/min (need $${minVol} total OR $${minVeloc}/min) — skipping`);
         continue;
+      }
+      if (marketVol < minVol) {
+        logEntry("dim", `  → <span class="cyan">vol spike</span> — $${marketVol.toFixed(0)} total but +$${velocPerMin.toFixed(0)}/min active — proceeding`);
       }
     }
 
