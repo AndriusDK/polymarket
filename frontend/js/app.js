@@ -1532,6 +1532,16 @@ async function _runCryptoCycleInner(asset) {
       if (isGapPending) logEntry("dim", `  → gap confirmed ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} — running analysis`);
     }
 
+    // Hard block: < 30s remaining — book is empty, FOK always fails, stop-loss can't
+    // protect.  Mark analyzed so we don't retry this market again.
+    if (timeRemaining < 30) {
+      const snap = state[asset].gapPending.get(market.conditionId) ?? state[asset].analyzed.get(market.conditionId);
+      if (snap) state[asset].analyzed.set(market.conditionId, snap);
+      state[asset].gapPending.delete(market.conditionId);
+      logEntry("dim", `  → <${timeRemaining}s left — too close to resolution, skipping`);
+      continue;
+    }
+
     // Precompute maxMovement for post-analysis crossing check.
     // Floor: 0.1% of spot/min avoids underestimating movement during calm 1-min candles.
     const recentRange = candles.slice(-3).reduce((mx, c) => Math.max(mx, c.high - c.low), 0);
@@ -2137,15 +2147,17 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           addCryptoCard(trade);
           startCryptoCountdown();
 
-          // Post-fill slippage guard: if the actual fill came in below the minimum
-          // entry odds (market moved between analysis and fill), exit immediately.
-          // This avoids holding a position the market strongly disagrees with.
+          // Post-fill slippage guard: exit immediately if fill is outside acceptable odds.
+          // Low fill  → market moved against us (e.g. 61.5% → 33%).
+          // High fill → we overpaid (e.g. 72.5% → 82%), terrible risk/reward.
           const fillMinOdds = (c.minEntryOdds ?? 10) / 100;
+          const fillMaxOdds = (c.maxEntryOdds ?? 87) / 100;
           const fill = parseFillPrice(result, "BUY");
-          if (fill && fill < fillMinOdds) {
-            logEntry("warn",
-              `  ↳ <span class="red">fill ${(fill*100).toFixed(1)}% < min ${(fillMinOdds*100).toFixed(0)}% — slippage exit</span>`
-            );
+          if (fill && (fill < fillMinOdds || fill > fillMaxOdds)) {
+            const reason = fill < fillMinOdds
+              ? `fill ${(fill*100).toFixed(1)}% < min ${(fillMinOdds*100).toFixed(0)}%`
+              : `fill ${(fill*100).toFixed(1)}% > max ${(fillMaxOdds*100).toFixed(0)}%`;
+            logEntry("warn", `  ↳ <span class="red">${reason} — slippage exit</span>`);
             closePosition(trade, "BAD FILL");
           }
         }
