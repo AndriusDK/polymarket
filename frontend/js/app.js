@@ -1432,6 +1432,13 @@ async function _runCryptoCycleInner(asset) {
       });
     }
 
+    // Volume velocity tracking — snapshot volume on EVERY cycle regardless of gap/oracle status.
+    // Must happen before any `continue` so the velocity is accurate when the gap finally
+    // develops and the liquidity gate runs.  Markets with gap=0 still get their volume
+    // sampled here so we correctly detect the spike when they become tradeable.
+    // prevVolSnap is read by the liquidity gate below; the map is updated AFTER the gate reads it.
+    const prevVolSnap = state[asset].volTrack.get(market.conditionId) ?? null;
+
     // Derive window duration from title e.g. "March 26, 4:55PM-5:10PM ET" → 15 min → 900s.
     // Fallback to 300s (5 min) if parsing fails.
     const windowMs = (() => {
@@ -1550,17 +1557,15 @@ async function _runCryptoCycleInner(asset) {
     // allowed dead $1k-total-but-$0-now markets through simultaneously.
     // SOL/XRP stay blocked in practice — they're thin all the way through ($200 total, 0/min).
     {
-      const marketVol  = market.volume ?? 0;
-      const minVol     = c.minEntryVolume    ?? 1000;   // $/total
-      const minVeloc   = c.minVolumeVelocity ?? 40;     // $/min
-      const volT       = state[asset].volTrack;
-      const prev       = volT.get(market.conditionId);
-      const nowMs      = Date.now();
-      const deltaVol   = prev ? marketVol - prev.vol : 0;
-      const deltaMs    = prev ? nowMs - prev.at : 30_000;  // assume 30s first cycle
+      const marketVol   = market.volume ?? 0;
+      const minVol      = c.minEntryVolume    ?? 1000;   // $/total
+      const minVeloc    = c.minVolumeVelocity ?? 40;     // $/min
+      const nowMs       = Date.now();
+      const deltaVol    = prevVolSnap ? marketVol - prevVolSnap.vol : 0;
+      const deltaMs     = prevVolSnap ? nowMs - prevVolSnap.at : 30_000;
       const velocPerMin = deltaMs > 0 ? (deltaVol / deltaMs) * 60_000 : 0;
-      // Update tracker for next cycle
-      volT.set(market.conditionId, { vol: marketVol, at: nowMs });
+      // Write current snapshot for next cycle (AFTER reading prevVolSnap above)
+      state[asset].volTrack.set(market.conditionId, { vol: marketVol, at: nowMs });
       if (marketVol < minVol && velocPerMin < minVeloc) {
         logEntry("dim", `  → <span class="amber">thin market</span> — vol $${marketVol.toFixed(0)} vel +$${velocPerMin.toFixed(0)}/min (need $${minVol} total OR $${minVeloc}/min) — skipping`);
         continue;
