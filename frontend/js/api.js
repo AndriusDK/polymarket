@@ -472,6 +472,13 @@ const CRYPTO_PROMPT = [
   "10. FUNDING RATE: Rate > +0.05%/8h = overcrowded longs → bearish pressure on price (supports DOWN). Rate < -0.02%/8h = overcrowded shorts → bullish squeeze pressure (supports UP). Near zero = neutral.",
   "11. GAP TREND: If gap at candle close is narrowing toward zero across candles, the leader is losing ground and a flip becomes more likely. If gap is widening or stable, the current leader is in control.",
   "12. UP TOKEN TREND: If the UP token price is falling across cycles, market participants are selling UP (bearish signal). If rising, they are buying UP (bullish). Token trend confirms or contradicts the price gap.",
+  "13. MOMENTUM TRADE (zero/tiny gap): When |gap| < 0.05% of price BUT |expectedDrift| > 0.15% of price AND 4+ of the last 5 candles align with the momentum direction, this is a valid MOMENTUM TRADE.",
+  "    The Polymarket token price tracks the underlying asset live — even before resolution, if {ticker} moves strongly in one direction, that token will rise 20-30%, hitting take-profit before the market closes.",
+  "    You are NOT predicting the final resolution. You are predicting that the TOKEN PRICE will swing enough to take profit.",
+  "    Rules: signal in momentum direction (BUY_UP if momentum > 0, BUY_DOWN if momentum < 0). Set \"momentum_trade\": true.",
+  "    Confidence: HIGH only if 5/5 candles aligned AND volume spike ratio > 1.5. MEDIUM if 4/5 candles aligned.",
+  "    SKIP if timeRemaining < 150s (not enough drift time) or if candle trend contradicts momentum direction.",
+  "    This is independent of gap direction — you're trading the MOVE, not the final score.",
   "",
   "Bet only when estimated true probability exceeds 60%. When in doubt, SKIP.",
   "",
@@ -480,6 +487,7 @@ const CRYPTO_PROMPT = [
   '  "signal": "BUY_UP" | "BUY_DOWN" | "SKIP",',
   '  "confidence": "LOW" | "MEDIUM" | "HIGH",',
   '  "edge": <estimated true prob minus market price, e.g. 0.12>,',
+  '  "momentum_trade": <true if this is a momentum trade on tiny/zero gap, false otherwise>,',
   '  "reasoning": "<max 2 sentences>"',
   '}',
 ].join("\n");
@@ -704,10 +712,11 @@ function parseCryptoResponse(raw, market, metrics) {
   try { parsed = JSON.parse(text); }
   catch { throw new Error("Crypto JSON parse failed: " + text.slice(0, 80)); }
 
-  let signal     = ["BUY_UP", "BUY_DOWN", "SKIP"].includes(parsed.signal) ? parsed.signal : "SKIP";
-  let confidence = (parsed.confidence || "LOW").toUpperCase();
+  let signal       = ["BUY_UP", "BUY_DOWN", "SKIP"].includes(parsed.signal) ? parsed.signal : "SKIP";
+  let confidence   = (parsed.confidence || "LOW").toUpperCase();
   if (!["LOW", "MEDIUM", "HIGH"].includes(confidence)) confidence = "LOW";
-  const edge = parseFloat(parsed.edge) || 0;
+  const edge         = parseFloat(parsed.edge) || 0;
+  const momentumTrade = !!parsed.momentum_trade && signal !== "SKIP";
 
   const { gap, momentum, timeRemaining, volatility, spot } = metrics;
   const expectedDrift     = (momentum ?? 0) * (timeRemaining / 60);
@@ -751,6 +760,7 @@ function parseCryptoResponse(raw, market, metrics) {
     momentum:      metrics.momentum,
     volatility:    metrics.volatility,
     volSpikeRatio: metrics.volSpikeRatio,
+    momentumTrade,
   };
 }
 
