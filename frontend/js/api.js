@@ -240,6 +240,7 @@ const CRYPTO_CONFIG = {
   btc: { symbol: "BTCUSDT", keywords: ["bitcoin up or down", "btc up or down"], label: "Bitcoin", ticker: "BTC" },
   eth: { symbol: "ETHUSDT", keywords: ["ethereum up or down", "eth up or down"], label: "Ethereum", ticker: "ETH" },
   sol: { symbol: "SOLUSDT", keywords: ["solana up or down", "sol up or down"],   label: "Solana",   ticker: "SOL" },
+  xrp: { symbol: "XRPUSDT", keywords: ["xrp up or down", "ripple up or down"],  label: "XRP",      ticker: "XRP" },
 };
 
 async function fetchCryptoSpot(symbol) {
