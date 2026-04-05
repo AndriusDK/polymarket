@@ -19,10 +19,11 @@ const state = {
   btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },  // conditionId → endDateMs
   eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },
   sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },
+  xrp: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map() },
   tradeHistory: [],    // { ts, pnl, asset, reason } — every closed position, used by profit chart
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
-  chainlinkPrices: { btc: null, eth: null, sol: null }, // live Chainlink prices from RTDS
+  chainlinkPrices: { btc: null, eth: null, sol: null, xrp: null }, // live Chainlink prices from RTDS
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -81,6 +82,9 @@ const PERSIST_FIELDS = [
   ["sol-max-bet",         "value"],
   ["sol-min-edge",        "value"],
   ["sol-mode-toggle",     "checked"],
+  ["xrp-max-bet",         "value"],
+  ["xrp-min-edge",        "value"],
+  ["xrp-mode-toggle",     "checked"],
 ];
 
 function saveSettings() {
@@ -160,6 +164,9 @@ function initSetup() {
       solMode:       $("#sol-mode-toggle")?.checked ?? false,
       solMaxBet:     parseFloat($("#sol-max-bet")?.value) || 5,
       solMinEdge:    parseFloat($("#sol-min-edge")?.value) || 0.06,
+      xrpMode:       $("#xrp-mode-toggle")?.checked ?? false,
+      xrpMaxBet:     parseFloat($("#xrp-max-bet")?.value) || 5,
+      xrpMinEdge:    parseFloat($("#xrp-min-edge")?.value) || 0.04,
       startupCooldown: parseInt($("#startup-cooldown")?.value) || 90,
     };
 
@@ -190,7 +197,7 @@ function initDashboard() {
     stopBot();
     showScreen("setup-screen");
   });
-  for (const asset of ["btc", "eth", "sol"]) {
+  for (const asset of ["btc", "eth", "sol", "xrp"]) {
     $(`#btn-${asset}`)?.addEventListener("click", () => {
       if (state[asset].timer) stopCryptoMode(asset);
       else startCryptoMode(asset);
@@ -240,14 +247,14 @@ function initDashboard() {
       });
   }
 
-  for (const asset of ["btc", "eth", "sol"]) {
+  for (const asset of ["btc", "eth", "sol", "xrp"]) {
     if (c[`${asset}Mode`]) {
       logEntry("info", `${asset.toUpperCase()} mode: auto-starting…`);
       startCryptoMode(asset);
     }
   }
-  if (!c.btcMode && !c.ethMode && !c.solMode) {
-    logEntry("info", "Press [⚡ BTC / ETH / SOL MODE] to start scanning for markets.");
+  if (!c.btcMode && !c.ethMode && !c.solMode && !c.xrpMode) {
+    logEntry("info", "Press [⚡ BTC / ETH / SOL / XRP MODE] to start scanning for markets.");
   }
 }
 
@@ -255,7 +262,7 @@ function initDashboard() {
 
 function stopBot() {
   if (state.abortCtrl) state.abortCtrl.abort();
-  for (const asset of ["btc", "eth", "sol"]) stopCryptoMode(asset);
+  for (const asset of ["btc", "eth", "sol", "xrp"]) stopCryptoMode(asset);
   chainlinkStream.disconnect();
   setStat("status", "STOPPED", "amber");
   logEntry("warning", "Bot stopped.");
@@ -696,6 +703,7 @@ const chainlinkStream = (() => {
         if      (sym === "btc/usd") state.chainlinkPrices.btc = val;
         else if (sym === "eth/usd") state.chainlinkPrices.eth = val;
         else if (sym === "sol/usd") state.chainlinkPrices.sol = val;
+        else if (sym === "xrp/usd") state.chainlinkPrices.xrp = val;
       }
     }
   }
@@ -708,6 +716,7 @@ const chainlinkStream = (() => {
         { topic: "crypto_prices_chainlink", type: "*", filters: '{"symbol":"btc/usd"}' },
         { topic: "crypto_prices_chainlink", type: "*", filters: '{"symbol":"eth/usd"}' },
         { topic: "crypto_prices_chainlink", type: "*", filters: '{"symbol":"sol/usd"}' },
+        { topic: "crypto_prices_chainlink", type: "*", filters: '{"symbol":"xrp/usd"}' },
       ],
     }));
   }
@@ -1149,7 +1158,7 @@ function updatePnlStat() {
 
 // ── Crypto mode (BTC / ETH / SOL) ────────────────────────────────
 
-const ASSET_COLORS = { btc: "amber", eth: "eth", sol: "sol" };
+const ASSET_COLORS = { btc: "amber", eth: "eth", sol: "sol", xrp: "xrp" };
 
 // ── Market WebSocket — instant new_market detection ──────────────
 
@@ -1159,6 +1168,7 @@ const WS_KEYWORDS = {
   btc: [/\bbitcoin\b/, /\bbtc\b/],
   eth: [/\bethereum\b/, /\beth\b/],
   sol: [/\bsolana\b/, /\bsol\b/],
+  xrp: [/\bxrp\b/, /\bripple\b/],
 };
 
 let _marketWs = null;
@@ -1219,7 +1229,7 @@ function stopMarketWS() {
 }
 
 function _scheduleWsReconnect() {
-  if (!["btc", "eth", "sol"].some(a => state[a].timer)) return; // no asset running
+  if (!["btc", "eth", "sol", "xrp"].some(a => state[a].timer)) return; // no asset running
   _marketWsReconnectTimer = setTimeout(() => {
     _marketWsReconnectDelay = Math.min(_marketWsReconnectDelay * 2, 30_000);
     startMarketWS();
@@ -1309,7 +1319,7 @@ function stopCryptoMode(asset) {
   const btn = $(`#btn-${asset}`);
   if (btn) { btn.textContent = `⚡ ${cfg.ticker} MODE`; btn.classList.remove("active"); }
   setStat(`${asset}-status`, "OFF", "dim");
-  if (!["btc", "eth", "sol"].some(a => state[a].timer)) {
+  if (!["btc", "eth", "sol", "xrp"].some(a => state[a].timer)) {
     setRunning(false);
     stopMarketWS();
   }
@@ -2094,7 +2104,7 @@ let cryptoCountdownTimer = null;
 function startCryptoCountdown() {
   if (cryptoCountdownTimer) return;
   cryptoCountdownTimer = setInterval(() => {
-    const cryptoTrades = state.trades.filter(t => ["btc","eth","sol"].includes(t.type));
+    const cryptoTrades = state.trades.filter(t => ["btc","eth","sol","xrp"].includes(t.type));
     if (!cryptoTrades.length) {
       clearInterval(cryptoCountdownTimer);
       cryptoCountdownTimer = null;
