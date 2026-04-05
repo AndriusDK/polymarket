@@ -2130,6 +2130,18 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
 
           addCryptoCard(trade);
           startCryptoCountdown();
+
+          // Post-fill slippage guard: if the actual fill came in below the minimum
+          // entry odds (market moved between analysis and fill), exit immediately.
+          // This avoids holding a position the market strongly disagrees with.
+          const fillMinOdds = (c.minEntryOdds ?? 10) / 100;
+          const fill = parseFillPrice(result, "BUY");
+          if (fill && fill < fillMinOdds) {
+            logEntry("warn",
+              `  ↳ <span class="red">fill ${(fill*100).toFixed(1)}% < min ${(fillMinOdds*100).toFixed(0)}% — slippage exit</span>`
+            );
+            closePosition(trade, "BAD FILL");
+          }
         }
       })
       .catch(err => {
