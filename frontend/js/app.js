@@ -1543,11 +1543,11 @@ async function _runCryptoCycleInner(asset) {
     }
 
     // Volume floor — thin books cause massive fill slippage (e.g. SOL $800 vol → 71.5% → 16.8%).
-    // Require at least $2k total volume before calling AI; SOL/XRP 5-min markets routinely land
-    // below this and almost always produce BAD FILL losses even on immediate exit.
+    // $1k floor: ETH 5-min markets land in $800-$1800 range and trade well; SOL/XRP stay under $700.
+    // Keeps SOL/XRP blocked (consistently $200-$700) while allowing ETH/BTC 5-min markets through.
     // Also saves AI tokens on clearly untradeble markets.
     {
-      const minVol    = c.minEntryVolume ?? 2000;
+      const minVol    = c.minEntryVolume ?? 1000;
       const marketVol = market.volume ?? 0;
       if (marketVol < minVol) {
         const snap = state[asset].analyzed.get(market.conditionId);
