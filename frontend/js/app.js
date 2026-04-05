@@ -1543,6 +1543,7 @@ async function _runCryptoCycleInner(asset) {
       `  → <span class="${sigColor}">${analysis.signal}</span>  ` +
       `Conf: ${analysis.confidence}  ` +
       `Edge: ${(analysis.edge >= 0 ? "+" : "")}${(analysis.edge * 100).toFixed(1)}%  ` +
+      (analysis.momentumTrade ? `<span class="amber">⚡MOM</span>  ` : "") +
       `| ${analysis.reasoning}`
     );
 
@@ -1764,6 +1765,15 @@ async function _runCryptoCycleInner(asset) {
                      Math.abs(analysis.momentum ?? Infinity) < momThresholdStall &&
                      timeRemaining > 120;
 
+    // Momentum trade bypass: AI has explicitly flagged this as a momentum-driven token
+    // price play (gap ≈ 0 but |expectedDrift| >> |gap|).  The AI predicts the TOKEN will
+    // move 20-25%+ during the window — we're trading the move, not the final resolution.
+    // Only bypass the midWindowSmallGap filter; all other risk filters still apply.
+    // Require HIGH confidence so low-quality signals don't slip through.
+    const momentumTradeBypass = analysis.momentumTrade === true &&
+                                analysis.confidence === "HIGH" &&
+                                analysis.signal !== "SKIP";
+
     const qualifies =
       analysis.signal !== "SKIP" &&
       oddsOk &&
@@ -1781,7 +1791,7 @@ async function _runCryptoCycleInner(asset) {
       !stalled &&
       !nearResLowOdds &&
       !nearResSmallGap &&
-      !midWindowSmallGap &&
+      (!midWindowSmallGap || momentumTradeBypass) &&
       !solLargeGapUp &&
       !assetPositionOpen &&
       (analysis.confidence === "HIGH" || analysis.absEdge >= minEdge) &&
@@ -1834,7 +1844,7 @@ async function _runCryptoCycleInner(asset) {
           reasons.push(`near-res small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% (<0.05%) — watching for gap expansion next cycle`);
         }
       }
-      if (midWindowSmallGap) {
+      if (midWindowSmallGap && !momentumTradeBypass) {
         if (isGapWatched) {
           state[asset].gapWatch.delete(market.conditionId);
           reasons.push(`mid-window small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% still <0.10% after observation — skipping`);
@@ -1842,6 +1852,8 @@ async function _runCryptoCycleInner(asset) {
           state[asset].gapWatch.set(market.conditionId, { signal: analysis.signal, startedAt: Date.now() });
           reasons.push(`mid-window small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% (<0.10%) — watching for gap expansion next cycle`);
         }
+      } else if (midWindowSmallGap && momentumTradeBypass) {
+        reasons.push(`mid-window small gap bypassed — momentum trade: AI predicts token will hit take-profit from momentum alone (gap=${(stallGapPct * 100).toFixed(3)}% but HIGH conf momentum signal)`);
       }
       if (solLargeGapUp) reasons.push(`SOL large-gap BUY_UP — SOL ${(stallGapPct * 100).toFixed(1)}% above target with vol spike ${(analysis.volSpikeRatio ?? 0).toFixed(2)}× — fresh pump reversal risk`);
       if (assetPositionOpen) reasons.push(`${asset.toUpperCase()} position already open — max 1 per asset (correlated stop risk)`);
@@ -1853,7 +1865,7 @@ async function _runCryptoCycleInner(asset) {
       if (state.stats.spent >= c.maxDaily)
         reasons.push("daily budget exhausted");
       if (reasons.length === 0)
-        reasons.push(`all filters ok but qualifies=false [oddsOk=${oddsOk} nearResSmallGap=${nearResSmallGap} midWindowSmallGap=${midWindowSmallGap} absEdge=${(analysis.absEdge??'?')} minEdge=${minEdge}]`);
+        reasons.push(`all filters ok but qualifies=false [oddsOk=${oddsOk} nearResSmallGap=${nearResSmallGap} midWindowSmallGap=${midWindowSmallGap} momentumBypass=${momentumTradeBypass} absEdge=${(analysis.absEdge??'?')} minEdge=${minEdge}]`);
       logEntry("info", `  ↳ <span class="amber">no trade</span> — ${reasons.join(", ")}`);
       } catch (err) {
         logEntry("dim", `  ↳ <span class="amber">no trade</span> — [reason build error: ${err.message}]`);
