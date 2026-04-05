@@ -575,7 +575,7 @@ const priceStream = (() => {
               ? Math.min(20_000, Math.max(15_000, t.totalSecs * 100))    // short window: 15-20s
               : t.totalSecs < 500
               ? 60_000                                                    // mid-window (200-500s): 60s flat — let position breathe before first stop check
-              : Math.min(60_000, Math.max(45_000, t.totalSecs * 60));    // long window (500s+): 45-60s
+              : 120_000;                                                  // long window (500s+): 120s — 15-min markets need time to settle
             const grace = t.signalAgainstGap ? Math.max(baseGrace, 75_000) : baseGrace;
             if (Date.now() - t.entryTime < grace) {
               // Catastrophic loss override: bypass grace if loss exceeds threshold.
@@ -586,6 +586,12 @@ const priceStream = (() => {
               const catThreshold = t.signalAgainstGap ? 0.85 : 0.50;
               const catastrophic = t.unrealizedPnl <= -t.amount * catThreshold;
               if (!catastrophic) return false;
+            }
+            // HIGH confidence + high entry odds = near-certain binary outcome.
+            // e.g., entering DOWN at 83% — a 25% stop fires at 65%, but position resolves 99%.
+            // Price oscillates on correct-direction trades; only exit on true collapse (<35%).
+            if (t.confidence === "HIGH" && t.entryPrice > 0.70) {
+              return t.unrealizedPnl <= -t.amount * 0.65;
             }
             // Gap-flip trades (signalAgainstGap=true) bet that price currently on the wrong side
             // of the target will cross before resolution. The prediction market token naturally
