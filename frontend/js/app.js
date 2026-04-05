@@ -407,6 +407,11 @@ function addCryptoCard(trade) {
           <span class="btc-k">MOMENTUM</span>
           <span class="btc-v ${momClass}">${momStr}</span>
         </div>
+        ${trade.entryVolume != null ? `
+        <div class="btc-kv">
+          <span class="btc-k">VOL AT ENTRY</span>
+          <span class="btc-v dim">$${trade.entryVolume >= 1000 ? (trade.entryVolume / 1000).toFixed(1) + "k" : trade.entryVolume.toFixed(0)}</span>
+        </div>` : ""}
       </div>
     </div>
     <div class="card-chart">
@@ -2053,6 +2058,7 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     priceHistory:    [],
     totalSecs:       secsLeft,
     entryTime:       Date.now(),
+    entryVolume:     market.volume ?? null,
     marketUrl,
     exitPrice:       null,   // set on close
     secsAtClose:     null,   // set on close
