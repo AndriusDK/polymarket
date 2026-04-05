@@ -1586,11 +1586,15 @@ async function _runCryptoCycleInner(asset) {
 
     // Long-window low-conviction guard: near-50% odds with lots of time remaining means
     // the market is uncertain — require minimum conviction odds before entering.
-    // BTC is stricter: requires ≥58% odds with >900s remaining (volatility is harder to
+    // BTC is stricter: requires ≥55% odds with >900s remaining (volatility is harder to
     // predict over long windows and BTC gaps rarely flip in 5-min windows).
-    const longWindowLowConv = asset === "btc"
+    // Exception: HIGH confidence + strong edge (≥14%) — when the AI has both high confidence
+    // AND large edge on a long-window signal, the momentum/drift case is real even at 50-54%.
+    const longWindowHighConf = analysis.confidence === "HIGH" && analysis.absEdge >= 0.14;
+    const longWindowLowConv = ((asset === "btc"
       ? (timeRemaining > 900 && entryOdds < 0.55)
-      : (timeRemaining > 800 && entryOdds < 0.52);
+      : (timeRemaining > 800 && entryOdds < 0.52)) &&
+      !longWindowHighConf);
 
     // BTC mid-window minimum odds guard: 50-54.9% BTC entries with >250s remaining are
     // consistently net-negative (-$19.31 at 250s, -$26.24 at 300s in session data).
@@ -1689,10 +1693,15 @@ async function _runCryptoCycleInner(asset) {
     // but the market still prices the outcome below 50%, the crowd is pricing in a mean-reversion.
     // BTC +2156 at 47.5% UP and ETH +107 at 46% UP are typical pump-and-dump setups where
     // the AI overestimates edge ("gap is huge → safe") but the spike reverses before resolution.
+    // Exception: HIGH conf + ≥14% edge. When AI has strong conviction AND a large edge at a
+    // near-zero gap (e.g., gap=0 but drift=-178pts), the momentum case is real. The crowd
+    // pricing DOWN at 49.5% doesn't negate a well-evidenced AI signal with strong drift.
+    const pumpSkepticHighConf = analysis.confidence === "HIGH" && analysis.absEdge >= 0.14;
     const pumpSkeptic = !signalAgainstGap &&
                          analysis.signal !== "SKIP" &&
                          entryOdds < 0.50 &&
-                         !btcShortWindowException;
+                         !btcShortWindowException &&
+                         !pumpSkepticHighConf;
 
     // Fractional gap vs price-to-beat — used by nearResSmallGap, midWindowSmallGap, solLargeGapUp,
     // and the stall guard below.  Must be declared here (before first use) to avoid a temporal
@@ -1772,12 +1781,20 @@ async function _runCryptoCycleInner(asset) {
                      Math.abs(analysis.momentum ?? Infinity) < momThresholdStall &&
                      timeRemaining > 120;
 
-    // Momentum trade bypass: AI has explicitly flagged this as a momentum-driven token
-    // price play (gap ≈ 0 but |expectedDrift| >> |gap|).  The AI predicts the TOKEN will
-    // move 20-25%+ during the window — we're trading the move, not the final resolution.
-    // Only bypass the midWindowSmallGap filter; all other risk filters still apply.
-    // Require HIGH confidence so low-quality signals don't slip through.
-    const momentumTradeBypass = analysis.momentumTrade === true &&
+    // Momentum trade bypass: current gap is tiny (<0.10%) but expected drift is large (>0.15%
+    // of price), so the AI is trading the TOKEN PRICE MOVE, not the final resolution outcome.
+    // Auto-detected from analysis data — more reliable than depending on the AI to flag it.
+    // Only bypasses midWindowSmallGap; all other risk filters still apply.
+    // Require HIGH confidence so low-quality momentum signals don't slip through.
+    const expectedDriftPts  = (analysis.momentum ?? 0) * ((analysis.timeRemaining ?? 0) / 60);
+    const effectiveGapPct   = (analysis.priceToBeat ?? 0) > 0
+      ? Math.abs((analysis.gap ?? 0) + expectedDriftPts) / analysis.priceToBeat
+      : 0;
+    const autoMomentumTrade = analysis.signal !== "SKIP" &&
+                              analysis.confidence === "HIGH" &&
+                              stallGapPct < 0.001 &&    // current gap < 0.10%
+                              effectiveGapPct > 0.0015; // effective gap > 0.15% of price
+    const momentumTradeBypass = (analysis.momentumTrade === true || autoMomentumTrade) &&
                                 analysis.confidence === "HIGH" &&
                                 analysis.signal !== "SKIP";
 
@@ -1803,6 +1820,10 @@ async function _runCryptoCycleInner(asset) {
       !assetPositionOpen &&
       (analysis.confidence === "HIGH" || analysis.absEdge >= minEdge) &&
       state.stats.spent < c.maxDaily;
+
+    if (autoMomentumTrade && !analysis.momentumTrade) {
+      logEntry("dim", `  ↳ <span class="amber">⚡MOM auto</span> — gap ${(stallGapPct * 100).toFixed(3)}% but effective gap ${(effectiveGapPct * 100).toFixed(3)}% (drift ${expectedDriftPts >= 0 ? "+" : ""}${expectedDriftPts.toFixed(2)}) — momentum trade bypass active`);
+    }
 
     if (qualifies) {
       state[asset].gapWatch.delete(market.conditionId);
