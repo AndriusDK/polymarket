@@ -1494,7 +1494,7 @@ async function _runCryptoCycleInner(asset) {
         logEntry("dim", `  → window opened — priceToBeat refreshed $${displayPrice >= 1000 ? displayPrice.toFixed(0) : displayPrice.toFixed(2)}${src}`);
       }
       if (timeRemaining > windowSecs) {
-        logEntry("dim", `  → <span class="dim">pre-window</span> — ${Math.ceil((timeRemaining - windowSecs) / 60)}m until start`);
+        // pre-window polling — no log (too noisy)
         continue;
       }
     }
@@ -1567,7 +1567,7 @@ async function _runCryptoCycleInner(asset) {
       const marketAge   = Date.now() - (freshSnap?.firstSeenAt ?? 0);
       if (gapFrac < 0.002 && volumeDelta < 200 && marketAge < 90_000) {
         const ageS = Math.round(marketAge / 1000);
-        logEntry("dim", `  → <span class="amber">oracle gate</span> — ${ageS}s old, vol +$${volumeDelta.toFixed(0)} (need $200 or 90s) — deferring AI`);
+        // oracle gate deferral — no log (too noisy)
         continue; // stay in gapPending; retried next cycle
       }
     }
@@ -2022,7 +2022,7 @@ async function _runCryptoCycleInner(asset) {
       state[asset].accelTimer = null;
       runCryptoCycle(asset);
     }, 10_000);
-    logEntry("dim", `  ⚡ gap market <300s — accelerating to 10s re-check`);
+    // accelerated re-check — no log (too noisy)
   } else if (!hasUrgentGap && state[asset].accelTimer) {
     clearTimeout(state[asset].accelTimer);
     state[asset].accelTimer = null;
@@ -2537,13 +2537,11 @@ async function requestWakeLock() {
   if (!('wakeLock' in navigator)) return;
   try {
     wakeLock = await navigator.wakeLock.request('screen');
-    logEntry("info", "Wake lock acquired — screen will stay on.");
     wakeLock.addEventListener('release', () => {
-      logEntry("warning", "Wake lock released.");
       wakeLock = null;
     });
   } catch (err) {
-    logEntry("warning", `Wake lock unavailable: ${err.message}`);
+    // Wake lock unavailable — silent, non-critical
   }
 }
 
