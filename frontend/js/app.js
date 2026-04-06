@@ -2187,22 +2187,17 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           startCryptoCountdown();
 
           // Post-fill slippage guard: exit immediately if fill is outside acceptable odds.
-          // (A) Absolute bounds: fill < minEntryOdds or fill > maxEntryOdds.
-          // (B) Relative slippage: fill deviated >8pp from expected — market was illiquid,
-          //     the price we analyzed is not what we paid (e.g. 54.5% → 44.0% = 10.5pp).
-          const fillMinOdds = (c.minEntryOdds ?? 10) / 100;
-          const fillMaxOdds = (c.maxEntryOdds ?? 87) / 100;
+          // Only exit on truly catastrophic fills — don't penalize favorable slippage.
+          // Catastrophic floor: book collapsed (e.g. 47.5% → 5%).
+          // Hard ceiling: margin too thin at >93% (post-fill, not pre-entry preference).
           const fill = parseFillPrice(result, "BUY");
           if (fill) {
-            const slippage = Math.abs(fill - entryPrice);
-            const absoluteViolation = fill < fillMinOdds || fill > fillMaxOdds;
-            const relativeViolation = slippage > 0.08;  // >8pp deviation from expected
-            if (absoluteViolation || relativeViolation) {
-              const reason = absoluteViolation
-                ? (fill < fillMinOdds
-                    ? `fill ${(fill*100).toFixed(1)}% < min ${(fillMinOdds*100).toFixed(0)}%`
-                    : `fill ${(fill*100).toFixed(1)}% > max ${(fillMaxOdds*100).toFixed(0)}%`)
-                : `fill ${(fill*100).toFixed(1)}% vs expected ${(entryPrice*100).toFixed(1)}% — ${(slippage*100).toFixed(1)}pp slippage`;
+            const catastrophic = fill < 0.25;
+            const tooHigh      = fill > 0.93;
+            if (catastrophic || tooHigh) {
+              const reason = catastrophic
+                ? `fill ${(fill*100).toFixed(1)}% — book collapse (< 25%)`
+                : `fill ${(fill*100).toFixed(1)}% > 93% — margin too thin`;
               logEntry("warn", `  ↳ <span class="red">${reason} — slippage exit</span>`);
               closePosition(trade, "BAD FILL");
             }
