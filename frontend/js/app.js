@@ -2154,21 +2154,31 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     addCryptoCard(trade);
     startCryptoCountdown();
   } else {
-    // Pre-order CLOB depth check: Gamma API prices can be stale by 30-60s.
-    // 1) If best_ask has moved >15pp from our expected entry, the market repriced — skip.
-    // 2) Simulate filling our full order against the live ask ladder. If estimated avg fill
-    //    slips >10pp from entryPrice, or the book lacks enough depth to fill us, skip.
-    //    This catches "thin book sweep" fills like a $3.25 order sweeping from 52¢ → 24¢.
+    // Pre-order CLOB depth check.
+    // Brief pause first — Gamma API prices lag by 30-60s; waiting 2s lets any market move
+    // show up in the live CLOB before we commit.  After the pause we do two checks:
+    // 1) Gate 1 (price drift): if best_ask moved >8pp from our expected entry in EITHER
+    //    direction, the market has repriced since AI analyzed — skip and let the next 30s
+    //    cycle re-evaluate with fresh data.
+    //    Both directions matter:
+    //      • much MORE expensive → thin book / momentum gone
+    //      • much CHEAPER → market crashed against our direction (e.g. UP token repriced
+    //        from 44¢ → 31¢ means crowd thinks DOWN is winning now)
+    // 2) Gate 2 (depth sweep): walk the ask ladder to estimate avg fill for our USDC amount.
+    //    Skip if: book too thin to absorb our order, OR |avg fill − expected| > 10pp.
+    //    This catches thick-book sweeps like 52¢ entry sweeping to 24¢ fill.
+    await new Promise(r => setTimeout(r, 2000));   // 2s pause — let stale data expire
     try {
       const priceResp = await fetch(`/price?token_id=${encodeURIComponent(tokenId)}`);
       const priceData = await priceResp.json();
       if (!priceData.error) {
         const liveAsk  = priceData.best_ask;
-        const stale    = Math.abs(liveAsk - entryPrice);
+        const drift    = Math.abs(liveAsk - entryPrice);
 
-        // Gate 1: top-of-book price drift
-        if (stale > 0.15) {
-          logEntry("warn", `  ↳ <span class="red">CLOB price check: live ask ${(liveAsk*100).toFixed(1)}% vs expected ${(entryPrice*100).toFixed(1)}% — ${(stale*100).toFixed(1)}pp drift — market repriced, skipping</span>`);
+        // Gate 1: top-of-book price drift (tightened 15pp → 8pp, absolute value)
+        if (drift > 0.08) {
+          const dir = liveAsk < entryPrice ? "market crashed ↓" : "market moved ↑";
+          logEntry("warn", `  ↳ <span class="red">CLOB price check: live ask ${(liveAsk*100).toFixed(1)}% vs expected ${(entryPrice*100).toFixed(1)}% — ${(drift*100).toFixed(1)}pp drift (${dir}) — skipping, next cycle will re-evaluate</span>`);
           const idx = state.trades.indexOf(trade);
           if (idx !== -1) state.trades.splice(idx, 1);
           priceStream.unsubscribe(tokenId);
@@ -2182,7 +2192,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
 
         // Gate 2: depth / slippage simulation
         // Walk ask levels (sorted lowest price first) to estimate weighted average fill.
-        // Each ask level has {price, size} where size is in shares (1 share = 1 USDC / price).
+        // Each ask level has {price, size} where size is in shares (1 share ≈ 1 USDC / price).
         const askLevels = priceData.asks || [];
         if (askLevels.length > 0) {
           let usdcRemaining  = amount;
@@ -2191,9 +2201,9 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
 
           for (const level of askLevels) {
             if (usdcRemaining <= 0) break;
-            const px        = level.price;             // price per share (0–1)
-            const sharesAvail = level.size;             // shares available at this level
-            const usdcNeeded  = sharesAvail * px;       // USDC to buy all shares at this level
+            const px          = level.price;
+            const sharesAvail = level.size;
+            const usdcNeeded  = sharesAvail * px;
             const usdcTake    = Math.min(usdcRemaining, usdcNeeded);
             const sharesTaken = usdcTake / px;
             usdcFilled     += usdcTake;
@@ -2202,7 +2212,6 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           }
 
           if (usdcRemaining > 0.01) {
-            // Book too thin to fill our order even partially beyond what's listed
             const fillPct = ((amount - usdcRemaining) / amount * 100).toFixed(0);
             logEntry("warn", `  ↳ <span class="red">CLOB depth check: book too thin — only ${fillPct}% of $${amount.toFixed(2)} fillable, skipping</span>`);
             const idx = state.trades.indexOf(trade);
@@ -2216,11 +2225,13 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
             return;
           }
 
-          const avgFill  = usdcFilled / sharesAcquired;   // weighted avg price per share
-          const slippage = avgFill - entryPrice;           // positive = worse than expected
+          const avgFill   = usdcFilled / sharesAcquired;
+          const slippage  = avgFill - entryPrice;           // signed: + = more expensive, - = market crashed
+          const absSlip   = Math.abs(slippage);
 
-          if (slippage > 0.10) {
-            logEntry("warn", `  ↳ <span class="red">CLOB depth check: est. avg fill ${(avgFill*100).toFixed(1)}% vs entry ${(entryPrice*100).toFixed(1)}% — ${(slippage*100).toFixed(1)}pp slippage — thin book, skipping</span>`);
+          if (absSlip > 0.10) {
+            const reason = slippage > 0 ? "thin book sweep" : "market repriced against direction";
+            logEntry("warn", `  ↳ <span class="red">CLOB depth check: est. avg fill ${(avgFill*100).toFixed(1)}% vs entry ${(entryPrice*100).toFixed(1)}% — ${(slippage*100).toFixed(1)}pp (${reason}), skipping</span>`);
             const idx = state.trades.indexOf(trade);
             if (idx !== -1) state.trades.splice(idx, 1);
             priceStream.unsubscribe(tokenId);
@@ -2232,7 +2243,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
             return;
           }
 
-          logEntry("dim", `  → CLOB depth check: live ask ${(liveAsk*100).toFixed(1)}% · est. fill ${(avgFill*100).toFixed(1)}% for $${amount.toFixed(2)} (${(slippage*100).toFixed(1)}pp slip) — ok`);
+          logEntry("dim", `  → CLOB depth check: live ask ${(liveAsk*100).toFixed(1)}% · est. fill ${(avgFill*100).toFixed(1)}% for $${amount.toFixed(2)} (${(slippage >= 0 ? "+" : "")}${(slippage*100).toFixed(1)}pp) — ok`);
         } else {
           logEntry("dim", `  → CLOB price check: live ask ${(liveAsk*100).toFixed(1)}% vs expected ${(entryPrice*100).toFixed(1)}% — ok (no depth data)`);
         }
