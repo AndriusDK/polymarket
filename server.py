@@ -119,7 +119,16 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             best_bid = float(bids[0]["price"]) if bids else 0.0
             best_ask = float(asks[0]["price"]) if asks else 1.0
 
-            body = json.dumps({"best_bid": best_bid, "best_ask": best_ask}).encode()
+            # Pass top-15 depth levels so frontend can simulate fill price for our order size
+            ask_levels = [{"price": float(a["price"]), "size": float(a["size"])} for a in asks[:15]]
+            bid_levels = [{"price": float(b["price"]), "size": float(b["size"])} for b in bids[:15]]
+
+            body = json.dumps({
+                "best_bid": best_bid,
+                "best_ask": best_ask,
+                "asks": ask_levels,
+                "bids": bid_levels,
+            }).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
