@@ -124,7 +124,7 @@ class SetupScreen(Screen):
                     yield Switch(value=True, id="dry-run-switch")
                     yield Static("ON", id="dry-run-label", classes="switch-value")
 
-                yield Static("─" * 64, id="divider")
+                yield Static("─" * 64, id="divider-bottom")
                 yield Button("▶  INITIATE REPLICANT DETECTION", id="btn-launch", variant="primary")
 
     @on(Switch.Changed, "#dry-run-switch")
