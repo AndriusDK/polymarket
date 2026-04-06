@@ -1645,7 +1645,10 @@ async function _runCryptoCycleInner(asset) {
     // Near-res exception: <120s + HIGH confidence = outcome is near-certain regardless of odds.
     // Capped at 85% — 90%+ entries have terrible R/R and slippage turns them into losses.
     const nearResHighConf  = timeRemaining < 120 && analysis.confidence === "HIGH" && entryOdds <= 0.85;
-    const oddsOk      = analysis.signal === "SKIP" || (entryOdds >= minOdds && (entryOdds <= maxOdds || highConfHighOdds || nearResHighConf));
+    // Low-odds exception: HIGH conf + ≥15% edge can enter down to 43% — strong directional signal
+    // with clear mispricing justifies bypassing the crowd-sentiment floor.
+    const highConfLowOdds  = analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= 0.15 && entryOdds >= 0.43;
+    const oddsOk      = analysis.signal === "SKIP" || ((entryOdds >= minOdds || highConfLowOdds) && (entryOdds <= maxOdds || highConfHighOdds || nearResHighConf));
 
     // Gap-crossing guard: only applies when signal bets AGAINST the current gap direction.
     // (BUY_UP when price is below target, or BUY_DOWN when price is above target)
@@ -1718,7 +1721,7 @@ async function _runCryptoCycleInner(asset) {
     const btcCoinFlipBlocked = asset === "btc" &&
                                entryOdds >= 0.46 &&
                                entryOdds <= 0.54 &&
-                               !(analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= 0.18);
+                               !(analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= 0.13);
 
     // BTC gap-flip filter: MEDIUM confidence gap-flip bets on BTC are net-negative in two cases:
     // (1) gap > 800pts — rarely flip in the window; (2) entry odds < 55% with any gap size —
@@ -1772,7 +1775,7 @@ async function _runCryptoCycleInner(asset) {
     const nearResGapFlipHighConf = analysis.confidence === "HIGH" && analysis.absEdge >= 0.15;
     const nearResGapFlipLowOdds = signalAgainstGap &&
                                    timeRemaining < 300 &&
-                                   entryOdds < 0.72 &&
+                                   entryOdds < 0.62 &&
                                    !nearResGapFlipHighConf;
 
     // BTC short-window exception: the pump-skeptic crowd-reversion logic breaks down when
@@ -1831,8 +1834,9 @@ async function _runCryptoCycleInner(asset) {
     // BTC gap=$0 at 631s HIGH conf +18% edge → entered early before direction confirmed, -$5.68 unrealized.
     // Upper bound extended from 600s → 900s to close the 600-900s dead zone where longWindowLowConv
     // hasn't kicked in yet but midWindowSmallGap had already stopped watching.
-    // Use gapWatch for one observation cycle: if gap grows to ≥0.10% on re-check, allow entry.
-    const midGapThreshold = analysis.confidence === "HIGH" ? 0.0005 : 0.001;
+    // Use gapWatch for one observation cycle: if gap grows to threshold on re-check, allow entry.
+    // Thresholds relaxed: HIGH 0.05%→0.03%, MEDIUM/LOW 0.10%→0.07% — prior values filtered too aggressively.
+    const midGapThreshold = analysis.confidence === "HIGH" ? 0.0003 : 0.0007;
     const midWindowSmallGap = timeRemaining >= 200 && timeRemaining < 900 &&
                               stallGapPct < midGapThreshold;
 
