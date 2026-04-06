@@ -396,8 +396,8 @@ function addCryptoCard(trade) {
           <span class="btc-v dim" id="dur-${trade.id}">0s</span>
         </div>
         <div class="btc-kv">
-          <span class="btc-k">SECS LEFT</span>
-          <span class="btc-v dim">${trade.totalSecs}s</span>
+          <span class="btc-k">TIME LEFT</span>
+          <span class="btc-v dim" id="sl-${trade.id}">${secsLeft > 0 ? (Math.floor(secsLeft/60) > 0 ? `${Math.floor(secsLeft/60)}m ${String(secsLeft%60).padStart(2,'0')}s` : `${secsLeft}s`) : "—"}</span>
         </div>
         <div class="btc-kv">
           <span class="btc-k">GAP %</span>
@@ -2295,10 +2295,12 @@ function startCryptoCountdown() {
       if (!cdEl) continue;
       const secs   = Math.round((new Date(t.endDate) - Date.now()) / 1000);
       const urgent = secs < 60;
+      const slEl = $(`#sl-${t.id}`);
       if (secs <= 0) {
         cdEl.textContent = "[RESOLVED]";
         cdEl.className   = "btc-card-cd resolved";
         if (barEl) { barEl.style.width = "0%"; barEl.className = "btc-timer-fill urgent"; }
+        if (slEl)  { slEl.textContent = "—"; }
         // Auto-close expired positions at current market price
         closePosition(t, "RESOLVED");
       } else {
@@ -2308,6 +2310,12 @@ function startCryptoCountdown() {
           const pct = Math.min(100, Math.max(0, (secs / t.totalSecs) * 100));
           barEl.style.width = pct + "%";
           barEl.className   = `btc-timer-fill ${urgent ? "urgent" : ""}`;
+        }
+        if (slEl) {
+          const mm = Math.floor(secs / 60);
+          const ss = String(secs % 60).padStart(2, "0");
+          slEl.textContent = mm > 0 ? `${mm}m ${ss}s` : `${secs}s`;
+          slEl.className   = `btc-v ${urgent ? "red" : "dim"}`;
         }
       }
     }
