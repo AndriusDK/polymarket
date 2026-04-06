@@ -1550,16 +1550,16 @@ async function _runCryptoCycleInner(asset) {
     }
 
     // Liquidity gate — two ways a market can pass:
-    //   (A) Total volume ≥ floor ($1k) — market has built up deep book over its lifetime.
-    //   (B) Volume velocity ≥ threshold ($40/min) — real bettors are active RIGHT NOW even if
-    //       total vol is still low (e.g. fresh 5-min market 4 minutes in: $200 total but +$60/min).
+    //   (A) Total volume ≥ floor — market has built up deep book over its lifetime.
+    //       Controlled by the "Min Market Volume" UI setting (default $500).
+    //   (B) Volume velocity ≥ threshold ($10/min) — real bettors are active RIGHT NOW even if
+    //       total vol is still low (e.g. fresh 5-min market 4 minutes in: $200 total but +$20/min).
     // This replaces the naive total-volume floor which blocked liquid near-expiry markets and
-    // allowed dead $1k-total-but-$0-now markets through simultaneously.
-    // SOL/XRP stay blocked in practice — they're thin all the way through ($200 total, 0/min).
+    // allowed dead high-total-but-$0-now markets through simultaneously.
     {
       const marketVol   = market.volume ?? 0;
-      const minVol      = c.minEntryVolume    ?? 1000;   // $/total
-      const minVeloc    = c.minVolumeVelocity ?? 40;     // $/min
+      const minVol      = c.minMarketVolume   ?? 500;    // $/total — from "Min Market Volume" UI setting
+      const minVeloc    = c.minVolumeVelocity ?? 10;     // $/min
       const nowMs       = Date.now();
       const deltaVol    = prevVolSnap ? marketVol - prevVolSnap.vol : 0;
       const deltaMs     = prevVolSnap ? nowMs - prevVolSnap.at : 30_000;
