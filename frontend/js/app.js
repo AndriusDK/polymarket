@@ -1426,18 +1426,12 @@ async function _runCryptoCycleInner(asset) {
     if (!isGapWatched && !isGapPending) {
       state[asset].gapPending.set(market.conditionId, {
         endDateMs:            new Date(market.endDate).getTime(),
-        chainlinkPriceToBeat: state.chainlinkPrices[asset] ?? null,
+        chainlinkPriceToBeat: null,           // Captured on first cycle inside window — see pre-window gate
         firstSeenAt:          Date.now(),
         firstSeenVolume:      market.volume ?? 0,
+        preWindow:            true,
       });
     }
-
-    // Volume velocity tracking — snapshot volume on EVERY cycle regardless of gap/oracle status.
-    // Must happen before any `continue` so the velocity is accurate when the gap finally
-    // develops and the liquidity gate runs.  Markets with gap=0 still get their volume
-    // sampled here so we correctly detect the spike when they become tradeable.
-    // prevVolSnap is read by the liquidity gate below; the map is updated AFTER the gate reads it.
-    const prevVolSnap = state[asset].volTrack.get(market.conditionId) ?? null;
 
     // Derive window duration from title e.g. "March 26, 4:55PM-5:10PM ET" → 15 min → 900s.
     // Fallback to 300s (5 min) if parsing fails.
@@ -1454,9 +1448,30 @@ async function _runCryptoCycleInner(asset) {
       return diff * 60_000;
     })();
 
-    // Prefer the Chainlink price snapshotted when we first detected this market window.
-    // That snapshot happens within ~1-5s of window open (WS new_market event), so it's
-    // the closest approximation to Polymarket's actual Chainlink reference price.
+    const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
+    const windowSecs    = windowMs / 1000;
+
+    // Pre-window gate — Polymarket lists markets 10–20 minutes before their window opens.
+    // Entering pre-window is wrong for two reasons:
+    //   1. priceToBeat captured before the window = wrong reference price
+    //   2. You hold through unrelated price movement before the window even starts
+    // On the first cycle INSIDE the window, refresh chainlinkPriceToBeat from live Chainlink.
+    {
+      const snap = state[asset].gapPending.get(market.conditionId);
+      if (snap?.preWindow && timeRemaining <= windowSecs) {
+        snap.chainlinkPriceToBeat = state.chainlinkPrices[asset] ?? null;
+        snap.preWindow            = false;
+        snap.firstSeenAt          = Date.now();        // Reset so oracle gate runs from window open
+        snap.firstSeenVolume      = market.volume ?? 0;
+        logEntry("dim", `  → window opened — priceToBeat refreshed $${(snap.chainlinkPriceToBeat ?? 0) >= 1000 ? (snap.chainlinkPriceToBeat).toFixed(0) : (snap.chainlinkPriceToBeat ?? 0).toFixed(2)}`);
+      }
+      if (timeRemaining > windowSecs) {
+        logEntry("dim", `  → <span class="dim">pre-window</span> — ${Math.ceil((timeRemaining - windowSecs) / 60)}m until start`);
+        continue;
+      }
+    }
+
+    // Prefer the Chainlink price snapshotted on first cycle inside the window.
     // Fallback: Binance kline at window start (small delta vs Chainlink, but directionally correct).
     const storedData = state[asset].analyzed.get(market.conditionId)
                     ?? state[asset].gapPending.get(market.conditionId);
@@ -1468,7 +1483,6 @@ async function _runCryptoCycleInner(asset) {
     }
     if (!priceToBeat) priceToBeat = candles[candles.length - 1]?.open ?? spot;
 
-    const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
     const gap = spot - priceToBeat;
 
     // Skip near-zero gaps — noise floor depends on price source.
@@ -1549,32 +1563,6 @@ async function _runCryptoCycleInner(asset) {
       state[asset].gapPending.delete(market.conditionId);
       logEntry("dim", `  → <${timeRemaining}s left — too close to resolution, skipping`);
       continue;
-    }
-
-    // Liquidity gate — two ways a market can pass:
-    //   (A) Total volume ≥ floor — market has built up deep book over its lifetime.
-    //       Controlled by the "Min Market Volume" UI setting (default $500).
-    //   (B) Volume velocity ≥ threshold ($10/min) — real bettors are active RIGHT NOW even if
-    //       total vol is still low (e.g. fresh 5-min market 4 minutes in: $200 total but +$20/min).
-    // This replaces the naive total-volume floor which blocked liquid near-expiry markets and
-    // allowed dead high-total-but-$0-now markets through simultaneously.
-    {
-      const marketVol   = market.volume ?? 0;
-      const minVol      = c.minMarketVolume   ?? 500;    // $/total — from "Min Market Volume" UI setting
-      const minVeloc    = c.minVolumeVelocity ?? 10;     // $/min
-      const nowMs       = Date.now();
-      const deltaVol    = prevVolSnap ? marketVol - prevVolSnap.vol : 0;
-      const deltaMs     = prevVolSnap ? nowMs - prevVolSnap.at : 30_000;
-      const velocPerMin = deltaMs > 0 ? (deltaVol / deltaMs) * 60_000 : 0;
-      // Write current snapshot for next cycle (AFTER reading prevVolSnap above)
-      state[asset].volTrack.set(market.conditionId, { vol: marketVol, at: nowMs });
-      if (marketVol < minVol && velocPerMin < minVeloc) {
-        logEntry("dim", `  → <span class="amber">thin market</span> — vol $${marketVol.toFixed(0)} vel +$${velocPerMin.toFixed(0)}/min (need $${minVol} total OR $${minVeloc}/min) — skipping`);
-        continue;
-      }
-      if (marketVol < minVol) {
-        logEntry("dim", `  → <span class="cyan">vol spike</span> — $${marketVol.toFixed(0)} total but +$${velocPerMin.toFixed(0)}/min active — proceeding`);
-      }
     }
 
     // Precompute maxMovement for post-analysis crossing check.
