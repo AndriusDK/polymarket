@@ -1459,11 +1459,20 @@ async function _runCryptoCycleInner(asset) {
     {
       const snap = state[asset].gapPending.get(market.conditionId);
       if (snap?.preWindow && timeRemaining <= windowSecs) {
-        snap.chainlinkPriceToBeat = state.chainlinkPrices[asset] ?? null;
+        let clPrice = state.chainlinkPrices[asset] ?? null;
+        if (!clPrice) {
+          // Chainlink hasn't ticked for this asset yet — fetch historical price at window start
+          try {
+            clPrice = await fetchCryptoOpenAtTime(cfg.symbol, new Date(market.endDate).getTime() - windowMs);
+          } catch { /* fall through — will use last candle open below */ }
+        }
+        snap.chainlinkPriceToBeat = clPrice ?? null;
         snap.preWindow            = false;
         snap.firstSeenAt          = Date.now();        // Reset so oracle gate runs from window open
         snap.firstSeenVolume      = market.volume ?? 0;
-        logEntry("dim", `  → window opened — priceToBeat refreshed $${(snap.chainlinkPriceToBeat ?? 0) >= 1000 ? (snap.chainlinkPriceToBeat).toFixed(0) : (snap.chainlinkPriceToBeat ?? 0).toFixed(2)}`);
+        const displayPrice = snap.chainlinkPriceToBeat ?? 0;
+        const src = (clPrice && !state.chainlinkPrices[asset]) ? " (historical)" : "";
+        logEntry("dim", `  → window opened — priceToBeat refreshed $${displayPrice >= 1000 ? displayPrice.toFixed(0) : displayPrice.toFixed(2)}${src}`);
       }
       if (timeRemaining > windowSecs) {
         logEntry("dim", `  → <span class="dim">pre-window</span> — ${Math.ceil((timeRemaining - windowSecs) / 60)}m until start`);
