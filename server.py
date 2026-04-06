@@ -44,6 +44,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
+        elif self.path.startswith("/price"):
+            self._handle_price()
         elif self.path.startswith(PROXY_PREFIX):
             self._proxy_gamma()
         else:
@@ -89,6 +91,41 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(resp)
 
+        except Exception as e:
+            err = json.dumps({"error": str(e)}).encode()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(err)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(err)
+
+    def _handle_price(self):
+        """Return live best_bid/best_ask from the Polymarket CLOB (public, no auth)."""
+        try:
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            token_id = params.get("token_id", [None])[0]
+            if not token_id:
+                raise ValueError("missing token_id")
+
+            clob_url = f"https://clob.polymarket.com/book?token_id={urllib.parse.quote(token_id)}"
+            req = urllib.request.Request(clob_url, headers={"User-Agent": "polymarket-ai-bot/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                book = json.loads(resp.read())
+
+            bids = book.get("bids", [])
+            asks = book.get("asks", [])
+            best_bid = float(bids[0]["price"]) if bids else 0.0
+            best_ask = float(asks[0]["price"]) if asks else 1.0
+
+            body = json.dumps({"best_bid": best_bid, "best_ask": best_ask}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
         except Exception as e:
             err = json.dumps({"error": str(e)}).encode()
             self.send_response(500)
