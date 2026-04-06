@@ -1498,7 +1498,7 @@ async function _runCryptoCycleInner(asset) {
     const minGapFrac = configGap ?? autoGap;
     if (minGapFrac > 0 && Math.abs(gap) < spot * minGapFrac) {
       const minGap = spot * minGapFrac;
-      if (timeRemaining < 60) {
+      if (timeRemaining < 90) {
         // Too close to resolution — give up watching, mark analyzed so we stop re-checking
         const snap = state[asset].gapPending.get(market.conditionId);
         if (snap) { state[asset].analyzed.set(market.conditionId, snap); state[asset].gapPending.delete(market.conditionId); }
@@ -1553,11 +1553,12 @@ async function _runCryptoCycleInner(asset) {
       if (isGapPending) logEntry("dim", `  → gap confirmed ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} — running analysis`);
     }
 
-    // Hard block: < 60s remaining — book is empty, FOK always fails, stop-loss can't
-    // protect.  At 30–60s the DOWN/UP token with losing probability has essentially no
+    // Hard block: < 90s remaining — book is empty, FOK always fails, stop-loss can't
+    // protect.  At 60–90s the DOWN/UP token with losing probability has essentially no
     // liquidity so a market BUY fills at catastrophically low prices (e.g. 72.5% → 7.9%).
+    // Raised from 60s after BTC at 64s and ETH at 63s both filled at 4.6%/26% (vs 59.5%/58.5%).
     // Mark analyzed so we don't retry this market again.
-    if (timeRemaining < 60) {
+    if (timeRemaining < 90) {
       const snap = state[asset].gapPending.get(market.conditionId) ?? state[asset].analyzed.get(market.conditionId);
       if (snap) state[asset].analyzed.set(market.conditionId, snap);
       state[asset].gapPending.delete(market.conditionId);
@@ -2121,6 +2122,31 @@ function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     addCryptoCard(trade);
     startCryptoCountdown();
   } else {
+    // Pre-order CLOB sanity check: Gamma API prices can be stale by 30-60s.
+    // If the live Polymarket order book best_ask has moved >15pp from what we analyzed,
+    // the market has repriced and our AI reasoning is invalid — skip to avoid bad fills.
+    try {
+      const priceResp = await fetch(`/price?token_id=${encodeURIComponent(tokenId)}`);
+      const priceData = await priceResp.json();
+      if (!priceData.error) {
+        const liveAsk = priceData.best_ask;
+        const stale   = Math.abs(liveAsk - entryPrice);
+        if (stale > 0.15) {
+          logEntry("warn", `  ↳ <span class="red">CLOB price check: live ask ${(liveAsk*100).toFixed(1)}% vs expected ${(entryPrice*100).toFixed(1)}% — ${(stale*100).toFixed(1)}pp drift — market repriced, skipping</span>`);
+          const idx = state.trades.indexOf(trade);
+          if (idx !== -1) state.trades.splice(idx, 1);
+          priceStream.unsubscribe(tokenId);
+          state.stats.trades = Math.max(0, state.stats.trades - 1);
+          state.stats.spent  = Math.max(0, state.stats.spent - amount);
+          setStat("trades",    String(state.stats.trades));
+          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          return;
+        }
+        logEntry("dim", `  → CLOB price check: live ask ${(liveAsk*100).toFixed(1)}% vs expected ${(entryPrice*100).toFixed(1)}% — ok`);
+      }
+    } catch (_) { /* non-fatal — proceed with order */ }
+
     const orderPayload = {
       token_id:       tokenId,
       side:           "BUY",
