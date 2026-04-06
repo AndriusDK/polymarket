@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from textual import on
 from textual.app import ComposeResult
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label, Static, Switch
 from textual.containers import Container, Vertical, Horizontal
@@ -48,7 +49,7 @@ class SetupScreen(Screen):
 
     CSS_PATH = "blade_runner.tcss"
 
-    class Launch(Screen.Message):
+    class Launch(Message):
         def __init__(self, creds: BotCredentials) -> None:
             super().__init__()
             self.creds = creds
