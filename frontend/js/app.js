@@ -2154,15 +2154,19 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     addCryptoCard(trade);
     startCryptoCountdown();
   } else {
-    // Pre-order CLOB sanity check: Gamma API prices can be stale by 30-60s.
-    // If the live Polymarket order book best_ask has moved >15pp from what we analyzed,
-    // the market has repriced and our AI reasoning is invalid — skip to avoid bad fills.
+    // Pre-order CLOB depth check: Gamma API prices can be stale by 30-60s.
+    // 1) If best_ask has moved >15pp from our expected entry, the market repriced — skip.
+    // 2) Simulate filling our full order against the live ask ladder. If estimated avg fill
+    //    slips >10pp from entryPrice, or the book lacks enough depth to fill us, skip.
+    //    This catches "thin book sweep" fills like a $3.25 order sweeping from 52¢ → 24¢.
     try {
       const priceResp = await fetch(`/price?token_id=${encodeURIComponent(tokenId)}`);
       const priceData = await priceResp.json();
       if (!priceData.error) {
-        const liveAsk = priceData.best_ask;
-        const stale   = Math.abs(liveAsk - entryPrice);
+        const liveAsk  = priceData.best_ask;
+        const stale    = Math.abs(liveAsk - entryPrice);
+
+        // Gate 1: top-of-book price drift
         if (stale > 0.15) {
           logEntry("warn", `  ↳ <span class="red">CLOB price check: live ask ${(liveAsk*100).toFixed(1)}% vs expected ${(entryPrice*100).toFixed(1)}% — ${(stale*100).toFixed(1)}pp drift — market repriced, skipping</span>`);
           const idx = state.trades.indexOf(trade);
@@ -2175,7 +2179,63 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           return;
         }
-        logEntry("dim", `  → CLOB price check: live ask ${(liveAsk*100).toFixed(1)}% vs expected ${(entryPrice*100).toFixed(1)}% — ok`);
+
+        // Gate 2: depth / slippage simulation
+        // Walk ask levels (sorted lowest price first) to estimate weighted average fill.
+        // Each ask level has {price, size} where size is in shares (1 share = 1 USDC / price).
+        const askLevels = priceData.asks || [];
+        if (askLevels.length > 0) {
+          let usdcRemaining  = amount;
+          let usdcFilled     = 0;
+          let sharesAcquired = 0;
+
+          for (const level of askLevels) {
+            if (usdcRemaining <= 0) break;
+            const px        = level.price;             // price per share (0–1)
+            const sharesAvail = level.size;             // shares available at this level
+            const usdcNeeded  = sharesAvail * px;       // USDC to buy all shares at this level
+            const usdcTake    = Math.min(usdcRemaining, usdcNeeded);
+            const sharesTaken = usdcTake / px;
+            usdcFilled     += usdcTake;
+            sharesAcquired += sharesTaken;
+            usdcRemaining  -= usdcTake;
+          }
+
+          if (usdcRemaining > 0.01) {
+            // Book too thin to fill our order even partially beyond what's listed
+            const fillPct = ((amount - usdcRemaining) / amount * 100).toFixed(0);
+            logEntry("warn", `  ↳ <span class="red">CLOB depth check: book too thin — only ${fillPct}% of $${amount.toFixed(2)} fillable, skipping</span>`);
+            const idx = state.trades.indexOf(trade);
+            if (idx !== -1) state.trades.splice(idx, 1);
+            priceStream.unsubscribe(tokenId);
+            state.stats.trades = Math.max(0, state.stats.trades - 1);
+            state.stats.spent  = Math.max(0, state.stats.spent - amount);
+            setStat("trades",    String(state.stats.trades));
+            setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+            setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+            return;
+          }
+
+          const avgFill  = usdcFilled / sharesAcquired;   // weighted avg price per share
+          const slippage = avgFill - entryPrice;           // positive = worse than expected
+
+          if (slippage > 0.10) {
+            logEntry("warn", `  ↳ <span class="red">CLOB depth check: est. avg fill ${(avgFill*100).toFixed(1)}% vs entry ${(entryPrice*100).toFixed(1)}% — ${(slippage*100).toFixed(1)}pp slippage — thin book, skipping</span>`);
+            const idx = state.trades.indexOf(trade);
+            if (idx !== -1) state.trades.splice(idx, 1);
+            priceStream.unsubscribe(tokenId);
+            state.stats.trades = Math.max(0, state.stats.trades - 1);
+            state.stats.spent  = Math.max(0, state.stats.spent - amount);
+            setStat("trades",    String(state.stats.trades));
+            setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+            setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+            return;
+          }
+
+          logEntry("dim", `  → CLOB depth check: live ask ${(liveAsk*100).toFixed(1)}% · est. fill ${(avgFill*100).toFixed(1)}% for $${amount.toFixed(2)} (${(slippage*100).toFixed(1)}pp slip) — ok`);
+        } else {
+          logEntry("dim", `  → CLOB price check: live ask ${(liveAsk*100).toFixed(1)}% vs expected ${(entryPrice*100).toFixed(1)}% — ok (no depth data)`);
+        }
       }
     } catch (_) { /* non-fatal — proceed with order */ }
 
