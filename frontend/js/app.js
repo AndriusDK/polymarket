@@ -843,22 +843,41 @@ function closePosition(trade, reason) {
             // time can be based on a stale/thin bid (e.g. bid=1¢ → shows -$4.92 when
             // actual fill was 58¢ → real loss -$0.66). Update card and session totals.
             if (fillPrice && fillPrice > 0.05 && trade.shares > 0) {
+              const prevRealized  = trade.realizedPnl;
               const actualRealized = trade.shares * fillPrice - trade.amount;
-              const delta = actualRealized - trade.realizedPnl;
+              const delta = actualRealized - prevRealized;
               if (Math.abs(delta) > 0.01) {
                 state.realizedPnl = (state.realizedPnl || 0) + delta;
                 trade.realizedPnl = actualRealized;
+
+                // Fix win/loss counts if the sign flipped
+                const wasWin  = prevRealized  > 0;
+                const nowWin  = actualRealized > 0;
+                if (wasWin && !nowWin) { state.wins--; state.losses++; }
+                else if (!wasWin && nowWin) { state.losses--; state.wins++; }
+
                 const cardEl = $(`#card-${trade.id}`);
                 if (cardEl) {
+                  // Update PnL amount + color
                   const pnlEl = cardEl.querySelector(".btc-closed-pnl");
                   if (pnlEl) {
                     const sign = actualRealized >= 0 ? "+" : "";
                     pnlEl.textContent = `${sign}$${actualRealized.toFixed(2)} REALIZED`;
                     pnlEl.className = `btc-closed-pnl ${actualRealized >= 0 ? "green" : "red"}`;
                   }
+                  // Update WIN/LOSS strip label + color if sign changed
+                  if (wasWin !== nowWin) {
+                    const stripEl = cardEl.querySelector(".btc-closed-strip");
+                    const labelEl = cardEl.querySelector(".btc-closed-label");
+                    if (stripEl) stripEl.className = `btc-closed-strip ${nowWin ? "win" : "loss"}`;
+                    if (labelEl) {
+                      const reason = labelEl.textContent.replace(/^(▲ WIN|▼ LOSS) — /, "");
+                      labelEl.textContent = `${nowWin ? "▲ WIN" : "▼ LOSS"} — ${reason}`;
+                    }
+                  }
                 }
                 updatePnlStat();
-                logEntry("info", `  [LIVE] PnL reconciled from fill: $${actualRealized.toFixed(2)} (was $${(actualRealized - delta).toFixed(2)})`);
+                logEntry("info", `  [LIVE] PnL reconciled from fill: $${actualRealized.toFixed(2)} (was $${prevRealized.toFixed(2)})`);
               }
             }
           }
