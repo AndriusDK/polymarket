@@ -2001,7 +2001,7 @@ async function _runCryptoCycleInner(asset) {
 
 const runBtcCycle = () => runCryptoCycle("btc");
 
-function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
+async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   const c      = state.config;
   const cfg    = CRYPTO_CONFIG[asset];
 
