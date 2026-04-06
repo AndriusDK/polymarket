@@ -214,31 +214,22 @@ class DashboardScreen(Screen):
         self._set_status("ANALYZING…", "cyan")
         analyses = []
 
+        self._log(f"[{C_DIM}]  Analyzing {len(markets)} markets with Claude…[/]")
         for i, market in enumerate(markets):
             if self._stop_event.is_set():
                 break
 
-            self._log(
-                f"[{C_DIM}]  [{i+1}/{len(markets)}] {market.question[:72]}…[/]"
-            )
             analysis = analyzer.analyze_market(market)
 
             if analysis is None:
-                self._log(f"[{C_RED}]    ✗ Analysis failed[/]")
                 continue
 
             analyses.append(analysis)
             self.markets_analyzed = len(analyses)
             self._update_stats()
-
-            edge_col = C_GREEN if analysis.edge > 0 else C_RED
-            self._log(
-                f"[{C_TEXT}]    Claude: [bold]{analysis.yes_probability:.1%}[/]  "
-                f"Market: {market.yes_price:.1%}  "
-                f"Edge: [{edge_col}]{analysis.edge:+.1%}[/]  "
-                f"Conf: {analysis.confidence}[/]"
-            )
             self.call_from_thread(self._add_table_row, analysis)
+
+        self._log(f"[{C_TEXT}]  → Analyzed [bold]{len(analyses)}[/]/{len(markets)} markets[/]")
 
         # Filter opportunities
         opps = [

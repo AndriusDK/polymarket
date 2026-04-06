@@ -111,13 +111,10 @@ class TradingBot:
         summary = RunSummary()
         now = datetime.now(timezone.utc).isoformat()
 
-        logger.info("=== Polymarket AI Bot starting at %s ===", now)
         logger.info(
-            "Config: dry_run=%s, max_bet=$%.0f, min_edge=%.0f%%, model=%s",
-            self.config.dry_run,
-            self.config.max_bet_usdc,
-            self.config.min_edge * 100,
-            self.config.claude_model,
+            "Bot starting at %s | dry_run=%s, max_bet=$%.0f, min_edge=%.0f%%, model=%s",
+            now, self.config.dry_run, self.config.max_bet_usdc,
+            self.config.min_edge * 100, self.config.claude_model,
         )
 
         # 1. Fetch markets
@@ -168,14 +165,14 @@ class TradingBot:
         """Run analysis with logging progress."""
         results = []
         for i, market in enumerate(markets, 1):
-            logger.info(
+            logger.debug(
                 "  [%d/%d] Analyzing: %s",
                 i, len(markets), market.question[:70]
             )
             analysis = self.analyzer.analyze_market(market)
             if analysis:
                 results.append(analysis)
-                logger.info(
+                logger.debug(
                     "         Claude: YES=%.1f%%  Market: YES=%.1f%%  "
                     "Edge=%+.1f%%  Conf=%s",
                     analysis.yes_probability * 100,
@@ -183,12 +180,11 @@ class TradingBot:
                     analysis.edge * 100,
                     analysis.confidence,
                 )
-            else:
-                logger.warning("         Analysis failed, skipping.")
 
             if i < len(markets):
                 time.sleep(self.config.sleep_between_analyses)
 
+        logger.info("Analyzed %d/%d markets.", len(results), len(markets))
         return results
 
     def _filter_opportunities(self, analyses: list[Analysis]) -> list[Analysis]:
