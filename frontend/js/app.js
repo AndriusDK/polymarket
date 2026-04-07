@@ -580,6 +580,8 @@ const priceStream = (() => {
               ? Math.min(20_000, Math.max(15_000, t.totalSecs * 100))    // short window: 15-20s
               : t.totalSecs < 500
               ? 60_000                                                    // mid-window (200-500s): 60s flat — let position breathe before first stop check
+              : (t.confidence === "HIGH" && t.entryPrice > 0.55)
+              ? 180_000                                                   // long window + HIGH conf + strong entry (>55%): 180s — correct-direction trades oscillate before resolving
               : 120_000;                                                  // long window (500s+): 120s — 15-min markets need time to settle
             const grace = t.signalAgainstGap ? Math.max(baseGrace, 75_000) : baseGrace;
             if (Date.now() - t.entryTime < grace) {
@@ -603,7 +605,11 @@ const priceStream = (() => {
             // drops while the price approaches from the wrong direction — a 25% flat stop fires
             // at the token low even when the trade direction is ultimately correct.
             // Use a wider 60% base stop for gap-flip entries to survive the pre-crossing dip.
-            const baseStop = t.signalAgainstGap ? Math.max(stopLossPct, 0.60) : stopLossPct;
+            // Exception: low-odds gap-flip entries (<40%) are momentum-only bets with no real gap
+            // cushion — capping at 35% limits the max loss instead of allowing a 60-70% drawdown.
+            const baseStop = t.signalAgainstGap
+              ? (t.entryPrice < 0.40 ? Math.max(stopLossPct, 0.35) : Math.max(stopLossPct, 0.60))
+              : stopLossPct;
             const effectiveStop = t.totalSecs < 90  ? Math.max(baseStop, 0.40)  // near-res
                                 : t.totalSecs < 200 ? Math.max(baseStop, 0.32)  // short window
                                 : baseStop;
@@ -1636,7 +1642,7 @@ async function _runCryptoCycleInner(asset) {
     if (sigEl) sigEl.textContent = String(parseInt(sigEl.textContent || "0") + 1);
 
     const minEdge     = c[`${asset}MinEdge`] ?? 0.06;
-    const minOdds     = (c.minEntryOdds ?? 10) / 100;
+    const minOdds     = (c.minEntryOdds ?? 32) / 100;   // raised from 10% — blocks low-odds entries where stop loss produces outsized losses
     const maxOdds     = (c.maxEntryOdds ?? 87) / 100;
     const entryOdds   = analysis.signal === "BUY_UP" ? market.upPrice : market.downPrice;
     // HIGH conf + edge exception: allow entry up to 85% when AI has ≥10% edge.
@@ -2058,6 +2064,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   // Use smaller sizes in the final 150s to match available book depth (~$3-5).
   const secsForSizing = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
   const timeFraction  = secsForSizing <= 150 ? 0.50   // thin book near expiry — keep small
+                      : secsForSizing <= 300 ? 0.60   // 5-min windows and late 15-min entries: reduce exposure
                       : secsForSizing <= 400 ? 1.0
                       : secsForSizing <= 800 ? 0.65
                       : 0.40;
