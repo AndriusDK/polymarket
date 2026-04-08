@@ -579,7 +579,7 @@ const priceStream = (() => {
               : t.totalSecs < 200
               ? Math.min(20_000, Math.max(15_000, t.totalSecs * 100))    // short window: 15-20s
               : t.totalSecs < 500
-              ? 60_000                                                    // mid-window (200-500s): 60s flat — let position breathe before first stop check
+              ? 90_000                                                    // mid-window (200-500s): 90s — correct-direction 5-min trades resolve late, tight 60s was stopping winners
               : (t.confidence === "HIGH" && t.entryPrice > 0.55)
               ? 180_000                                                   // long window + HIGH conf + strong entry (>55%): 180s — correct-direction trades oscillate before resolving
               : 120_000;                                                  // long window (500s+): 120s — 15-min markets need time to settle
@@ -1900,6 +1900,7 @@ async function _runCryptoCycleInner(asset) {
       : 0;
     const autoMomentumTrade = analysis.signal !== "SKIP" &&
                               analysis.confidence === "HIGH" &&
+                              stallGapPct > 0.0002 &&   // require real gap floor (>0.02%) — zero-gap pure-momentum plays fail
                               stallGapPct < 0.001 &&    // current gap < 0.10%
                               effectiveGapPct > 0.0015; // effective gap > 0.15% of price
     const momentumTradeBypass = (analysis.momentumTrade === true || autoMomentumTrade) &&
@@ -2090,7 +2091,13 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   const signalAgainstGapSizing = (analysis.signal === "BUY_UP"   && (analysis.gap ?? 0) < 0) ||
                                   (analysis.signal === "BUY_DOWN" && (analysis.gap ?? 0) > 0);
   const gapFlipCap = signalAgainstGapSizing ? 50 : Infinity;
-  const amount = Math.min(rawAmount, nearResCap, gapFlipCap);
+  let amount = Math.min(rawAmount, nearResCap, gapFlipCap);
+  // Sub-$1 rescue: HIGH-conf qualified signals were silently lost to $0.75-0.95 sizes;
+  // bump to the $1 minimum so we actually take the position (budget permitting).
+  if (amount >= 0.50 && amount < 1.00 && analysis.confidence === "HIGH" && (c.maxDaily - state.stats.spent) >= 1.00) {
+    logEntry("dim", `  ↳ <span class="amber">size bump</span> — computed $${amount.toFixed(2)} → $1.00 (HIGH conf, Polymarket minimum)`);
+    amount = 1.00;
+  }
   if (amount < 1.00) {
     logEntry("dim", `  ↳ <span class="dim">skipped</span> — computed size $${amount.toFixed(2)} < $1.00 Polymarket minimum (maxBet=${maxBet} time=${timeFraction.toFixed(2)} odds=${oddsFraction.toFixed(2)} conf=${confidenceFraction})`);
     return;
