@@ -1562,6 +1562,58 @@ async function _runCryptoCycleInner(asset) {
       continue;
     }
 
+    // === Flash-entry gate ===
+    // At window open (<45s), Polymarket tokens start near 50/50 before the crowd processes
+    // the gap.  Entering at ~50% gives deeper book, better fills, and better risk/reward
+    // vs entering at 55-65%+ after price discovery.
+    // Bypasses: 30s wait, oracle gate, AI analysis.
+    // Respects: stress hold, direction veto, position limit, budget.
+    {
+      const fSnap     = state[asset].gapPending.get(market.conditionId)
+                     ?? state[asset].analyzed.get(market.conditionId);
+      const windowAge = fSnap?.firstSeenAt ? Date.now() - fSnap.firstSeenAt : Infinity;
+
+      if (!fSnap?.flashEntered && windowAge < 45_000 && timeRemaining > 150) {
+        const flashSignal = gap > 0 ? "BUY_UP" : "BUY_DOWN";
+        const flashGapPct = priceToBeat > 0 ? Math.abs(gap) / priceToBeat : 0;
+        const flashOdds   = flashSignal === "BUY_UP" ? market.upPrice : market.downPrice;
+        const assetOpen   = state.trades.some(t => t.type === asset);
+        const veto        = state.directionVeto;
+        const vetoed      = veto && Date.now() < veto.expiresAt && flashSignal === veto.signal;
+        const stressed    = Date.now() < (state.stressHoldUntil ?? 0);
+
+        if (
+          flashGapPct >= 0.0004 &&    // gap ≥ 0.04% — meaningful directional signal
+          flashOdds <= 0.52 &&         // book still near 50/50 — pre-discovery depth
+          !assetOpen &&                // no existing position for this asset
+          !vetoed &&                   // no correlated-loss directional veto
+          !stressed &&                 // no market-stress cool-down
+          state.stats.spent < c.maxDaily
+        ) {
+          fSnap.flashEntered = true;   // prevent double-fire on subsequent cycles
+          logEntry("dim",
+            `  ↳ <span class="amber">⚡ flash</span> — ` +
+            `book at ${(flashOdds*100).toFixed(0)}% (pre-discovery), ` +
+            `gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} (${(flashGapPct*100).toFixed(2)}%)`
+          );
+          placeCryptoTrade(asset, {
+            signal:        flashSignal,
+            confidence:    "HIGH",
+            edge:          0.10,
+            absEdge:       0.10,
+            reasoning:     `Window-open flash entry — gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} (${(flashGapPct*100).toFixed(2)}%) captured before market price discovery`,
+            gap,
+            priceToBeat,
+            momentum:      0,
+            timeRemaining,
+            momentumTrade: false,
+            market,
+          }, { spot, priceToBeat });
+          continue;  // skip oracle gate + AI analysis this cycle
+        }
+      }
+    }
+
     // Oracle observation gate — when a market is brand-new AND the gap is tiny (<0.2%),
     // the Chainlink price-to-beat may not have been published yet (typical 1-2 min lag on
     // new windows).  Deferring the AI call until volume picks up ($200+ delta) OR the market
@@ -1899,7 +1951,7 @@ async function _runCryptoCycleInner(asset) {
       ? Math.abs((analysis.gap ?? 0) + expectedDriftPts) / analysis.priceToBeat
       : 0;
     const _autoMomIsUp     = analysis.signal === "BUY_UP";
-    const _autoMomPrice    = _autoMomIsUp ? (market?.yesPrice ?? 0.5) : (market?.noPrice ?? 0.5);
+    const _autoMomPrice    = _autoMomIsUp ? (market?.upPrice ?? 0.5) : (market?.downPrice ?? 0.5);
     const autoMomentumTrade = analysis.signal !== "SKIP" &&
                               analysis.confidence === "HIGH" &&
                               stallGapPct > 0.0002 &&   // require real gap floor (>0.02%) — zero-gap pure-momentum plays fail
