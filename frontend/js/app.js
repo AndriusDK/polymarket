@@ -1652,11 +1652,6 @@ async function _runCryptoCycleInner(asset) {
       continue;
     }
 
-    // Post-discovery AI trades are disabled — only flash entries at window open.
-    // By the time AI analysis runs, the book has already moved to 55-65%+ which
-    // causes FOK failures, bad fills, and poor risk/reward.  Flash entries at ~50%
-    // get better fills, deeper books, and cleaner risk/reward.
-    continue;
     // Floor: 0.1% of spot/min avoids underestimating movement during calm 1-min candles.
     const recentRange = candles.slice(-3).reduce((mx, c) => Math.max(mx, c.high - c.low), 0);
     const maxMovement = Math.max(recentRange, spot * 0.001) * Math.max(timeRemaining / 60, 0.25) * 3;
@@ -1966,10 +1961,15 @@ async function _runCryptoCycleInner(asset) {
                                 analysis.confidence === "HIGH" &&
                                 analysis.signal !== "SKIP";
 
+    // Early-discovery cap: above 57% the book has already moved and fills get bad.
+    // Flash entry handles ≤52%; AI entry covers the 47-57% pre-discovery window.
+    const postDiscovery = entryOdds > 0.57;
+
     const qualifies =
       analysis.signal !== "SKIP" &&
       oddsOk &&
       crossable &&
+      !postDiscovery &&
       !longWindowLowConv &&
       !btcMidWindowLowOdds &&
       !btcCoinFlipBlocked &&
@@ -2010,6 +2010,7 @@ async function _runCryptoCycleInner(asset) {
       try {
       // Re-examined market whose gap grew but was blocked by a different filter — clean up watch.
       if (isGapWatched && !nearResSmallGap) state[asset].gapWatch.delete(market.conditionId);
+      if (postDiscovery) reasons.push(`post-discovery — ${(entryOdds * 100).toFixed(1)}% > 57%, book already thin — wait for next window`);
       if (!oddsOk) {
         if (entryOdds > maxOdds)
           reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% > max ${(maxOdds * 100).toFixed(0)}% (bad risk/reward)`);
