@@ -1936,8 +1936,16 @@ async function _runCryptoCycleInner(asset) {
     }
 
     if (qualifies) {
-      state[asset].gapWatch.delete(market.conditionId);
-      placeCryptoTrade(asset, analysis, { spot, priceToBeat });
+      // Fresh-window gate: CLOB book is thin/empty for the first ~30s after a window opens.
+      // Entering immediately sends a FOK into an empty book and causes catastrophic fills.
+      // Wait 30s for makers to post asks before firing — the signal stays valid next cycle.
+      const windowAge = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
+      if (windowAge < 30_000) {
+        logEntry("dim", `  ↳ <span class="amber">fresh window</span> — ${Math.round(windowAge/1000)}s since open, holding 30s for book depth (next cycle will trade)`);
+      } else {
+        state[asset].gapWatch.delete(market.conditionId);
+        placeCryptoTrade(asset, analysis, { spot, priceToBeat });
+      }
     } else if (analysis.signal !== "SKIP") {
       const reasons = [];
       try {
@@ -2259,7 +2267,19 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
 
           logEntry("dim", `  → CLOB depth check: live ask ${(liveAsk*100).toFixed(1)}% · est. fill ${(avgFill*100).toFixed(1)}% for $${amount.toFixed(2)} (${(slippage >= 0 ? "+" : "")}${(slippage*100).toFixed(1)}pp) — ok`);
         } else {
-          logEntry("dim", `  → CLOB price check: live ask ${(liveAsk*100).toFixed(1)}% vs expected ${(entryPrice*100).toFixed(1)}% — ok (no depth data)`);
+          // No ask levels — book is empty (typical in the first ~30s after a window opens).
+          // Firing FOK into an empty book sweeps stale limit orders at catastrophic prices
+          // (e.g. 47% → 5%, 50% → 10%).  Abort and let the next cycle retry once depth exists.
+          logEntry("warn", `  ↳ <span class="amber">empty book</span> — no CLOB ask levels, skipping (book hasn't established yet — next cycle will retry)`);
+          const idx = state.trades.indexOf(trade);
+          if (idx !== -1) state.trades.splice(idx, 1);
+          priceStream.unsubscribe(tokenId);
+          state.stats.trades = Math.max(0, state.stats.trades - 1);
+          state.stats.spent  = Math.max(0, state.stats.spent - amount);
+          setStat("trades",    String(state.stats.trades));
+          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          return;
         }
       }
     } catch (_) { /* non-fatal — proceed with order */ }
