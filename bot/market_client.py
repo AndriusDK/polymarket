@@ -300,9 +300,9 @@ class PolymarketClient:
             # At 90%+ the risk/reward collapses — 10% left to make vs 90% to lose.
             hard_cap = round(min((entry_price or 0.80) + 0.10, 0.90), 4)
             retry_configs = [
-                (amount_usdc,        price_limit),  # 1st: entry + 5%
-                (amount_usdc,        hard_cap),     # 2nd: entry + 10%, max 90%
-                (amount_usdc * 0.5,  hard_cap),     # 3rd: half size, same cap
+                (amount_usdc,        price_limit),   # 1st: full size, entry + 5%
+                (amount_usdc * 0.5,  price_limit),   # 2nd: half size, same price — thin book, fill what's there
+                (amount_usdc * 0.5,  hard_cap),      # 3rd: half size, entry + 10% — widen price if still rejected
             ]
         else:
             # SELL: progressively widen the floor — never go completely unlimited

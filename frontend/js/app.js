@@ -2215,6 +2215,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
         // Gate 2: depth / slippage simulation
         // Walk ask levels (sorted lowest price first) to estimate weighted average fill.
         // Each ask level has {price, size} where size is in shares (1 share ≈ 1 USDC / price).
+        // Only count levels the FOK order can actually reach — the server caps price at
+        // entry + 5% (max 92%).  Counting higher levels overstates fillable depth and causes
+        // FOK failures that the simulation wrongly predicted would succeed.
+        const priceCapFOK  = Math.min(entryPrice + 0.05, 0.92);  // mirrors server max_slippage
         const askLevels = priceData.asks || [];
         if (askLevels.length > 0) {
           let usdcRemaining  = amount;
@@ -2223,6 +2227,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
 
           for (const level of askLevels) {
             if (usdcRemaining <= 0) break;
+            if (level.price > priceCapFOK) break;  // FOK won't fill above the price cap — stop
             const px          = level.price;
             const sharesAvail = level.size;
             const usdcNeeded  = sharesAvail * px;
@@ -2234,17 +2239,29 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           }
 
           if (usdcRemaining > 0.01) {
-            const fillPct = ((amount - usdcRemaining) / amount * 100).toFixed(0);
-            logEntry("warn", `  ↳ <span class="red">CLOB depth check: book too thin — only ${fillPct}% of $${amount.toFixed(2)} fillable, skipping</span>`);
-            const idx = state.trades.indexOf(trade);
-            if (idx !== -1) state.trades.splice(idx, 1);
-            priceStream.unsubscribe(tokenId);
-            state.stats.trades = Math.max(0, state.stats.trades - 1);
-            state.stats.spent  = Math.max(0, state.stats.spent - amount);
-            setStat("trades",    String(state.stats.trades));
-            setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
-            setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
-            return;
+            const fillable = amount - usdcRemaining;
+            const fillPct  = (fillable / amount * 100).toFixed(0);
+            if (fillable >= 1.00) {
+              // Book can partially fill within the price cap — trim order to what's available.
+              // Better to place a smaller confirmed fill than miss the trade entirely.
+              const trimmed = Math.floor(fillable * 100) / 100;  // round down to nearest cent
+              logEntry("dim", `  ↳ <span class="amber">depth trim</span> — book fillable $${trimmed.toFixed(2)} of $${amount.toFixed(2)} (${fillPct}% at ≤${(priceCapFOK*100).toFixed(0)}¢), sizing down`);
+              amount       = trimmed;
+              trade.amount = trimmed;
+              trade.shares = trimmed / entryPrice;
+              // state.stats.spent picks up the trimmed amount at the sync update below — no early update needed
+            } else {
+              logEntry("warn", `  ↳ <span class="red">CLOB depth check: book too thin — only $${fillable.toFixed(2)} fillable at ≤${(priceCapFOK*100).toFixed(0)}¢ (${fillPct}% of $${amount.toFixed(2)}), skipping</span>`);
+              const idx = state.trades.indexOf(trade);
+              if (idx !== -1) state.trades.splice(idx, 1);
+              priceStream.unsubscribe(tokenId);
+              state.stats.trades = Math.max(0, state.stats.trades - 1);
+              state.stats.spent  = Math.max(0, state.stats.spent - amount);
+              setStat("trades",    String(state.stats.trades));
+              setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+              setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+              return;
+            }
           }
 
           const avgFill   = usdcFilled / sharesAcquired;
