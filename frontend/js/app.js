@@ -634,6 +634,7 @@ const priceStream = (() => {
         for (const s of (state.shadowTrades || [])) {
           if (s.tokenId !== tokenId || s.resolved) continue;
           if (bid < s.minPriceAfterClose) s.minPriceAfterClose = bid;
+          if (bid > s.maxPriceAfterClose) s.maxPriceAfterClose = bid;
           s.lastKnownPrice = bid;
           // Resolution: token converges to ~0 (wrong direction) or ~1 (correct direction)
           if (bid >= 0.97 || bid <= 0.03) {
@@ -905,6 +906,7 @@ function closePosition(trade, reason) {
       tradeId: trade.id,
       tokenId: trade.tokenId,
       minPriceAfterClose: trade.currentPrice,
+      maxPriceAfterClose: trade.currentPrice,
       lastKnownPrice: trade.currentPrice,
       finalResolutionPrice: null,
       resolved: false,
@@ -980,6 +982,7 @@ function closePosition(trade, reason) {
         <span id="resolution-badge-${trade.id}" class="resolution-badge pending">⏳ TRACKING DIRECTION</span>
         <div class="resolution-data">
           <span class="res-item">MIN AFTER CLOSE: <span id="res-min-${trade.id}" class="btc-v">$${trade.currentPrice.toFixed(3)}</span></span>
+          <span class="res-item">MAX AFTER CLOSE: <span id="res-max-${trade.id}" class="btc-v">$${trade.currentPrice.toFixed(3)}</span></span>
           <span class="res-item">RESOLUTION: <span id="res-final-${trade.id}" class="btc-v dim">—</span></span>
         </div>
       `;
@@ -1051,6 +1054,8 @@ function updateResolutionBadge(shadow) {
   badge.textContent = correct ? "✓ CORRECT DIR" : "✗ WRONG DIR";
   const minEl = $(`#res-min-${shadow.tradeId}`);
   if (minEl) minEl.textContent = `$${shadow.minPriceAfterClose.toFixed(3)}`;
+  const maxEl = $(`#res-max-${shadow.tradeId}`);
+  if (maxEl) maxEl.textContent = `$${shadow.maxPriceAfterClose.toFixed(3)}`;
   const finalEl = $(`#res-final-${shadow.tradeId}`);
   if (finalEl) {
     finalEl.textContent = `$${shadow.finalResolutionPrice.toFixed(3)}`;
