@@ -1596,26 +1596,62 @@ async function _runCryptoCycleInner(asset) {
           !stressed &&                 // no market-stress cool-down
           state.stats.spent < c.maxDaily
         ) {
-          fSnap.flashEntered = true;   // prevent double-fire on subsequent cycles
-          logEntry("dim",
-            `  ↳ <span class="amber">⚡ flash</span> — ` +
-            `book at ${(flashOdds*100).toFixed(0)}% (pre-discovery), ` +
-            `gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} (${(flashGapPct*100).toFixed(2)}%)`
-          );
-          placeCryptoTrade(asset, {
-            signal:        flashSignal,
-            confidence:    "HIGH",
-            edge:          0.10,
-            absEdge:       0.10,
-            reasoning:     `Window-open flash entry — gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} (${(flashGapPct*100).toFixed(2)}%) captured before market price discovery`,
-            gap,
-            priceToBeat,
-            momentum:      0,
-            timeRemaining,
-            momentumTrade: false,
-            market,
-          }, { spot, priceToBeat });
-          continue;  // skip oracle gate + AI analysis this cycle
+          // Flash quality gate: tiny gaps (<0.08%) need ≥2/3 confirmations to avoid coin-flip entries.
+          // Large gaps (≥0.08%) carry enough directional signal on their own.
+          const flashAlignedCnt = candles.slice(0, 5).filter(c =>
+            flashSignal === "BUY_UP" ? c.close > c.open : c.close < c.open
+          ).length;
+          const flashMomRaw = candles.slice(0, 3).reduce((s, c) => s + (c.close - c.open), 0) / 3;
+          const flashMomThr = asset === "btc" ? 20 : asset === "eth" ? 1.5 : 0.05;
+          const flashMomOk  = flashSignal === "BUY_UP" ? flashMomRaw >= flashMomThr : flashMomRaw <= -flashMomThr;
+          let flashBookRatio = 1, flashBookWall = false;
+          if (orderBook) {
+            const bids = (orderBook.bids ?? []).slice(0, 10);
+            const asks = (orderBook.asks ?? []).slice(0, 10);
+            const bidQ = bids.reduce((s, b) => s + b.qty, 0);
+            const askQ = asks.reduce((s, a) => s + a.qty, 0);
+            flashBookRatio = flashSignal === "BUY_UP"
+              ? bidQ / Math.max(askQ, 0.001)
+              : askQ / Math.max(bidQ, 0.001);
+            const fSide = flashSignal === "BUY_UP" ? bids : asks;
+            const fAvg  = fSide.reduce((s, b) => s + b.qty, 0) / Math.max(fSide.length, 1);
+            flashBookWall = fSide.some(b => b.qty > fAvg * 3);
+          }
+          const flashStrongBook = flashBookRatio >= 3 || flashBookWall;
+          const flashConfirmCnt = [flashMomOk, flashAlignedCnt >= 4, flashStrongBook].filter(Boolean).length;
+          const flashWeakEdge   = flashGapPct < 0.0008 && flashConfirmCnt < 2;
+
+          if (flashWeakEdge) {
+            if (!fSnap.flashBlockLogged) {
+              fSnap.flashBlockLogged = true;
+              logEntry("dim",
+                `  ↳ <span class="amber">flash</span> blocked — weak edge: gap ${(flashGapPct*100).toFixed(2)}%, ` +
+                `${flashConfirmCnt}/3 signals (mom${flashMomOk ? "✓" : "✗"} candles ${flashAlignedCnt}/5 book${flashStrongBook ? "✓" : "✗"}) — waiting for AI`
+              );
+            }
+            // fall through to oracle gate / AI analysis this cycle
+          } else {
+            fSnap.flashEntered = true;   // prevent double-fire on subsequent cycles
+            logEntry("dim",
+              `  ↳ <span class="amber">⚡ flash</span> — ` +
+              `book at ${(flashOdds*100).toFixed(0)}% (pre-discovery), ` +
+              `gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} (${(flashGapPct*100).toFixed(2)}%)`
+            );
+            placeCryptoTrade(asset, {
+              signal:        flashSignal,
+              confidence:    "HIGH",
+              edge:          0.10,
+              absEdge:       0.10,
+              reasoning:     `Window-open flash entry — gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} (${(flashGapPct*100).toFixed(2)}%) captured before market price discovery`,
+              gap,
+              priceToBeat,
+              momentum:      0,
+              timeRemaining,
+              momentumTrade: false,
+              market,
+            }, { spot, priceToBeat });
+            continue;  // skip oracle gate + AI analysis this cycle
+          }
         }
       }
     }
@@ -1969,6 +2005,44 @@ async function _runCryptoCycleInner(asset) {
                                 analysis.confidence === "HIGH" &&
                                 analysis.signal !== "SKIP";
 
+    // === Path quality signals — used by long-window flip filter (change 2) and path quality veto (change 3).
+    // Computed independently from raw Binance data to verify the AI's signal has immediate backing.
+    const _pqIsUp        = analysis.signal === "BUY_UP";
+    const pqCandleAligned = candles.slice(0, 5).filter(c => _pqIsUp ? c.close > c.open : c.close < c.open).length;
+    const pqMomThr        = asset === "btc" ? 18 : asset === "eth" ? 1.5 : 0.05;
+    const pqStrongMom     = Math.abs(analysis.momentum ?? 0) >= pqMomThr;
+    const pqStrongCandles = pqCandleAligned >= 4;
+    let pqBookRatio = 1, pqBookWall = false;
+    if (orderBook) {
+      const bids = (orderBook.bids ?? []).slice(0, 10);
+      const asks = (orderBook.asks ?? []).slice(0, 10);
+      const bidQ = bids.reduce((s, b) => s + b.qty, 0);
+      const askQ = asks.reduce((s, a) => s + a.qty, 0);
+      pqBookRatio = _pqIsUp ? bidQ / Math.max(askQ, 0.001) : askQ / Math.max(bidQ, 0.001);
+      const pqSide = _pqIsUp ? bids : asks;
+      const pqAvg  = pqSide.reduce((s, b) => s + b.qty, 0) / Math.max(pqSide.length, 1);
+      pqBookWall   = pqSide.some(b => b.qty > pqAvg * 3);
+    }
+    const pqStrongBook = pqBookRatio >= 3 || pqBookWall;
+    const pqConfirmCnt = [pqStrongMom, pqStrongCandles, pqStrongBook].filter(Boolean).length;
+
+    // Long-window gap-flip filter: if price is on the wrong side of target and ≥600s remain,
+    // the trade must clear ALL four gates — otherwise it is a "drift story" with no near-term path.
+    // Exemption: pure momentum repricing (momentumTradeBypass) where the token price move is the
+    // thesis, not final resolution.
+    const lwfDriftMult = asset === "btc" ? 1.8 : 2.0;
+    const lwfDriftOk   = Math.abs(analysis.gap ?? 0) < 1 ||                    // near-zero gap — drift condition trivially satisfied
+                         Math.abs(expectedDriftPts) >= Math.abs(analysis.gap ?? 0) * lwfDriftMult;
+    const weakLongWindowGapFlip = signalAgainstGap &&
+      timeRemaining >= 600 &&
+      !(lwfDriftOk && pqStrongMom && pqCandleAligned >= 4 && pqStrongBook) &&
+      !momentumTradeBypass;
+
+    // Path quality veto: a gap-flip trade (betting against current price direction) needs at least
+    // 2/3 immediate signals — if fewer, the thesis depends on hope or eventual drift, not real edge.
+    // Non-flip (gap-aligned) trades are exempt: their near-term path is already in the right direction.
+    const weakPathQualityFlip = signalAgainstGap && pqConfirmCnt < 2;
+
     // Early-discovery cap: above 57% the book has already moved and fills get bad.
     // Flash entry handles ≤52%; AI entry covers the 47-57% pre-discovery window.
     const postDiscovery = entryOdds > 0.57;
@@ -1995,6 +2069,8 @@ async function _runCryptoCycleInner(asset) {
       (!midWindowSmallGap || momentumTradeBypass) &&
       !solLargeGapUp &&
       !assetPositionOpen &&
+      !weakLongWindowGapFlip &&
+      !weakPathQualityFlip &&
       (analysis.confidence === "HIGH" || analysis.absEdge >= minEdge) &&
       state.stats.spent < c.maxDaily;
 
@@ -2072,6 +2148,21 @@ async function _runCryptoCycleInner(asset) {
       }
       if (solLargeGapUp) reasons.push(`SOL large-gap BUY_UP — SOL ${(stallGapPct * 100).toFixed(1)}% above target with vol spike ${(analysis.volSpikeRatio ?? 0).toFixed(2)}× — fresh pump reversal risk`);
       if (assetPositionOpen) reasons.push(`${asset.toUpperCase()} position already open — max 1 per asset (correlated stop risk)`);
+      if (weakLongWindowGapFlip) {
+        const why = [];
+        if (!lwfDriftOk) why.push(`drift ${expectedDriftPts.toFixed(0)}pts < ${lwfDriftMult}× gap ${Math.abs(analysis.gap ?? 0).toFixed(0)}pts`);
+        if (!pqStrongMom) why.push(`momentum ${Math.abs(analysis.momentum ?? 0).toFixed(2)}/m < ${pqMomThr}`);
+        if (pqCandleAligned < 4) why.push(`${pqCandleAligned}/5 candles aligned`);
+        if (!pqStrongBook) why.push(`book ${pqBookRatio.toFixed(2)}× (need 3×)`);
+        reasons.push(`long-window flip blocked — ${timeRemaining}s, needs all 4: ${why.join(", ")} — no clean near-term path`);
+      }
+      if (weakPathQualityFlip) {
+        const pqWhy = [];
+        if (!pqStrongMom) pqWhy.push(`momentum ${Math.abs(analysis.momentum ?? 0).toFixed(2)}/m`);
+        if (!pqStrongCandles) pqWhy.push(`${pqCandleAligned}/5 candles`);
+        if (!pqStrongBook) pqWhy.push(`book ${pqBookRatio.toFixed(2)}×`);
+        reasons.push(`gap flip needs stronger path — ${pqConfirmCnt}/3 signals (${pqWhy.join(", ")}) — need ≥2 for early TP`);
+      }
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
       else if (analysis.confidence === "MEDIUM" && analysis.absEdge < minEdge)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}% required for MEDIUM`);
