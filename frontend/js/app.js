@@ -1458,6 +1458,11 @@ async function _runCryptoCycleInner(asset) {
       });
     }
 
+    // Skip non-standard markets: hourly ("1PM ET"), daily, or threshold ("above 70,000") markets
+    // lack an explicit HH:MM-HH:MM time range.  Their near-expiry tokens can be at 1-4% which
+    // falsely passes the flash entry ≤52% check, causing catastrophic fills on worthless tokens.
+    if (!/\d+:\d+[AP]M-\d+:\d+[AP]M/i.test(market.question)) continue;
+
     // Derive window duration from title e.g. "March 26, 4:55PM-5:10PM ET" → 15 min → 900s.
     // Fallback to 300s (5 min) if parsing fails.
     const windowMs = (() => {
@@ -1584,6 +1589,7 @@ async function _runCryptoCycleInner(asset) {
 
         if (
           flashGapPct >= 0.0004 &&    // gap ≥ 0.04% — meaningful directional signal
+          flashOdds >= 0.35 &&         // token not near-expired worthless (1-4% = loser, not undiscovered)
           flashOdds <= 0.52 &&         // book still near 50/50 — pre-discovery depth
           !assetOpen &&                // no existing position for this asset
           !vetoed &&                   // no correlated-loss directional veto
