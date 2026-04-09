@@ -1902,7 +1902,8 @@ async function _runCryptoCycleInner(asset) {
                               analysis.confidence === "HIGH" &&
                               stallGapPct > 0.0002 &&   // require real gap floor (>0.02%) — zero-gap pure-momentum plays fail
                               stallGapPct < 0.001 &&    // current gap < 0.10%
-                              effectiveGapPct > 0.0015; // effective gap > 0.15% of price
+                              effectiveGapPct > 0.0015 && // effective gap > 0.15% of price
+                              entryPrice < 0.68;        // above 68%: only 32pp to gain vs 63pp+ to lose — bad risk/reward for thin-gap bets
     const momentumTradeBypass = (analysis.momentumTrade === true || autoMomentumTrade) &&
                                 analysis.confidence === "HIGH" &&
                                 analysis.signal !== "SKIP";
@@ -2369,15 +2370,17 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           // Post-fill slippage guard: exit immediately if fill is outside acceptable odds.
           // Only exit on truly catastrophic fills — don't penalize favorable slippage.
           // Catastrophic floor: book collapsed (e.g. 47.5% → 5%).
-          // Hard ceiling: margin too thin at >93% (post-fill, not pre-entry preference).
+          // Hard ceiling: margin too thin at >78%.  At 78%+ the risk/reward collapses:
+          //   78% fill → 22pp upside vs 73pp downside = 3.3:1 against.
+          //   Our analysis cap is 80% so any fill ≥78% means slippage pushed us into bad territory.
           const fill = parseFillPrice(result, "BUY");
           if (fill) {
             const catastrophic = fill < 0.25;
-            const tooHigh      = fill > 0.93;
+            const tooHigh      = fill > 0.78;
             if (catastrophic || tooHigh) {
               const reason = catastrophic
                 ? `fill ${(fill*100).toFixed(1)}% — book collapse (< 25%)`
-                : `fill ${(fill*100).toFixed(1)}% > 93% — margin too thin`;
+                : `fill ${(fill*100).toFixed(1)}% > 78% — slippage pushed entry above risk/reward threshold`;
               logEntry("warn", `  ↳ <span class="red">${reason} — slippage exit</span>`);
               closePosition(trade, "BAD FILL");
             }
