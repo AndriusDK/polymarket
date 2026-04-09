@@ -1652,7 +1652,11 @@ async function _runCryptoCycleInner(asset) {
       continue;
     }
 
-    // Precompute maxMovement for post-analysis crossing check.
+    // Post-discovery AI trades are disabled — only flash entries at window open.
+    // By the time AI analysis runs, the book has already moved to 55-65%+ which
+    // causes FOK failures, bad fills, and poor risk/reward.  Flash entries at ~50%
+    // get better fills, deeper books, and cleaner risk/reward.
+    continue;
     // Floor: 0.1% of spot/min avoids underestimating movement during calm 1-min candles.
     const recentRange = candles.slice(-3).reduce((mx, c) => Math.max(mx, c.high - c.low), 0);
     const maxMovement = Math.max(recentRange, spot * 0.001) * Math.max(timeRemaining / 60, 0.25) * 3;
