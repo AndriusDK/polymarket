@@ -1898,12 +1898,14 @@ async function _runCryptoCycleInner(asset) {
     const effectiveGapPct   = (analysis.priceToBeat ?? 0) > 0
       ? Math.abs((analysis.gap ?? 0) + expectedDriftPts) / analysis.priceToBeat
       : 0;
+    const _autoMomIsUp     = analysis.signal === "BUY_UP";
+    const _autoMomPrice    = _autoMomIsUp ? (market?.yesPrice ?? 0.5) : (market?.noPrice ?? 0.5);
     const autoMomentumTrade = analysis.signal !== "SKIP" &&
                               analysis.confidence === "HIGH" &&
                               stallGapPct > 0.0002 &&   // require real gap floor (>0.02%) — zero-gap pure-momentum plays fail
                               stallGapPct < 0.001 &&    // current gap < 0.10%
                               effectiveGapPct > 0.0015 && // effective gap > 0.15% of price
-                              entryPrice < 0.68;        // above 68%: only 32pp to gain vs 63pp+ to lose — bad risk/reward for thin-gap bets
+                              _autoMomPrice < 0.68;     // above 68%: only 32pp to gain vs 63pp+ to lose — bad risk/reward for thin-gap bets
     const momentumTradeBypass = (analysis.momentumTrade === true || autoMomentumTrade) &&
                                 analysis.confidence === "HIGH" &&
                                 analysis.signal !== "SKIP";
