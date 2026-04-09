@@ -1338,11 +1338,11 @@ function startCryptoMode(asset) {
     _startCooldownOverlay(coolSecs);
   }
 
-  logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — WS instant detection + 30s safety poll`);
+  logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — WS instant detection + 15s safety poll`);
 
   startMarketWS();
   runCryptoCycle(asset);
-  state[asset].timer = setInterval(() => runCryptoCycle(asset), 30_000);
+  state[asset].timer = setInterval(() => runCryptoCycle(asset), 15_000);
 }
 
 function stopCryptoMode(asset) {
@@ -1590,7 +1590,7 @@ async function _runCryptoCycleInner(asset) {
         if (
           flashGapPct >= 0.0004 &&    // gap ≥ 0.04% — meaningful directional signal
           flashOdds >= 0.35 &&         // token not near-expired worthless (1-4% = loser, not undiscovered)
-          flashOdds <= 0.52 &&         // book still near 50/50 — pre-discovery depth
+          flashOdds <= 0.55 &&         // token still pre-discovery — accept up to 55% (matches postDiscovery cap)
           !assetOpen &&                // no existing position for this asset
           !vetoed &&                   // no correlated-loss directional veto
           !stressed &&                 // no market-stress cool-down
