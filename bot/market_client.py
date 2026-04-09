@@ -301,8 +301,9 @@ class PolymarketClient:
             hard_cap = round(min((entry_price or 0.80) + 0.10, 0.90), 4)
             retry_configs = [
                 (amount_usdc,        price_limit),   # 1st: full size, entry + 5%
-                (amount_usdc * 0.5,  price_limit),   # 2nd: half size, same price — thin book, fill what's there
-                (amount_usdc * 0.5,  hard_cap),      # 3rd: half size, entry + 10% — widen price if still rejected
+                (amount_usdc * 0.5,  price_limit),   # 2nd: half size, same price — thin book
+                (amount_usdc * 0.5,  hard_cap),      # 3rd: half size, entry + 10% — widen price
+                (1.00,               hard_cap),      # 4th: $1 minimum — last resort, any tiny fill beats nothing
             ]
         else:
             # SELL: progressively widen the floor — never go completely unlimited
