@@ -1623,14 +1623,16 @@ async function _runCryptoCycleInner(asset) {
     // Oracle observation gate — when a market is brand-new AND the gap is tiny (<0.2%),
     // the Chainlink price-to-beat may not have been published yet (typical 1-2 min lag on
     // new windows).  Deferring the AI call until volume picks up ($200+ delta) OR the market
-    // is ≥90s old avoids premature momentum entries on ghost data AND saves AI tokens.
+    // is old enough avoids premature momentum entries on ghost data AND saves AI tokens.
+    // For meaningful gaps (≥0.04%) we only wait 30s so AI can assess while market is still
+    // pre-discovery (~50-55%); tiny gaps (<0.04%) still wait the full 90s.
     {
       const freshSnap   = state[asset].gapPending.get(market.conditionId);
       const gapFrac     = priceToBeat > 0 ? Math.abs(gap) / priceToBeat : 1;
       const volumeDelta = market.volume - (freshSnap?.firstSeenVolume ?? market.volume);
       const marketAge   = Date.now() - (freshSnap?.firstSeenAt ?? 0);
-      if (gapFrac < 0.002 && volumeDelta < 200 && marketAge < 90_000) {
-        const ageS = Math.round(marketAge / 1000);
+      const ageThreshold = gapFrac >= 0.0004 ? 30_000 : 90_000;
+      if (gapFrac < 0.002 && volumeDelta < 200 && marketAge < ageThreshold) {
         // oracle gate deferral — no log (too noisy)
         continue; // stay in gapPending; retried next cycle
       }
@@ -2001,12 +2003,11 @@ async function _runCryptoCycleInner(asset) {
     }
 
     if (qualifies) {
-      // Fresh-window gate: CLOB book is thin/empty for the first ~30s after a window opens.
-      // Entering immediately sends a FOK into an empty book and causes catastrophic fills.
-      // Wait 30s for makers to post asks before firing — the signal stays valid next cycle.
+      // Fresh-window gate: at 50/50 (pre-discovery) the book has symmetric depth so 10s is
+      // enough to see real makers.  Old 30s wait pushed entry past discovery into volatile range.
       const windowAge = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
-      if (windowAge < 30_000) {
-        logEntry("dim", `  ↳ <span class="amber">fresh window</span> — ${Math.round(windowAge/1000)}s since open, holding 30s for book depth (next cycle will trade)`);
+      if (windowAge < 10_000) {
+        logEntry("dim", `  ↳ <span class="amber">fresh window</span> — ${Math.round(windowAge/1000)}s since open, holding 10s for book depth (next cycle will trade)`);
       } else {
         state[asset].gapWatch.delete(market.conditionId);
         placeCryptoTrade(asset, analysis, { spot, priceToBeat });
