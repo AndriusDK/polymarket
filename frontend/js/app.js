@@ -2485,10 +2485,25 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     const handleBuyResult = (result, isRetry) => {
       if (result.error) {
         if (!isRetry) {
-          const retryCap = Math.min(entryPrice + 0.03, 0.92);
-          logEntry("dim", `  ↳ FOK miss — retrying with ${(retryCap * 100).toFixed(0)}¢ cap in 2s…`);
+          // Aggressive retry: wider price cap + half size. Getting a small fill at a
+          // worse price beats losing the signal entirely. At coin-flip odds the ask
+          // book above entry+5pp is often too thin for full size.
+          const retryCap    = Math.min(entryPrice + 0.06, 0.92);
+          const retryAmount = amount / 2;
+          const amountDiff  = amount - retryAmount;
+          logEntry("dim", `  ↳ FOK miss — retrying $${retryAmount.toFixed(2)} at ${(retryCap * 100).toFixed(0)}¢ cap in 2s…`);
+
+          // Stats were charged for full `amount` synchronously — refund the half
+          // we're not risking on retry. If retry succeeds, trade.amount reflects
+          // the reduced size. If it fails, the final rollback uses trade.amount.
+          state.stats.spent = Math.max(0, state.stats.spent - amountDiff);
+          setStat("spent",  `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget", `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          trade.amount = retryAmount;
+          trade.shares = retryAmount / entryPrice;
+
           setTimeout(() => {
-            const retryPayload = { ...orderPayload, entry_price: retryCap };
+            const retryPayload = { ...orderPayload, entry_price: retryCap, amount_usdc: retryAmount };
             fetch("/trade", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -2496,17 +2511,29 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
             })
               .then(r => r.json())
               .then(r2 => handleBuyResult(r2, true))
-              .catch(err => logEntry("warn", `  [LIVE] BUY retry error: ${err.message}`));
+              .catch(err => {
+                // Retry network error — clean up with reduced trade.amount
+                const idx = state.trades.indexOf(trade);
+                if (idx !== -1) state.trades.splice(idx, 1);
+                priceStream.unsubscribe(tokenId);
+                state.stats.trades = Math.max(0, state.stats.trades - 1);
+                state.stats.spent  = Math.max(0, state.stats.spent - trade.amount);
+                setStat("trades",    String(state.stats.trades));
+                setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+                setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+                setStat("positions", String(state.trades.length));
+                logEntry("warn", `  [LIVE] BUY retry error: ${err.message}`);
+              });
           }, 2000);
           return;
         }
-        // Order failed (retry also failed) — remove from state, no card shown
+        // Order failed (retry also failed) — remove from state, no card shown.
+        // Rollback uses trade.amount which was reduced before the retry fired.
         const idx = state.trades.indexOf(trade);
         if (idx !== -1) state.trades.splice(idx, 1);
         priceStream.unsubscribe(tokenId);
-        // Undo the stats that were charged synchronously
         state.stats.trades = Math.max(0, state.stats.trades - 1);
-        state.stats.spent  = Math.max(0, state.stats.spent - amount);
+        state.stats.spent  = Math.max(0, state.stats.spent - trade.amount);
         setStat("trades",    String(state.stats.trades));
         setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
         setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
