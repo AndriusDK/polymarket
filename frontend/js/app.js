@@ -2557,7 +2557,6 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
               closePosition(trade, "BAD FILL");
             }
           }
-        }
       }
     };
     fetch("/trade", {
