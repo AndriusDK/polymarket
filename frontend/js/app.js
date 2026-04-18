@@ -2046,7 +2046,7 @@ async function _runCryptoCycleInner(asset) {
     // Path quality veto: a gap-flip trade (betting against current price direction) needs at least
     // 2/3 immediate signals — if fewer, the thesis depends on hope or eventual drift, not real edge.
     // Non-flip (gap-aligned) trades are exempt: their near-term path is already in the right direction.
-    const weakPathQualityFlip = signalAgainstGap && pqConfirmCnt < 2;
+    const weakPathQualityFlip = signalAgainstGap && pqConfirmCnt < 2 && analysis.confidence !== "HIGH";
 
     // Early-discovery cap: above 57% the book has already moved and fills get bad.
     // Flash entry handles ≤52%; AI entry covers the 47-57% pre-discovery window.
@@ -2059,7 +2059,7 @@ async function _runCryptoCycleInner(asset) {
       !postDiscovery &&
       !longWindowLowConv &&
       !btcMidWindowLowOdds &&
-      !btcCoinFlipBlocked &&
+      (!btcCoinFlipBlocked || momentumTradeBypass) &&
       !shortWindowMedium &&
       !solMediumLongWindow &&
       !btcMediumGapBlocked &&
@@ -2482,28 +2482,38 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
       signal: analysis.signal,
       market: market.question.slice(0, 60),
     });
-    fetch("/trade", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(orderPayload),
-    })
-      .then(r => r.json())
-      .then(result => {
-        if (result.error) {
-          // Order failed — remove from state, no card shown
-          const idx = state.trades.indexOf(trade);
-          if (idx !== -1) state.trades.splice(idx, 1);
-          priceStream.unsubscribe(tokenId);
-          // Undo the stats that were charged synchronously
-          state.stats.trades = Math.max(0, state.stats.trades - 1);
-          state.stats.spent  = Math.max(0, state.stats.spent - amount);
-          setStat("trades",    String(state.stats.trades));
-          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
-          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
-          setStat("positions", String(state.trades.length));
-          console.error(`[LIVE] Order FAILED — no card created`, result);
-          logEntry("warn", `  [LIVE] Order failed: ${result.error}`);
-        } else {
+    const handleBuyResult = (result, isRetry) => {
+      if (result.error) {
+        if (!isRetry) {
+          const retryCap = Math.min(entryPrice + 0.03, 0.92);
+          logEntry("dim", `  ↳ FOK miss — retrying with ${(retryCap * 100).toFixed(0)}¢ cap in 2s…`);
+          setTimeout(() => {
+            const retryPayload = { ...orderPayload, entry_price: retryCap };
+            fetch("/trade", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(retryPayload),
+            })
+              .then(r => r.json())
+              .then(r2 => handleBuyResult(r2, true))
+              .catch(err => logEntry("warn", `  [LIVE] BUY retry error: ${err.message}`));
+          }, 2000);
+          return;
+        }
+        // Order failed (retry also failed) — remove from state, no card shown
+        const idx = state.trades.indexOf(trade);
+        if (idx !== -1) state.trades.splice(idx, 1);
+        priceStream.unsubscribe(tokenId);
+        // Undo the stats that were charged synchronously
+        state.stats.trades = Math.max(0, state.stats.trades - 1);
+        state.stats.spent  = Math.max(0, state.stats.spent - amount);
+        setStat("trades",    String(state.stats.trades));
+        setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+        setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+        setStat("positions", String(state.trades.length));
+        console.error(`[LIVE] Order FAILED after retry — no card created`, result);
+        logEntry("warn", `  [LIVE] Order failed after retry: ${result.error}`);
+      } else {
           // Order confirmed — now show the card
           trade.confirmed = true;
           console.log(`[LIVE] Order CONFIRMED`, result);
@@ -2548,7 +2558,15 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
             }
           }
         }
-      })
+      }
+    };
+    fetch("/trade", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(orderPayload),
+    })
+      .then(r => r.json())
+      .then(result => handleBuyResult(result, false))
       .catch(err => {
         // Network error — remove from state, no card
         const idx = state.trades.indexOf(trade);
