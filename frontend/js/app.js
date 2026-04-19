@@ -2217,13 +2217,15 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
 
     if (qualifies) {
       // Fresh-window gate: pre-gap (0-15s) and flash (15-45s) cover early entries with explicit
-      // quality gates.  Main-path analysis waits 120s for book to be indexed and deep.
-      // Exception: cross-window carry signal lowers gate to 30s — book is usually indexed by
-      // then and we have directional conviction from the prior window's strong close.
-      const windowAge  = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
-      const crossSig   = state[asset].crossWindowSignal;
-      const crossActive = crossSig && Date.now() < crossSig.expiresAt && crossSig.signal === analysis.signal;
-      const earlyGate  = crossActive ? 30_000 : 120_000;
+      // quality gates.  Main-path analysis gate scales with window length (15% of total, 30s–120s):
+      //   5-min window (300s) → 45s gate, 15-min window (900s) → 120s gate.
+      // Cross-window carry lowers the gate to 30s regardless of window length.
+      const windowAge      = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
+      const totalWindowSecs = windowAge / 1000 + timeRemaining;
+      const crossSig        = state[asset].crossWindowSignal;
+      const crossActive     = crossSig && Date.now() < crossSig.expiresAt && crossSig.signal === analysis.signal;
+      const normalGate      = Math.max(30_000, Math.min(120_000, totalWindowSecs * 150));
+      const earlyGate       = crossActive ? 30_000 : normalGate;
       if (windowAge < earlyGate) {
         logEntry("dim", `  ↳ <span class="amber">early window</span> — ${Math.round(windowAge/1000)}s since open, waiting ${Math.round(earlyGate/1000)}s${crossActive ? ' (cross-window carry: book indexing)' : ' for book to index'}`);
       } else {
