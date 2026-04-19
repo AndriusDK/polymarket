@@ -2738,6 +2738,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           // moved toward DOWN = drift IN our favor. Session evidence: ETH BUY_DOWN filled at
           // 61.1% (entry 46.5%) was a winner at $0.97 resolution — the old formula falsely
           // exited it as a BAD FILL, costing ~$1.80 realized PnL.
+          // Grace period for badDrift: wait 12s then re-check direction — if price has
+          // recovered above the fill price, market is heading right and normal stop-loss
+          // logic takes over.  Session evidence: BTC BUY_UP fill 35% (entry 56.5%) was
+          // exited immediately as BAD FILL but resolved $0.97 (correct direction, ~$2.22 lost).
           const fill = parseFillPrice(result, "BUY");
           if (fill) {
             const catastrophic = fill < 0.25;
@@ -2745,14 +2749,30 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
             const isUpSig      = trade.signal === "BUY_UP";
             const driftAgainst = entryPrice - fill;           // positive when fill < entry (market moved against our token)
             const badDrift     = isUpSig && driftAgainst > 0.08; // BUY_UP only — for DOWN, fill > entry = crowd agrees with us
-            if (catastrophic || tooHigh || badDrift) {
+            if (catastrophic || tooHigh) {
               const reason = catastrophic
                 ? `fill ${(fill*100).toFixed(1)}% — book collapse (< 25%)`
-                : tooHigh
-                  ? `fill ${(fill*100).toFixed(1)}% > 72% — slippage pushed entry above risk/reward threshold`
-                  : `fill ${(fill*100).toFixed(1)}% vs requested ${(entryPrice*100).toFixed(1)}% — market repriced ${(driftAgainst*100).toFixed(1)}pp against ${trade.signal} during check→fill delay`;
+                : `fill ${(fill*100).toFixed(1)}% > 72% — slippage pushed entry above risk/reward threshold`;
               logEntry("warn", `  ↳ <span class="red">${reason} — slippage exit</span>`);
               closePosition(trade, "BAD FILL");
+            } else if (badDrift) {
+              // Grace period: give the market 12s to prove it's heading the right direction.
+              // If price recovers above fill we were just caught in a temporary dip — keep it.
+              // If still below fill (or position already closed by stop-loss) exit as BAD FILL.
+              logEntry("warn", `  ↳ <span class="amber">fill ${(fill*100).toFixed(1)}% vs requested ${(entryPrice*100).toFixed(1)}% — ${(driftAgainst*100).toFixed(1)}pp drift against ${trade.signal} — watching 12s for recovery</span>`);
+              setTimeout(() => {
+                // Position may have been closed already by stop-loss or take-profit during the wait.
+                if (!state.trades.includes(trade)) return;
+                const recoveredPrice = trade.currentPrice ?? fill;
+                if (recoveredPrice > fill) {
+                  // Price moved up from fill — market is going our way, let normal logic handle it.
+                  logEntry("dim", `  → <span class="green">BAD FILL grace: price recovered to ${(recoveredPrice*100).toFixed(1)}% (fill was ${(fill*100).toFixed(1)}%) — holding position</span>`);
+                } else {
+                  // Still below fill after grace period — close as BAD FILL.
+                  logEntry("warn", `  ↳ <span class="red">BAD FILL grace expired: price ${(recoveredPrice*100).toFixed(1)}% still below fill ${(fill*100).toFixed(1)}% — slippage exit</span>`);
+                  closePosition(trade, "BAD FILL");
+                }
+              }, 12_000);
             }
           }
       }
