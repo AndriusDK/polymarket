@@ -1694,7 +1694,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
         const stressed    = Date.now() < (state.stressHoldUntil ?? 0);
 
         if (
-          flashGapPct >= 0.0004 &&    // gap ≥ 0.04% — meaningful directional signal
+          flashGapPct >= 0.001 &&     // gap ≥ 0.10% — raised from 0.04%: marginal gaps (0.04-0.09%) produce coin-flip fills at near-50 odds that go wrong dir (ETH 3:25AM -$2.24)
           flashOdds >= 0.35 &&         // token not near-expired worthless (1-4% = loser, not undiscovered)
           flashOdds <= 0.55 &&         // token still pre-discovery — accept up to 55% (matches postDiscovery cap)
           !assetOpen &&                // no existing position for this asset
@@ -2728,27 +2728,28 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           startCryptoCountdown();
 
           // Post-fill slippage guard: exit immediately if fill is outside acceptable odds.
-          // Only exit on truly catastrophic fills — don't penalize favorable slippage.
+          // Only exit on truly bad fills — don't penalize favorable slippage.
           // Catastrophic floor: book collapsed (e.g. 47.5% → 5%).
-          // Hard ceiling: margin too thin at >78%.  At 78%+ the risk/reward collapses:
-          //   78% fill → 22pp upside vs 73pp downside = 3.3:1 against.
-          //   Our analysis cap is 80% so any fill ≥78% means slippage pushed us into bad territory.
-          // Directional drift: BUY_UP filling >8pp below requested entry (or BUY_DOWN filling
-          // >8pp above) means the market repriced against our signal during the 2s check→fill
-          // delay. Session data: ETH BUY_UP at 56.5% filled at 43.7% → stop loss −$3.47; BTC
-          // BUY_UP at 55.5% filled at 70% → stop loss −$0.88. Both would have exited at wash.
+          // Hard ceiling: margin too thin at >72%.  At 72%+ the risk/reward collapses
+          //   (matches postDiscovery cap — same logic: above this line book is too thin).
+          // Directional drift (BUY_UP only): BUY_UP filling >8pp below requested entry means
+          // the market repriced against our UP signal during the 2s check→fill delay.
+          // NOT applied to BUY_DOWN: fill > entry means DOWN got more expensive = crowd
+          // moved toward DOWN = drift IN our favor. Session evidence: ETH BUY_DOWN filled at
+          // 61.1% (entry 46.5%) was a winner at $0.97 resolution — the old formula falsely
+          // exited it as a BAD FILL, costing ~$1.80 realized PnL.
           const fill = parseFillPrice(result, "BUY");
           if (fill) {
             const catastrophic = fill < 0.25;
-            const tooHigh      = fill > 0.78;
+            const tooHigh      = fill > 0.72;
             const isUpSig      = trade.signal === "BUY_UP";
-            const driftAgainst = isUpSig ? (entryPrice - fill) : (fill - entryPrice);
-            const badDrift     = driftAgainst > 0.08;
+            const driftAgainst = entryPrice - fill;           // positive when fill < entry (market moved against our token)
+            const badDrift     = isUpSig && driftAgainst > 0.08; // BUY_UP only — for DOWN, fill > entry = crowd agrees with us
             if (catastrophic || tooHigh || badDrift) {
               const reason = catastrophic
                 ? `fill ${(fill*100).toFixed(1)}% — book collapse (< 25%)`
                 : tooHigh
-                  ? `fill ${(fill*100).toFixed(1)}% > 78% — slippage pushed entry above risk/reward threshold`
+                  ? `fill ${(fill*100).toFixed(1)}% > 72% — slippage pushed entry above risk/reward threshold`
                   : `fill ${(fill*100).toFixed(1)}% vs requested ${(entryPrice*100).toFixed(1)}% — market repriced ${(driftAgainst*100).toFixed(1)}pp against ${trade.signal} during check→fill delay`;
               logEntry("warn", `  ↳ <span class="red">${reason} — slippage exit</span>`);
               closePosition(trade, "BAD FILL");
