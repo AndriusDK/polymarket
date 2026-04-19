@@ -1529,6 +1529,88 @@ async function _runCryptoCycleInner(asset) {
 
     const gap = spot - priceToBeat;
 
+    // === Pre-gap momentum entry ===
+    // Fires when the window just opened (<15s) and gap hasn't developed yet. Rationale:
+    // both tokens are ~50/50 and the book is symmetric, so fills are cheap. If pre-window
+    // momentum is strongly directional (high |mom|, 4+ aligned candles, strong book),
+    // enter in that direction at parity before the market "votes" via gap movement.
+    // Tighter gate than flash: pure momentum with no gap confirmation carries reversal risk,
+    // so all 3 path-quality signals must hold.
+    {
+      const pgSnap    = state[asset].gapPending.get(market.conditionId)
+                     ?? state[asset].analyzed.get(market.conditionId);
+      const windowAge = pgSnap?.firstSeenAt ? Date.now() - pgSnap.firstSeenAt : Infinity;
+      const gapFrac   = priceToBeat > 0 ? Math.abs(gap) / priceToBeat : 1;
+
+      if (
+        !pgSnap?.flashEntered &&
+        !pgSnap?.preGapEntered &&
+        windowAge < 15_000 &&
+        timeRemaining > 180 &&
+        gapFrac < 0.0004   // below flash's gap threshold — pure momentum entry
+      ) {
+        const pgMomRaw     = candles.slice(0, 3).reduce((s, c) => s + (c.close - c.open), 0) / 3;
+        const pgSignal     = pgMomRaw > 0 ? "BUY_UP" : "BUY_DOWN";
+        const pgOdds       = pgSignal === "BUY_UP" ? market.upPrice : market.downPrice;
+        const pgMomThr     = asset === "btc" ? 25 : asset === "eth" ? 2 : 0.08;
+        const pgMomOk      = Math.abs(pgMomRaw) >= pgMomThr;
+        const pgAlignedCnt = candles.slice(0, 5).filter(c =>
+          pgSignal === "BUY_UP" ? c.close > c.open : c.close < c.open
+        ).length;
+        let pgBookRatio = 1, pgBookWall = false;
+        if (orderBook) {
+          const bids = (orderBook.bids ?? []).slice(0, 10);
+          const asks = (orderBook.asks ?? []).slice(0, 10);
+          const bidQ = bids.reduce((s, b) => s + b.qty, 0);
+          const askQ = asks.reduce((s, a) => s + a.qty, 0);
+          pgBookRatio = pgSignal === "BUY_UP"
+            ? bidQ / Math.max(askQ, 0.001)
+            : askQ / Math.max(bidQ, 0.001);
+          const pgSide = pgSignal === "BUY_UP" ? bids : asks;
+          const pgAvg  = pgSide.reduce((s, b) => s + b.qty, 0) / Math.max(pgSide.length, 1);
+          pgBookWall   = pgSide.some(b => b.qty > pgAvg * 3);
+        }
+        const pgStrongBook = pgBookRatio >= 2 || pgBookWall;
+        const assetOpen    = state.trades.some(t => t.type === asset);
+        const veto         = state.directionVeto;
+        const vetoed       = veto && Date.now() < veto.expiresAt && pgSignal === veto.signal;
+        const stressed     = Date.now() < (state.stressHoldUntil ?? 0);
+
+        if (
+          pgMomOk &&
+          pgAlignedCnt >= 4 &&
+          pgStrongBook &&
+          pgOdds >= 0.47 && pgOdds <= 0.53 &&
+          !assetOpen &&
+          !vetoed &&
+          !stressed &&
+          state.stats.spent < c.maxDaily
+        ) {
+          if (pgSnap) pgSnap.preGapEntered = true;
+          logEntry("dim",
+            `  ↳ <span class="amber">⚡ pre-gap</span> — ` +
+            `book at ${(pgOdds*100).toFixed(0)}% (no gap yet), ` +
+            `mom ${pgMomRaw >= 0 ? "+" : ""}${pgMomRaw.toFixed(asset === "btc" ? 0 : 2)}/m, ` +
+            `${pgAlignedCnt}/5 candles, book ${pgBookRatio.toFixed(1)}×`
+          );
+          placeCryptoTrade(asset, {
+            signal:        pgSignal,
+            confidence:    "HIGH",
+            edge:          0.10,
+            absEdge:       0.10,
+            reasoning:     `Pre-gap momentum entry — ${pgAlignedCnt}/5 candles aligned, momentum ${pgMomRaw.toFixed(2)}/m, book ${pgBookRatio.toFixed(1)}× before gap formation`,
+            gap,
+            priceToBeat,
+            momentum:      pgMomRaw,
+            timeRemaining,
+            momentumTrade: false,
+            market,
+          }, { spot, priceToBeat });
+          continue;
+        }
+      }
+    }
+
     // Skip near-zero gaps — noise floor depends on price source.
     // When Chainlink supplies both spot and priceToBeat the delta is ~0, so 0.01% is enough.
     // Fall back to 0.05% when either value came from Binance (0.07-0.10% inter-source noise).
