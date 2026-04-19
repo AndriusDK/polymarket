@@ -1935,7 +1935,8 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     const btcCoinFlipBlocked = asset === "btc" &&
                                entryOdds >= 0.46 &&
                                entryOdds <= 0.54 &&
-                               !(analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= btcCoinFlipEdgeFloor);
+                               !(analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= btcCoinFlipEdgeFloor) &&
+                               !strongMomMedium;  // very strong momentum MEDIUM also clears the coin-flip hurdle
 
     // BTC gap-flip filter: MEDIUM confidence gap-flip bets on BTC are net-negative in two cases:
     // (1) gap > 800pts — rarely flip in the window; (2) entry odds < 55% with any gap size —
@@ -1946,7 +1947,8 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     const btcMediumGapBlocked = asset === "btc" &&
                                  analysis.confidence === "MEDIUM" &&
                                  signalAgainstGap &&
-                                 (Math.abs(analysis.gap) > 800 || entryOdds < 0.55);
+                                 (Math.abs(analysis.gap) > 800 || entryOdds < 0.55) &&
+                                 !strongMomMedium;  // very strong momentum clears mid-window gap-flip block
 
     // SOL/ETH mid-window gap-flip momentum guard: gap-flip trades (betting against the current
     // price direction) need momentum strong enough to actually close the gap before expiry.
@@ -1990,7 +1992,8 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     const nearResGapFlipLowOdds = signalAgainstGap &&
                                    timeRemaining < 300 &&
                                    entryOdds < 0.62 &&
-                                   !nearResGapFlipHighConf;
+                                   !nearResGapFlipHighConf &&
+                                   !strongMomMedium;  // very strong directional momentum earns same bypass as HIGH conf
 
     // BTC short-window exception: the pump-skeptic crowd-reversion logic breaks down when
     // BTC has a large gap, ≤500s remaining, HIGH confidence and strong edge (≥12%).
@@ -2120,6 +2123,17 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
                                 analysis.confidence === "HIGH" &&
                                 analysis.signal !== "SKIP";
 
+    // Strong-momentum MEDIUM bypass: MEDIUM confidence with very strong raw momentum
+    // (1.5× per-asset threshold), 4+ aligned candles, and ≥8% AI edge — this is
+    // equivalent in directional quality to HIGH conf and bypasses the BTC coin-flip zone,
+    // BTC medium gap-flip block, and near-res gap-flip low-odds guard.
+    // Session evidence: BTC BUY_DOWN at 47.5% with −20/min momentum, 3/5 bearish, +33pt gap
+    // → drift -67pts over 200s → DOWN wins. The coin-flip zone blocked a legitimate signal.
+    const strongMomMedium = analysis.confidence === "MEDIUM" &&
+                            Math.abs(analysis.momentum ?? 0) >= pqMomThr * 1.5 &&
+                            pqCandleAligned >= 4 &&
+                            (analysis.absEdge ?? 0) >= 0.08;
+
     // === Path quality signals — used by long-window flip filter (change 2) and path quality veto (change 3).
     // Computed independently from raw Binance data to verify the AI's signal has immediate backing.
     const _pqIsUp        = analysis.signal === "BUY_UP";
@@ -2158,9 +2172,11 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     // Non-flip (gap-aligned) trades are exempt: their near-term path is already in the right direction.
     const weakPathQualityFlip = signalAgainstGap && pqConfirmCnt < 2 && analysis.confidence !== "HIGH";
 
-    // Early-discovery cap: above 57% the book has already moved and fills get bad.
-    // Flash entry handles ≤52%; AI entry covers the 47-57% pre-discovery window.
-    const postDiscovery = entryOdds > 0.57;
+    // Early-discovery cap: above 72% the book has largely priced in the outcome and fills
+    // are very thin.  57% was the original cap but it excluded the 57-72% range where
+    // ETH/SOL/XRP signals have the best risk/reward (clear direction, still ≥28pp upside).
+    // The CLOB depth check already guards bad fills — we don't need a hard odds ceiling here.
+    const postDiscovery = entryOdds > 0.72;
 
     const qualifies =
       analysis.signal !== "SKIP" &&
