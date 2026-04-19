@@ -2208,14 +2208,29 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       logEntry("dim", `  ↳ <span class="amber">⚡MOM auto</span> — gap ${(stallGapPct * 100).toFixed(3)}% but effective gap ${(effectiveGapPct * 100).toFixed(3)}% (drift ${expectedDriftPts >= 0 ? "+" : ""}${expectedDriftPts.toFixed(2)}) — momentum trade bypass active`);
     }
 
+    // Cross-window carry: a market closing with 65%+ odds and with-gap momentum is likely to
+    // carry that direction into the next window (strike resets, crowd momentum persists).
+    // Cache per-asset so the new window can enter earlier once the book indexes.
+    if (timeRemaining > 30 && timeRemaining < 90 && analysis.signal !== "SKIP" && entryOdds >= 0.65 && !signalAgainstGap) {
+      state[asset].crossWindowSignal = { signal: analysis.signal, odds: entryOdds, expiresAt: Date.now() + 120_000 };
+    }
+
     if (qualifies) {
       // Fresh-window gate: pre-gap (0-15s) and flash (15-45s) cover early entries with explicit
-      // quality gates.  Main-path analysis waits 45s so the book is typically indexed and deep
-      // before we commit a larger position.
-      const windowAge = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
-      if (windowAge < 45_000) {
-        logEntry("dim", `  ↳ <span class="amber">early window</span> — ${Math.round(windowAge/1000)}s since open, waiting 45s for book to index (pre-gap/flash cover early entries)`);
+      // quality gates.  Main-path analysis waits 120s for book to be indexed and deep.
+      // Exception: cross-window carry signal lowers gate to 30s — book is usually indexed by
+      // then and we have directional conviction from the prior window's strong close.
+      const windowAge  = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
+      const crossSig   = state[asset].crossWindowSignal;
+      const crossActive = crossSig && Date.now() < crossSig.expiresAt && crossSig.signal === analysis.signal;
+      const earlyGate  = crossActive ? 30_000 : 120_000;
+      if (windowAge < earlyGate) {
+        logEntry("dim", `  ↳ <span class="amber">early window</span> — ${Math.round(windowAge/1000)}s since open, waiting ${Math.round(earlyGate/1000)}s${crossActive ? ' (cross-window carry: book indexing)' : ' for book to index'}`);
       } else {
+        if (crossActive) {
+          state[asset].crossWindowSignal = null;
+          logEntry("dim", `  ↳ <span class="amber">⚡ cross-window</span> — ${analysis.signal} carry from prior close (${(crossSig.odds*100).toFixed(0)}%), entering at ${Math.round(windowAge/1000)}s`);
+        }
         state[asset].gapWatch.delete(market.conditionId);
         placeCryptoTrade(asset, analysis, { spot, priceToBeat });
       }
