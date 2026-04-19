@@ -1503,7 +1503,7 @@ async function _runCryptoCycleInner(asset) {
         }
         snap.chainlinkPriceToBeat = clPrice ?? null;
         snap.preWindow            = false;
-        snap.firstSeenAt          = Date.now();        // Reset so oracle gate runs from window open
+        snap.firstSeenAt          = new Date(market.endDate).getTime() - windowMs;  // actual window-open wall-clock time, not bot-start time
         snap.firstSeenVolume      = market.volume ?? 0;
         const displayPrice = snap.chainlinkPriceToBeat ?? 0;
         const src = (clPrice && !state.chainlinkPrices[asset]) ? " (historical)" : "";
