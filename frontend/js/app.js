@@ -2353,6 +2353,15 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   const market = analysis.market;
   const isUp   = analysis.signal === "BUY_UP";
 
+  // 30s FOK cooldown: if a previous FOK failed (both initial + retry) on this exact
+  // market, don't re-enter until the book has had time to reprice.
+  const fokExpiry = state.fokCooldown?.get(market.conditionId) ?? 0;
+  if (fokExpiry > Date.now()) {
+    const secsLeft = Math.ceil((fokExpiry - Date.now()) / 1000);
+    logEntry("dim", `  → FOK cooldown ${secsLeft}s — skipping (book too thin, last attempt failed)`);
+    return;
+  }
+
   const entryPrice = isUp ? market.upPrice   : market.downPrice;
   const tokenId    = isUp ? market.upTokenId : market.downTokenId;
 
@@ -2478,6 +2487,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     //    Skip if: book too thin to absorb our order, OR |avg fill − expected| > 10pp.
     //    This catches thick-book sweeps like 52¢ entry sweeping to 24¢ fill.
     await new Promise(r => setTimeout(r, 2000));   // 2s pause — let stale data expire
+    let priceCheckWas404 = false; // set below if /price returns 404 (unindexed book)
     try {
       const priceResp = await fetch(`/price?token_id=${encodeURIComponent(tokenId)}`);
       if (!priceResp.ok) {
@@ -2496,6 +2506,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
         }
         // 404 = price server hasn't indexed this token yet, but the CLOB exists (BTC/ETH/SOL/XRP
         // markets form instantly).  Skip depth gates and let the FOK self-protect on thin fills.
+        priceCheckWas404 = true;
         logEntry("dim", `  → <span class="amber">price check 404</span> — token not yet indexed, skipping depth gates`);
       } else {
       const priceData = await priceResp.json();
@@ -2629,6 +2640,24 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     const handleBuyResult = (result, isRetry) => {
       if (result.error) {
         if (!isRetry) {
+          // Near-resolution windows (<300s): don't retry — the 2s delay allows the thin
+          // book to move dramatically, producing a stale fill far above entry that then
+          // triggers stop-loss before the correct-direction recovery.
+          // Session: 46.5% entry, FOK miss, retry 2s later → 60% fill, stopped at 25%,
+          // resolved $0.99 correct direction (-$3.08 unnecessary loss).
+          if (analysis.timeRemaining < 300) {
+            const idx = state.trades.indexOf(trade);
+            if (idx !== -1) state.trades.splice(idx, 1);
+            priceStream.unsubscribe(tokenId);
+            state.stats.trades = Math.max(0, state.stats.trades - 1);
+            state.stats.spent  = Math.max(0, state.stats.spent - amount);
+            setStat("trades",    String(state.stats.trades));
+            setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+            setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+            setStat("positions", String(state.trades.length));
+            logEntry("warn", `  ↳ FOK miss — ${Math.round(analysis.timeRemaining)}s left, skip retry (thin near-res book too volatile)`);
+            return;
+          }
           // Aggressive retry: wider price cap + half size. Getting a small fill at a
           // worse price beats losing the signal entirely. At coin-flip odds the ask
           // book above entry+5pp is often too thin for full size.
@@ -2699,6 +2728,11 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
         setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
         setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
         setStat("positions", String(state.trades.length));
+        // 30s cooldown: the book was too thin to absorb this order.  Block immediate
+        // re-entry so a new signal on the same market doesn't fire into the same
+        // empty book (session: flash BUY_DOWN FOK failed → BUY_UP entered 10s later
+        // → filled at 23%, -$1.57; the market had NOT repriced between attempts).
+        (state.fokCooldown ??= new Map()).set(market.conditionId, Date.now() + 30_000);
         console.error(`[LIVE] Order FAILED after retry — no card created`, result);
         logEntry("warn", `  [LIVE] Order failed after retry: ${result.error}`);
       } else {
@@ -2749,7 +2783,26 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
             const isUpSig      = trade.signal === "BUY_UP";
             const driftAgainst = entryPrice - fill;           // positive when fill < entry (market moved against our token)
             const badDrift     = isUpSig && driftAgainst > 0.08; // BUY_UP only — for DOWN, fill > entry = crowd agrees with us
-            if (catastrophic || tooHigh) {
+            // Catastrophic fill on an unindexed book (404 price check) = price-discovery
+            // collapse, not a true book collapse.  Window-open FOK sweeps the last stale
+            // limit orders at 23¢ but the market reprices to 97¢+ within 30s.
+            // Session: two 23% fills (9:10AM, 9:20AM BTC) both resolved $0.97 correct dir.
+            // True collapses (price check was OK, book genuinely thin) still exit immediately.
+            if (catastrophic && priceCheckWas404 && analysis.timeRemaining > 90) {
+              const graceMs  = Math.max(20_000, Math.min(40_000, trade.totalSecs * 40));
+              const graceSec = Math.round(graceMs / 1000);
+              logEntry("warn", `  ↳ <span class="amber">fill ${(fill*100).toFixed(1)}% on unindexed book — watching ${graceSec}s for price discovery</span>`);
+              setTimeout(() => {
+                if (!state.trades.includes(trade)) return;
+                const recoveredPrice = trade.currentPrice ?? fill;
+                if (recoveredPrice > fill * 1.5) {
+                  logEntry("dim", `  → <span class="green">404 collapse grace: price discovered ${(recoveredPrice*100).toFixed(1)}% — holding position</span>`);
+                } else {
+                  logEntry("warn", `  ↳ <span class="red">404 collapse grace expired: price ${(recoveredPrice*100).toFixed(1)}% — true collapse, exiting</span>`);
+                  closePosition(trade, "BAD FILL");
+                }
+              }, graceMs);
+            } else if (catastrophic || tooHigh) {
               const reason = catastrophic
                 ? `fill ${(fill*100).toFixed(1)}% — book collapse (< 25%)`
                 : `fill ${(fill*100).toFixed(1)}% > 72% — slippage pushed entry above risk/reward threshold`;
