@@ -2127,7 +2127,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
                               analysis.confidence === "HIGH" &&
                               stallGapPct > 0.0001 &&   // floor lowered 0.02%→0.01%: catches BTC 0.011-0.019% gaps (window-open near-50/50)
                               stallGapPct < 0.001 &&    // current gap < 0.10%
-                              effectiveGapPct > 0.0015 && // effective gap > 0.15% of price
+                              effectiveGapPct > 0.0005 && // effective gap > 0.05% of price (lowered 0.15%→0.05% to cover shorter windows)
                               _autoMomPrice < 0.68;     // above 68%: only 32pp to gain vs 63pp+ to lose — bad risk/reward for thin-gap bets
     const momentumTradeBypass = (analysis.momentumTrade === true || autoMomentumTrade) &&
                                 analysis.confidence === "HIGH" &&
@@ -2223,7 +2223,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       try {
       // Re-examined market whose gap grew but was blocked by a different filter — clean up watch.
       if (isGapWatched && !nearResSmallGap) state[asset].gapWatch.delete(market.conditionId);
-      if (postDiscovery) reasons.push(`post-discovery — ${(entryOdds * 100).toFixed(1)}% > 57%, book already thin — wait for next window`);
+      if (postDiscovery) reasons.push(`post-discovery — ${(entryOdds * 100).toFixed(1)}% > 72%, book already thin — wait for next window`);
       if (!oddsOk) {
         if (entryOdds > maxOdds)
           reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% > max ${(maxOdds * 100).toFixed(0)}% (bad risk/reward)`);
@@ -2481,20 +2481,23 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     try {
       const priceResp = await fetch(`/price?token_id=${encodeURIComponent(tokenId)}`);
       if (!priceResp.ok) {
-        // 404 = token not yet listed in CLOB (book hasn't formed); 5xx = server error.
-        // Either way we have no depth data — placing a blind FOK order here will almost
-        // certainly fail or sweep stale levels.  Skip and let the next cycle retry.
-        logEntry("warn", `  ↳ <span class="amber">price check ${priceResp.status}</span> — CLOB data unavailable for this token, skipping (next cycle will retry)`);
-        const idx = state.trades.indexOf(trade);
-        if (idx !== -1) state.trades.splice(idx, 1);
-        priceStream.unsubscribe(tokenId);
-        state.stats.trades = Math.max(0, state.stats.trades - 1);
-        state.stats.spent  = Math.max(0, state.stats.spent - amount);
-        setStat("trades",    String(state.stats.trades));
-        setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
-        setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
-        return;
-      }
+        if (priceResp.status >= 500) {
+          // 5xx = price server error — abort, let next cycle retry.
+          logEntry("warn", `  ↳ <span class="amber">price check ${priceResp.status}</span> — server error, skipping (next cycle will retry)`);
+          const idx = state.trades.indexOf(trade);
+          if (idx !== -1) state.trades.splice(idx, 1);
+          priceStream.unsubscribe(tokenId);
+          state.stats.trades = Math.max(0, state.stats.trades - 1);
+          state.stats.spent  = Math.max(0, state.stats.spent - amount);
+          setStat("trades",    String(state.stats.trades));
+          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          return;
+        }
+        // 404 = price server hasn't indexed this token yet, but the CLOB exists (BTC/ETH/SOL/XRP
+        // markets form instantly).  Skip depth gates and let the FOK self-protect on thin fills.
+        logEntry("dim", `  → <span class="amber">price check 404</span> — token not yet indexed, skipping depth gates`);
+      } else {
       const priceData = await priceResp.json();
       if (!priceData.error) {
         const liveAsk  = priceData.best_ask;
@@ -2602,6 +2605,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           return;
         }
       }
+      } // end else (priceResp.ok)
     } catch (_) { /* non-fatal — proceed with order */ }
 
     const orderPayload = {
