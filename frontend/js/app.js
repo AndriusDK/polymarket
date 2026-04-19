@@ -2508,6 +2508,21 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
         // markets form instantly).  Skip depth gates and let the FOK self-protect on thin fills.
         priceCheckWas404 = true;
         logEntry("dim", `  → <span class="amber">price check 404</span> — token not yet indexed, skipping depth gates`);
+        // Pre-gap + unindexed book = double uncertainty: no gap signal AND no book data to
+        // validate direction.  Session: 10:10AM BTC pre-gap on 404 book → -$3.72 stop loss.
+        if (analysis.reasoning?.startsWith('Pre-gap')) {
+          const idx = state.trades.indexOf(trade);
+          if (idx !== -1) state.trades.splice(idx, 1);
+          priceStream.unsubscribe(tokenId);
+          state.stats.trades = Math.max(0, state.stats.trades - 1);
+          state.stats.spent  = Math.max(0, state.stats.spent - amount);
+          setStat("trades",    String(state.stats.trades));
+          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          setStat("positions", String(state.trades.length));
+          logEntry("dim", `  → pre-gap on unindexed book — skipping (no gap + no book data, waiting for next cycle)`);
+          return;
+        }
       } else {
       const priceData = await priceResp.json();
       if (!priceData.error) {
