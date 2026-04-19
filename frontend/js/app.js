@@ -1931,6 +1931,16 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     // directional signal (e.g. huge gap + strong momentum + volume spike all aligned).
     // Late-window exception: timeRemaining < 400s bounds stop-loss exposure to ≤6.5min, so
     // the coin-flip failure mode has less time to materialise. Relax edge floor 0.13 → 0.10.
+    // Strong-momentum MEDIUM bypass — declared early (before btcCoinFlipBlocked) to avoid TDZ.
+    // Uses inline _sm* helpers because pqMomThr/pqCandleAligned are declared later in this function.
+    const _smMomThr  = asset === "btc" ? 18 : asset === "eth" ? 1.5 : 0.05;
+    const _smIsUp    = analysis.signal === "BUY_UP";
+    const _smAligned = candles.slice(0, 5).filter(c => _smIsUp ? c.close > c.open : c.close < c.open).length;
+    const strongMomMedium = analysis.confidence === "MEDIUM" &&
+                            Math.abs(analysis.momentum ?? 0) >= _smMomThr * 1.5 &&
+                            _smAligned >= 4 &&
+                            (analysis.absEdge ?? 0) >= 0.08;
+
     const btcCoinFlipEdgeFloor = timeRemaining < 400 ? 0.10 : 0.13;
     const btcCoinFlipBlocked = asset === "btc" &&
                                entryOdds >= 0.46 &&
@@ -2122,17 +2132,6 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     const momentumTradeBypass = (analysis.momentumTrade === true || autoMomentumTrade) &&
                                 analysis.confidence === "HIGH" &&
                                 analysis.signal !== "SKIP";
-
-    // Strong-momentum MEDIUM bypass: MEDIUM confidence with very strong raw momentum
-    // (1.5× per-asset threshold), 4+ aligned candles, and ≥8% AI edge — this is
-    // equivalent in directional quality to HIGH conf and bypasses the BTC coin-flip zone,
-    // BTC medium gap-flip block, and near-res gap-flip low-odds guard.
-    // Session evidence: BTC BUY_DOWN at 47.5% with −20/min momentum, 3/5 bearish, +33pt gap
-    // → drift -67pts over 200s → DOWN wins. The coin-flip zone blocked a legitimate signal.
-    const strongMomMedium = analysis.confidence === "MEDIUM" &&
-                            Math.abs(analysis.momentum ?? 0) >= pqMomThr * 1.5 &&
-                            pqCandleAligned >= 4 &&
-                            (analysis.absEdge ?? 0) >= 0.08;
 
     // === Path quality signals — used by long-window flip filter (change 2) and path quality veto (change 3).
     // Computed independently from raw Binance data to verify the AI's signal has immediate backing.
