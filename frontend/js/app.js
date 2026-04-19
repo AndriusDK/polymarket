@@ -2869,12 +2869,12 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
                 // Position may have been closed already by stop-loss or take-profit during the wait.
                 if (!state.trades.includes(trade)) return;
                 const recoveredPrice = trade.currentPrice ?? fill;
-                if (recoveredPrice > fill) {
-                  // Price moved up from fill — market is going our way, let normal logic handle it.
-                  logEntry("dim", `  → <span class="green">BAD FILL grace: price recovered to ${(recoveredPrice*100).toFixed(1)}% (fill was ${(fill*100).toFixed(1)}%) — holding position</span>`);
+                if (recoveredPrice > fill + 0.03) {
+                  // Price bounced 3pp above fill — genuine recovery, let normal logic handle it.
+                  logEntry("dim", `  → <span class="green">BAD FILL grace: price recovered to ${(recoveredPrice*100).toFixed(1)}% (+${((recoveredPrice-fill)*100).toFixed(1)}pp above fill ${(fill*100).toFixed(1)}%) — holding position</span>`);
                 } else {
-                  // Still below fill after grace period — close as BAD FILL.
-                  logEntry("warn", `  ↳ <span class="red">BAD FILL grace expired: price ${(recoveredPrice*100).toFixed(1)}% still below fill ${(fill*100).toFixed(1)}% — slippage exit</span>`);
+                  // Insufficient recovery after grace period — close as BAD FILL.
+                  logEntry("warn", `  ↳ <span class="red">BAD FILL grace expired: price ${(recoveredPrice*100).toFixed(1)}% — insufficient recovery from fill ${(fill*100).toFixed(1)}% (need +3pp) — slippage exit</span>`);
                   closePosition(trade, "BAD FILL");
                 }
               }, graceMs);
