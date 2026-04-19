@@ -2442,6 +2442,21 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     await new Promise(r => setTimeout(r, 2000));   // 2s pause — let stale data expire
     try {
       const priceResp = await fetch(`/price?token_id=${encodeURIComponent(tokenId)}`);
+      if (!priceResp.ok) {
+        // 404 = token not yet listed in CLOB (book hasn't formed); 5xx = server error.
+        // Either way we have no depth data — placing a blind FOK order here will almost
+        // certainly fail or sweep stale levels.  Skip and let the next cycle retry.
+        logEntry("warn", `  ↳ <span class="amber">price check ${priceResp.status}</span> — CLOB data unavailable for this token, skipping (next cycle will retry)`);
+        const idx = state.trades.indexOf(trade);
+        if (idx !== -1) state.trades.splice(idx, 1);
+        priceStream.unsubscribe(tokenId);
+        state.stats.trades = Math.max(0, state.stats.trades - 1);
+        state.stats.spent  = Math.max(0, state.stats.spent - amount);
+        setStat("trades",    String(state.stats.trades));
+        setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+        setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+        return;
+      }
       const priceData = await priceResp.json();
       if (!priceData.error) {
         const liveAsk  = priceData.best_ask;
