@@ -2543,6 +2543,20 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           logEntry("dim", `  → ${entryType} on unindexed book — skipping (no book data yet, next cycle will retry)`);
           return;
         }
+        // Near-res + unindexed: FOK would miss anyway (<300s no-retry) — skip the API call.
+        if ((analysis.timeRemaining ?? 999) < 300) {
+          const idx = state.trades.indexOf(trade);
+          if (idx !== -1) state.trades.splice(idx, 1);
+          priceStream.unsubscribe(tokenId);
+          state.stats.trades = Math.max(0, state.stats.trades - 1);
+          state.stats.spent  = Math.max(0, state.stats.spent - amount);
+          setStat("trades",    String(state.stats.trades));
+          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          setStat("positions", String(state.trades.length));
+          logEntry("dim", `  → unindexed book with ${Math.round(analysis.timeRemaining ?? 0)}s left — skipping (FOK would miss, no retry <300s)`);
+          return;
+        }
       } else {
       const priceData = await priceResp.json();
       if (!priceData.error) {
