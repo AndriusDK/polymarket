@@ -2756,10 +2756,13 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
               logEntry("warn", `  ↳ <span class="red">${reason} — slippage exit</span>`);
               closePosition(trade, "BAD FILL");
             } else if (badDrift) {
-              // Grace period: give the market 12s to prove it's heading the right direction.
-              // If price recovers above fill we were just caught in a temporary dip — keep it.
-              // If still below fill (or position already closed by stop-loss) exit as BAD FILL.
-              logEntry("warn", `  ↳ <span class="amber">fill ${(fill*100).toFixed(1)}% vs requested ${(entryPrice*100).toFixed(1)}% — ${(driftAgainst*100).toFixed(1)}pp drift against ${trade.signal} — watching 12s for recovery</span>`);
+              // Grace period scaled to window length: ~5% of remaining window time, capped 15–60s.
+              // Short windows (180s) → 15s; mid windows (300s) → 15s; long windows (798s) → ~40s.
+              // Session evidence: BTC 13-min window filled 40% (entry 51.5%), price still 40% at
+              // 12s but recovered to 76% — 12s was too short for price discovery on a long window.
+              const graceMs = Math.max(15_000, Math.min(60_000, trade.totalSecs * 50));
+              const graceSec = Math.round(graceMs / 1000);
+              logEntry("warn", `  ↳ <span class="amber">fill ${(fill*100).toFixed(1)}% vs requested ${(entryPrice*100).toFixed(1)}% — ${(driftAgainst*100).toFixed(1)}pp drift against ${trade.signal} — watching ${graceSec}s for recovery</span>`);
               setTimeout(() => {
                 // Position may have been closed already by stop-loss or take-profit during the wait.
                 if (!state.trades.includes(trade)) return;
@@ -2772,7 +2775,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
                   logEntry("warn", `  ↳ <span class="red">BAD FILL grace expired: price ${(recoveredPrice*100).toFixed(1)}% still below fill ${(fill*100).toFixed(1)}% — slippage exit</span>`);
                   closePosition(trade, "BAD FILL");
                 }
-              }, 12_000);
+              }, graceMs);
             }
           }
       }
