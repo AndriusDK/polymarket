@@ -1906,10 +1906,13 @@ async function _runCryptoCycleInner(asset) {
     // edge claim simply means the AI says 60% vs 50% market, which is within its error range.
     // Require ≥18% edge for coin-flip zone entries — only enter if the AI sees a genuinely strong
     // directional signal (e.g. huge gap + strong momentum + volume spike all aligned).
+    // Late-window exception: timeRemaining < 400s bounds stop-loss exposure to ≤6.5min, so
+    // the coin-flip failure mode has less time to materialise. Relax edge floor 0.13 → 0.10.
+    const btcCoinFlipEdgeFloor = timeRemaining < 400 ? 0.10 : 0.13;
     const btcCoinFlipBlocked = asset === "btc" &&
                                entryOdds >= 0.46 &&
                                entryOdds <= 0.54 &&
-                               !(analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= 0.13);
+                               !(analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= btcCoinFlipEdgeFloor);
 
     // BTC gap-flip filter: MEDIUM confidence gap-flip bets on BTC are net-negative in two cases:
     // (1) gap > 800pts — rarely flip in the window; (2) entry odds < 55% with any gap size —
@@ -2023,8 +2026,10 @@ async function _runCryptoCycleInner(asset) {
     // Upper bound extended from 600s → 900s to close the 600-900s dead zone where longWindowLowConv
     // hasn't kicked in yet but midWindowSmallGap had already stopped watching.
     // Use gapWatch for one observation cycle: if gap grows to threshold on re-check, allow entry.
-    // Thresholds relaxed: HIGH 0.05%→0.03%, MEDIUM/LOW 0.10%→0.07% — prior values filtered too aggressively.
-    const midGapThreshold = analysis.confidence === "HIGH" ? 0.0003 : 0.0007;
+    // Thresholds relaxed: HIGH 0.05%→0.03%→0.02%, MEDIUM/LOW 0.10%→0.07% — session log showed
+    // HIGH conf signals at 0.023-0.029% gaps being blocked; momentumTradeBypass floor (0.02%)
+    // still protects pure zero-gap plays.
+    const midGapThreshold = analysis.confidence === "HIGH" ? 0.0002 : 0.0007;
     const midWindowSmallGap = timeRemaining >= 200 && timeRemaining < 900 &&
                               stallGapPct < midGapThreshold;
 
@@ -2190,7 +2195,7 @@ async function _runCryptoCycleInner(asset) {
       if (!crossable) reasons.push(`gap $${Math.abs(gap).toFixed(pd)} too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})`);
       if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥${asset === "btc" ? "60" : "55"}% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
       if (btcMidWindowLowOdds) reasons.push(`BTC mid-window low odds — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥55% or HIGH conf + ≥12% edge (crowd reversion signal)`);
-      if (btcCoinFlipBlocked) reasons.push(`BTC coin-flip zone — ${(entryOdds * 100).toFixed(1)}% is near 50/50; need HIGH conf + ≥18% edge to enter (AI overconfidence risk at these odds, session evidence)`);
+      if (btcCoinFlipBlocked) reasons.push(`BTC coin-flip zone — ${(entryOdds * 100).toFixed(1)}% is near 50/50; need HIGH conf + ≥${(btcCoinFlipEdgeFloor*100).toFixed(0)}% edge to enter (AI overconfidence risk at these odds, session evidence)`);
 
       if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM (<120s)`);
       if (solMediumLongWindow) reasons.push(`SOL mid-window MEDIUM — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥60% (SOL whipsaw risk too high for MEDIUM conviction)`);
@@ -2654,14 +2659,23 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           // Hard ceiling: margin too thin at >78%.  At 78%+ the risk/reward collapses:
           //   78% fill → 22pp upside vs 73pp downside = 3.3:1 against.
           //   Our analysis cap is 80% so any fill ≥78% means slippage pushed us into bad territory.
+          // Directional drift: BUY_UP filling >8pp below requested entry (or BUY_DOWN filling
+          // >8pp above) means the market repriced against our signal during the 2s check→fill
+          // delay. Session data: ETH BUY_UP at 56.5% filled at 43.7% → stop loss −$3.47; BTC
+          // BUY_UP at 55.5% filled at 70% → stop loss −$0.88. Both would have exited at wash.
           const fill = parseFillPrice(result, "BUY");
           if (fill) {
             const catastrophic = fill < 0.25;
             const tooHigh      = fill > 0.78;
-            if (catastrophic || tooHigh) {
+            const isUpSig      = trade.signal === "BUY_UP";
+            const driftAgainst = isUpSig ? (entryPrice - fill) : (fill - entryPrice);
+            const badDrift     = driftAgainst > 0.08;
+            if (catastrophic || tooHigh || badDrift) {
               const reason = catastrophic
                 ? `fill ${(fill*100).toFixed(1)}% — book collapse (< 25%)`
-                : `fill ${(fill*100).toFixed(1)}% > 78% — slippage pushed entry above risk/reward threshold`;
+                : tooHigh
+                  ? `fill ${(fill*100).toFixed(1)}% > 78% — slippage pushed entry above risk/reward threshold`
+                  : `fill ${(fill*100).toFixed(1)}% vs requested ${(entryPrice*100).toFixed(1)}% — market repriced ${(driftAgainst*100).toFixed(1)}pp against ${trade.signal} during check→fill delay`;
               logEntry("warn", `  ↳ <span class="red">${reason} — slippage exit</span>`);
               closePosition(trade, "BAD FILL");
             }
