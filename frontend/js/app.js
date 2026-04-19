@@ -2209,11 +2209,12 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     }
 
     if (qualifies) {
-      // Fresh-window gate: at 50/50 (pre-discovery) the book has symmetric depth so 10s is
-      // enough to see real makers.  Old 30s wait pushed entry past discovery into volatile range.
+      // Fresh-window gate: pre-gap (0-15s) and flash (15-45s) cover early entries with explicit
+      // quality gates.  Main-path analysis waits 45s so the book is typically indexed and deep
+      // before we commit a larger position.
       const windowAge = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
-      if (windowAge < 10_000) {
-        logEntry("dim", `  ↳ <span class="amber">fresh window</span> — ${Math.round(windowAge/1000)}s since open, holding 10s for book depth (next cycle will trade)`);
+      if (windowAge < 45_000) {
+        logEntry("dim", `  ↳ <span class="amber">early window</span> — ${Math.round(windowAge/1000)}s since open, waiting 45s for book to index (pre-gap/flash cover early entries)`);
       } else {
         state[asset].gapWatch.delete(market.conditionId);
         placeCryptoTrade(asset, analysis, { spot, priceToBeat });
@@ -2508,9 +2509,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
         // markets form instantly).  Skip depth gates and let the FOK self-protect on thin fills.
         priceCheckWas404 = true;
         logEntry("dim", `  → <span class="amber">price check 404</span> — token not yet indexed, skipping depth gates`);
-        // Pre-gap + unindexed book = double uncertainty: no gap signal AND no book data to
-        // validate direction.  Session: 10:10AM BTC pre-gap on 404 book → -$3.72 stop loss.
-        if (analysis.reasoning?.startsWith('Pre-gap')) {
+        // Pre-gap and flash entries on unindexed books = double uncertainty: no book data to
+        // validate direction AND either no gap (pre-gap) or tiny gap (flash).
+        // Session: 10:10AM BTC pre-gap on 404 book → -$3.72 stop loss.
+        if (analysis.reasoning?.startsWith('Pre-gap') || analysis.reasoning?.startsWith('Window-open flash')) {
           const idx = state.trades.indexOf(trade);
           if (idx !== -1) state.trades.splice(idx, 1);
           priceStream.unsubscribe(tokenId);
@@ -2520,7 +2522,8 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
-          logEntry("dim", `  → pre-gap on unindexed book — skipping (no gap + no book data, waiting for next cycle)`);
+          const entryType = analysis.reasoning?.startsWith('Pre-gap') ? 'pre-gap' : 'flash';
+          logEntry("dim", `  → ${entryType} on unindexed book — skipping (no book data yet, next cycle will retry)`);
           return;
         }
       } else {
