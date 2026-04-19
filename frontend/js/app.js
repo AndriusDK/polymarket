@@ -2089,7 +2089,7 @@ async function _runCryptoCycleInner(asset) {
     const _autoMomPrice    = _autoMomIsUp ? (market?.upPrice ?? 0.5) : (market?.downPrice ?? 0.5);
     const autoMomentumTrade = analysis.signal !== "SKIP" &&
                               analysis.confidence === "HIGH" &&
-                              stallGapPct > 0.0002 &&   // require real gap floor (>0.02%) — zero-gap pure-momentum plays fail
+                              stallGapPct > 0.0001 &&   // floor lowered 0.02%→0.01%: catches BTC 0.011-0.019% gaps (window-open near-50/50)
                               stallGapPct < 0.001 &&    // current gap < 0.10%
                               effectiveGapPct > 0.0015 && // effective gap > 0.15% of price
                               _autoMomPrice < 0.68;     // above 68%: only 32pp to gain vs 63pp+ to lose — bad risk/reward for thin-gap bets
@@ -2154,14 +2154,14 @@ async function _runCryptoCycleInner(asset) {
       !nearResGapFlipMomOpposed &&
       !nearResGapFlipLowOdds &&
       !btcMacroVeto &&
-      !pumpSkeptic &&
+      (!pumpSkeptic || momentumTradeBypass) &&
       !stalled &&
       !nearResLowOdds &&
       !nearResSmallGap &&
       (!midWindowSmallGap || momentumTradeBypass) &&
       !solLargeGapUp &&
       !assetPositionOpen &&
-      !weakLongWindowGapFlip &&
+      (!weakLongWindowGapFlip || momentumTradeBypass) &&
       !weakPathQualityFlip &&
       (analysis.confidence === "HIGH" || analysis.absEdge >= minEdge) &&
       state.stats.spent < c.maxDaily;
@@ -2593,6 +2593,23 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           const retryCap    = Math.min(entryPrice + 0.06, 0.92);
           const retryAmount = amount / 2;
           const amountDiff  = amount - retryAmount;
+
+          // Polymarket enforces a $1 minimum per order. If half-size is below that,
+          // skip the retry entirely and roll back — a $0.81 order will be rejected.
+          if (retryAmount < 1.00) {
+            const idx = state.trades.indexOf(trade);
+            if (idx !== -1) state.trades.splice(idx, 1);
+            priceStream.unsubscribe(tokenId);
+            state.stats.trades = Math.max(0, state.stats.trades - 1);
+            state.stats.spent  = Math.max(0, state.stats.spent - amount);
+            setStat("trades",    String(state.stats.trades));
+            setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+            setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+            setStat("positions", String(state.trades.length));
+            logEntry("warn", `  ↳ FOK miss — retry skipped ($${retryAmount.toFixed(2)} < $1 minimum order size)`);
+            return;
+          }
+
           logEntry("dim", `  ↳ FOK miss — retrying $${retryAmount.toFixed(2)} at ${(retryCap * 100).toFixed(0)}¢ cap in 2s…`);
 
           // Stats were charged for full `amount` synchronously — refund the half
