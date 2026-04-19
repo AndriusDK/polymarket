@@ -2543,8 +2543,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           logEntry("dim", `  → ${entryType} on unindexed book — skipping (no book data yet, next cycle will retry)`);
           return;
         }
-        // Near-res + unindexed: FOK would miss anyway (<300s no-retry) — skip the API call.
-        if ((analysis.timeRemaining ?? 999) < 300) {
+        // Near-res + unindexed: FOK would miss anyway (<150s no-retry) — skip the API call.
+        // 300s was too aggressive: after the 45s early-window gate, a 5-min window only has ~255s left,
+        // so every 404 entry was blocked even on strong fresh-window signals.
+        if ((analysis.timeRemaining ?? 999) < 150) {
           const idx = state.trades.indexOf(trade);
           if (idx !== -1) state.trades.splice(idx, 1);
           priceStream.unsubscribe(tokenId);
@@ -2554,7 +2556,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
-          logEntry("dim", `  → unindexed book with ${Math.round(analysis.timeRemaining ?? 0)}s left — skipping (FOK would miss, no retry <300s)`);
+          logEntry("dim", `  → unindexed book with ${Math.round(analysis.timeRemaining ?? 0)}s left — skipping (FOK would miss, no retry <150s)`);
           return;
         }
       } else {
