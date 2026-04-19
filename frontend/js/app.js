@@ -2234,7 +2234,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
           logEntry("dim", `  ↳ <span class="amber">⚡ cross-window</span> — ${analysis.signal} carry from prior close (${(crossSig.odds*100).toFixed(0)}%), entering at ${Math.round(windowAge/1000)}s`);
         }
         state[asset].gapWatch.delete(market.conditionId);
-        placeCryptoTrade(asset, analysis, { spot, priceToBeat });
+        placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge });
       }
     } else if (analysis.signal !== "SKIP") {
       const reasons = [];
@@ -2354,7 +2354,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
 
 const runBtcCycle = () => runCryptoCycle("btc");
 
-async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
+async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge = Infinity }) {
   const c      = state.config;
   const cfg    = CRYPTO_CONFIG[asset];
 
@@ -2541,6 +2541,24 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
           setStat("positions", String(state.trades.length));
           const entryType = analysis.reasoning?.startsWith('Pre-gap') ? 'pre-gap' : 'flash';
           logEntry("dim", `  → ${entryType} on unindexed book — skipping (no book data yet, next cycle will retry)`);
+          return;
+        }
+        // Fresh window + unindexed: any entry type risks catastrophic slippage on a thin book.
+        // The flash/pre-gap checks above cover T=0-45s; this catches MOM auto entries that fire
+        // just after the early-window gate clears but before the book actually indexes.
+        // 4:50PM BTC stinker: flash blocked at T=44s, but main-cycle MOM auto fired at T=47s with
+        // different reasoning, bypassed the checks, and filled at 16% vs 47.5% requested (-$4.50).
+        if (windowAge < 90_000) {
+          const idx = state.trades.indexOf(trade);
+          if (idx !== -1) state.trades.splice(idx, 1);
+          priceStream.unsubscribe(tokenId);
+          state.stats.trades = Math.max(0, state.stats.trades - 1);
+          state.stats.spent  = Math.max(0, state.stats.spent - amount);
+          setStat("trades",    String(state.stats.trades));
+          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          setStat("positions", String(state.trades.length));
+          logEntry("dim", `  → unindexed book at ${Math.round(windowAge/1000)}s into window — skipping until book indexes`);
           return;
         }
         // Near-res + unindexed: FOK would miss anyway (<150s no-retry) — skip the API call.
