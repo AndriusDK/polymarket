@@ -16,10 +16,10 @@ const state = {
   losses: 0,
   sessionStart: Date.now(),
   bootTime: null,      // set when first asset starts; used for startup cooldown
-  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map() },  // conditionId → endDateMs
-  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map() },
-  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map() },
-  xrp: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map() },
+  btc: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map() },  // conditionId → endDateMs
+  eth: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map() },
+  sol: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map() },
+  xrp: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map() },
   tradeHistory: [],    // { ts, pnl, asset, reason } — every closed position, used by profit chart
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
@@ -1343,17 +1343,19 @@ function startCryptoMode(asset) {
     _startCooldownOverlay(coolSecs);
   }
 
-  logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — WS instant detection + 15s safety poll`);
+  logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — WS instant detection + 5s discovery + 15s analysis`);
 
   startMarketWS();
   runCryptoCycle(asset);
-  state[asset].timer = setInterval(() => runCryptoCycle(asset), 15_000);
+  state[asset].timer          = setInterval(() => runCryptoCycle(asset), 15_000);
+  state[asset].discoveryTimer = setInterval(() => runFastDiscoveryCycle(asset), 5_000);
 }
 
 function stopCryptoMode(asset) {
   if (!state[asset]?.timer) return;
   clearInterval(state[asset].timer);
   state[asset].timer = null;
+  if (state[asset].discoveryTimer) { clearInterval(state[asset].discoveryTimer); state[asset].discoveryTimer = null; }
   if (state[asset].accelTimer) { clearTimeout(state[asset].accelTimer); state[asset].accelTimer = null; }
 
   const cfg = CRYPTO_CONFIG[asset];
@@ -1381,14 +1383,31 @@ async function runCryptoCycle(asset) {
   }
 }
 
-async function _runCryptoCycleInner(asset) {
+// Fast discovery cycle: runs every 5s, not blocked by AI analysis.
+// Handles pre-window gate, pre-gap entries, and flash entries so new
+// markets are caught within seconds of their window opening, even
+// when the full analysis cycle is busy waiting on Claude.
+async function runFastDiscoveryCycle(asset) {
+  if (state[asset].fastRunning) return;
+  state[asset].fastRunning = true;
+  try {
+    await _runCryptoCycleInner(asset, { fastOnly: true });
+  } catch (_) { /* non-fatal */ }
+  finally {
+    state[asset].fastRunning = false;
+  }
+}
+
+async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
   const c   = state.config;
   const cfg = CRYPTO_CONFIG[asset];
-  setStat(`${asset}-status`, "SCANNING…", "cyan");
+  if (!fastOnly) setStat(`${asset}-status`, "SCANNING…", "cyan");
 
   let markets, debug;
   try {
-    ({ markets, debug } = await fetchCryptoMarkets(asset, { maxMinutes: 20, minVolume: c.minMarketVolume }));
+    // 45-minute window: pre-fetches 15-min markets 30 min before they open instead of 5 min.
+    // Fast discovery cycles also use this extended window so new markets are found immediately.
+    ({ markets, debug } = await fetchCryptoMarkets(asset, { maxMinutes: 45, minVolume: c.minMarketVolume }));
   } catch (err) {
     logEntry("error", `${cfg.ticker}: market fetch failed — ${err.message}`);
     setStat(`${asset}-status`, "ERROR", "red");
@@ -1742,6 +1761,10 @@ async function _runCryptoCycleInner(asset) {
         }
       }
     }
+
+    // Fast discovery cycle ends here — pre-window gate, pre-gap entry and flash entry have
+    // already fired. Skip oracle gate and AI analysis (handled by the 15s full cycle).
+    if (fastOnly) continue;
 
     // Oracle observation gate — when a market is brand-new AND the gap is tiny (<0.2%),
     // the Chainlink price-to-beat may not have been published yet (typical 1-2 min lag on
