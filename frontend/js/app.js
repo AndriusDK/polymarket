@@ -2548,7 +2548,8 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
         // just after the early-window gate clears but before the book actually indexes.
         // 4:50PM BTC stinker: flash blocked at T=44s, but main-cycle MOM auto fired at T=47s with
         // different reasoning, bypassed the checks, and filled at 16% vs 47.5% requested (-$4.50).
-        if (windowAge < 90_000) {
+        // Raised 90s→120s: T=94s and T=100s fills in follow-up session still slipped through at 90s.
+        if (windowAge < 120_000) {
           const idx = state.trades.indexOf(trade);
           if (idx !== -1) state.trades.splice(idx, 1);
           priceStream.unsubscribe(tokenId);
