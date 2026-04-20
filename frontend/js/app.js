@@ -2520,6 +2520,8 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("trades",    String(state.stats.trades));
           setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          setStat("positions", String(state.trades.length));
+          updatePnlStat();
           return;
         }
         // 404 = price server hasn't indexed this token yet, but the CLOB exists (BTC/ETH/SOL/XRP
@@ -2541,6 +2543,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("positions", String(state.trades.length));
           const entryType = analysis.reasoning?.startsWith('Pre-gap') ? 'pre-gap' : 'flash';
           logEntry("dim", `  → ${entryType} on unindexed book — skipping (no book data yet, next cycle will retry)`);
+          updatePnlStat();
           return;
         }
         // Fresh window + unindexed: any entry type risks catastrophic slippage on a thin book.
@@ -2560,6 +2563,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
           logEntry("dim", `  → unindexed book at ${Math.round(windowAge/1000)}s into window — skipping until book indexes`);
+          updatePnlStat();
           return;
         }
         // Near-res + unindexed: FOK would miss anyway (<150s no-retry) — skip the API call.
@@ -2576,6 +2580,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
           logEntry("dim", `  → unindexed book with ${Math.round(analysis.timeRemaining ?? 0)}s left — skipping (FOK would miss, no retry <150s)`);
+          updatePnlStat();
           return;
         }
       } else {
