@@ -2134,12 +2134,18 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
 
       let bookReady = false;
       let bookFillable = 0;
+      let bookLastTrade = 0;
+      let bookSpread = null;
       let bookProbeReason = "no probe";
+      let bookReadyReason = "";
       if (windowAge < earlyGate) {
-        // Probe the CLOB: skip the fixed wait only when the book has enough fillable depth
-        // within the FOK price cap (entry +5pp) to absorb at least half our target bet.
-        // A few $1 levels at 50¢ would pass a naive length>0 check but leave the FOK
-        // either failing or trimmed to a few cents — waiting is better in that case.
+        // Probe the CLOB book.  Skip the fixed wait when EITHER:
+        //   (a) fillable depth within entry +5pp covers half the target bet, OR
+        //   (b) a real trade has happened (last_trade_price > 0) AND spread ≤3pp —
+        //       meaning priceToBeat has leaked into the book and prices are settled.
+        // Plain "asks.length > 0" is not enough: Polymarket's UI shows priceToBeat as
+        // "--" for 30-60s after window open and the book clusters at 50¢/50¢ with tiny
+        // $1 levels during that time — enough asks to exist but not enough to fill.
         const isUp         = analysis.signal === "BUY_UP";
         const probeTokenId = isUp ? market.upTokenId : market.downTokenId;
         const probeEntry   = isUp ? market.upPrice   : market.downPrice;
@@ -2158,13 +2164,23 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
               if (pd.error)                                          bookProbeReason = "price error";
               else if (!Array.isArray(pd.asks) || pd.asks.length === 0) bookProbeReason = "empty book";
               else {
+                bookLastTrade = pd.last_trade_price ?? 0;
+                bookSpread    = (pd.best_ask ?? 1) - (pd.best_bid ?? 0);
                 for (const lvl of pd.asks) {
                   if (lvl.price > priceCapFOK) break;
                   bookFillable += lvl.size * lvl.price;
                   if (bookFillable >= depthFloor) break;
                 }
-                if (bookFillable >= depthFloor) bookReady = true;
-                else bookProbeReason = `only $${bookFillable.toFixed(2)} fillable ≤${(priceCapFOK*100).toFixed(0)}¢ (need $${depthFloor.toFixed(2)})`;
+                const depthOk   = bookFillable >= depthFloor;
+                const activeOk  = bookLastTrade > 0 && bookSpread !== null && bookSpread <= 0.03;
+                if (depthOk)       { bookReady = true; bookReadyReason = `$${bookFillable.toFixed(2)} fillable`; }
+                else if (activeOk) { bookReady = true; bookReadyReason = `last trade ${(bookLastTrade*100).toFixed(0)}¢, spread ${(bookSpread*100).toFixed(1)}pp`; }
+                else {
+                  const parts = [`$${bookFillable.toFixed(2)} fillable ≤${(priceCapFOK*100).toFixed(0)}¢ (need $${depthFloor.toFixed(2)})`];
+                  if (bookLastTrade === 0) parts.push("no trades yet");
+                  else if (bookSpread !== null && bookSpread > 0.03) parts.push(`spread ${(bookSpread*100).toFixed(1)}pp`);
+                  bookProbeReason = parts.join(", ");
+                }
               }
             }
           } catch (_) { bookProbeReason = "network"; }
@@ -2172,10 +2188,10 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       }
 
       if (windowAge < earlyGate && !bookReady) {
-        logEntry("dim", `  ↳ <span class="amber">early window</span> — ${Math.round(windowAge/1000)}s since open, book too thin (${bookProbeReason}); fallback wait ${Math.round(earlyGate/1000)}s${crossActive ? ' [cross-window carry]' : ''}`);
+        logEntry("dim", `  ↳ <span class="amber">early window</span> — ${Math.round(windowAge/1000)}s since open, book not ready (${bookProbeReason}); fallback wait ${Math.round(earlyGate/1000)}s${crossActive ? ' [cross-window carry]' : ''}`);
       } else {
         if (bookReady && windowAge < earlyGate) {
-          logEntry("dim", `  → <span class="green">book ready</span> — $${bookFillable.toFixed(2)} fillable, skipping ${Math.round((earlyGate - windowAge)/1000)}s fallback wait at ${Math.round(windowAge/1000)}s into window`);
+          logEntry("dim", `  → <span class="green">book ready</span> — ${bookReadyReason}, skipping ${Math.round((earlyGate - windowAge)/1000)}s fallback wait at ${Math.round(windowAge/1000)}s into window`);
         }
         if (crossActive) {
           state[asset].crossWindowSignal = null;

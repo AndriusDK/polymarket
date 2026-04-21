@@ -123,11 +123,17 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             ask_levels = [{"price": float(a["price"]), "size": float(a["size"])} for a in asks[:15]]
             bid_levels = [{"price": float(b["price"]), "size": float(b["size"])} for b in bids[:15]]
 
+            # last_trade_price: "0" until a real trade has happened. Used by the frontend
+            # early-window gate as a signal that the book has moved past the 50¢/50¢ phase.
+            try:    last_trade_price = float(book.get("last_trade_price") or 0)
+            except: last_trade_price = 0.0
+
             body = json.dumps({
                 "best_bid": best_bid,
                 "best_ask": best_ask,
                 "asks": ask_levels,
                 "bids": bid_levels,
+                "last_trade_price": last_trade_price,
             }).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
