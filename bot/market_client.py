@@ -228,6 +228,7 @@ class PolymarketClient:
         dry_run: bool = True,
         entry_price: float | None = None,
         max_slippage: float = 0.05,  # reject fills more than 5% worse than quoted price
+        order_type: str = "fok",     # "fok" (all-or-nothing) or "gtc" (resting limit, partial fills OK)
     ) -> dict:
         """
         Place a market order.
@@ -291,10 +292,32 @@ class PolymarketClient:
             logger.info("%s price limit: %.4f (quoted %.4f, max slippage %.0f%%)",
                         side, price_limit, entry_price, max_slippage * 100)
 
+        side_const = BUY if side.upper() == "BUY" else SELL
+
+        # GTC (limit/resting) mode: place a single limit order at price_limit.
+        # The CLOB fills whatever depth is available immediately; the remainder rests
+        # on the book until the market resolves.  No retry needed — partial fills are OK.
+        if order_type.lower() == "gtc":
+            from py_clob_client.clob_types import LimitOrderArgs
+            limit_price = price_limit if price_limit is not None else (
+                round(min((entry_price or 0.50) + 0.05, 0.92), 4) if side.upper() == "BUY"
+                else round(max((entry_price or 0.50) - 0.05, 0.03), 4)
+            )
+            order_args = LimitOrderArgs(
+                token_id=token_id,
+                price=limit_price,
+                size=round(amount_usdc / limit_price, 4),   # shares = USDC / price
+                side=side_const,
+            )
+            signed_order = client.create_limit_order(order_args)
+            response = client.post_order(signed_order, OrderType.GTC)
+            logger.info("GTC limit order placed: %s", response)
+            return response
+
         # FOK retry strategy: if the full order can't be filled at the price limit,
         # progressively widen the limit — never drop it entirely to avoid fills at
         # catastrophically bad prices (e.g. BUY at 81% quote → fills at 98% on retry).
-        side_const = BUY if side.upper() == "BUY" else SELL
+
         if side.upper() == "BUY":
             # Hard cap: never pay more than entry + 10%, absolute max 90%.
             # At 90%+ the risk/reward collapses — 10% left to make vs 90% to lose.

@@ -124,6 +124,15 @@
         <span id="dry-run-label" class="toggle-status amber">ON</span>
       </div>
 
+      <div class="switch-row">
+        <span class="field-label" title="ON = FOK (all-or-nothing, fails on thin books). OFF = Limit/GTC (partial fills OK, resting bid if book is thin — good for testing signal quality at window open)">FOK Orders (all-or-nothing)</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="fok-toggle" checked />
+          <span class="toggle-slider"></span>
+        </label>
+        <span id="fok-label" class="toggle-status green">ON</span>
+      </div>
+
       <!-- Crypto Modes -->
       <div class="section-title"><span class="diamond">◈</span> CRYPTO MODES <span class="hint">(AI-analyzed 5-min &amp; 15-min markets)</span></div>
 

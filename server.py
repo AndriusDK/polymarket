@@ -67,6 +67,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             side          = body.get("side", "BUY")
             amount_usdc   = float(body["amount_usdc"])
             entry_price   = float(body["entry_price"]) if "entry_price" in body else None
+            order_type    = body.get("order_type", "fok")   # "fok" or "gtc"
             private_key   = body["private_key"]
             api_key       = body["api_key"]
             api_secret    = body["api_secret"]
@@ -81,7 +82,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             )
 
             result = client.place_market_order(token_id, side, amount_usdc, dry_run=False,
-                                               entry_price=entry_price)
+                                               entry_price=entry_price, order_type=order_type)
             resp = json.dumps(result).encode()
 
             self.send_response(200)

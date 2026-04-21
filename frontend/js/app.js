@@ -85,6 +85,7 @@ const PERSIST_FIELDS = [
   ["xrp-max-bet",         "value"],
   ["xrp-min-edge",        "value"],
   ["xrp-mode-toggle",     "checked"],
+  ["fok-toggle",          "checked"],
 ];
 
 function saveSettings() {
@@ -106,6 +107,7 @@ function loadSettings() {
   }
   // Sync toggle labels after restoring checkboxes
   syncToggleLabel("dry-run-toggle",  "dry-run-label",  ["ON","amber"], ["OFF — LIVE","red"]);
+  syncToggleLabel("fok-toggle",      "fok-label",      ["ON","green"], ["OFF — Limit/GTC","amber"]);
   syncToggleLabel("btc-mode-toggle", "btc-mode-label",  ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("eth-mode-toggle", "eth-mode-label",  ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("sol-mode-toggle", "sol-mode-label",  ["ON","green"], ["OFF","dim"]);
@@ -127,6 +129,8 @@ function initSetup() {
 
   $("#dry-run-toggle").addEventListener("change", () =>
     syncToggleLabel("dry-run-toggle", "dry-run-label", ["ON","amber"], ["OFF — LIVE","red"]));
+  $("#fok-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("fok-toggle", "fok-label", ["ON","green"], ["OFF — Limit/GTC","amber"]));
   $("#btc-mode-toggle")?.addEventListener("change", () =>
     syncToggleLabel("btc-mode-toggle", "btc-mode-label", ["ON","green"], ["OFF","dim"]));
   $("#eth-mode-toggle")?.addEventListener("change", () =>
@@ -168,6 +172,7 @@ function initSetup() {
       xrpMaxBet:     parseFloat($("#xrp-max-bet")?.value) || 5,
       xrpMinEdge:    parseFloat($("#xrp-min-edge")?.value) || 0.04,
       startupCooldown: parseInt($("#startup-cooldown")?.value) || 90,
+      useFOK:          $("#fok-toggle")?.checked ?? true,
     };
 
     initDashboard();
@@ -2132,6 +2137,19 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       const normalGate      = Math.max(30_000, Math.min(120_000, totalWindowSecs * 150));
       const earlyGate       = crossActive ? 30_000 : normalGate;
 
+      // In Limit/GTC mode the order rests on the book and fills as depth arrives —
+      // no FOK failure, so no need to wait for the book to thicken first.
+      if (!c.useFOK && windowAge < earlyGate) {
+        logEntry("dim", `  → <span class="green">limit mode</span> — skipping early-window wait, placing resting bid at ${Math.round(windowAge/1000)}s`);
+        if (crossActive) {
+          state[asset].crossWindowSignal = null;
+          logEntry("dim", `  ↳ <span class="amber">⚡ cross-window</span> — ${analysis.signal} carry from prior close (${(crossSig.odds*100).toFixed(0)}%), entering at ${Math.round(windowAge/1000)}s`);
+        }
+        state[asset].gapWatch.delete(market.conditionId);
+        placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge });
+        continue;
+      }
+
       let bookReady = false;
       let bookFillable = 0;
       let bookLastTrade = 0;
@@ -2492,6 +2510,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
       side:           "BUY",
       amount_usdc:    amount,
       entry_price:    entryPrice,   // used server-side to cap slippage
+      order_type:     c.useFOK !== false ? "fok" : "gtc",
       private_key:    c.polyPrivateKey,
       api_key:        c.polyApiKey,
       api_secret:     c.polyApiSecret,
@@ -2506,6 +2525,24 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
       market: market.question.slice(0, 60),
     });
     const handleBuyResult = (result, isRetry) => {
+      // GTC/limit orders: "live" status means the order is on the book (partial/unfilled) — treat as success.
+      // FOK: any non-error response means the order fully filled.
+      const isGTC = orderPayload.order_type === "gtc";
+      if (isGTC && !result.error) {
+        trade.confirmed = true;
+        const statusStr = result.status ?? result.orderID ?? JSON.stringify(result);
+        logEntry("info", `  [LIVE] Limit order placed: ${statusStr} (resting bid — fills as book depth arrives)`);
+        const fillPrice = parseFillPrice(result, "BUY");
+        if (fillPrice && fillPrice > 0 && fillPrice < 1) {
+          trade.entryPrice   = fillPrice;
+          trade.currentPrice = fillPrice;
+          trade.shares       = trade.amount / fillPrice;
+          logEntry("dim", `  → actual fill ${(fillPrice*100).toFixed(1)}¢ (intended ${(entryPrice*100).toFixed(1)}¢)`);
+        }
+        addCryptoCard(trade);
+        startCryptoCountdown();
+        return;
+      }
       if (result.error) {
         if (!isRetry) {
           // Near-resolution windows (<300s): don't retry — the 2s delay allows the thin
