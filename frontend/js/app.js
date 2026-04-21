@@ -579,10 +579,8 @@ const priceStream = (() => {
               : t.totalSecs < 200
               ? Math.min(20_000, Math.max(15_000, t.totalSecs * 100))    // short window: 15-20s
               : t.totalSecs < 500
-              ? 90_000                                                    // mid-window (200-500s): 90s — correct-direction 5-min trades resolve late, tight 60s was stopping winners
-              : (t.confidence === "HIGH" && t.entryPrice > 0.55)
-              ? 180_000                                                   // long window + HIGH conf + strong entry (>55%): 180s — correct-direction trades oscillate before resolving
-              : 120_000;                                                  // long window (500s+): 120s — 15-min markets need time to settle
+              ? 30_000                                                    // mid-window (200-500s): 30s
+              : 60_000;                                                   // long window (500s+): 60s
             const grace = t.signalAgainstGap ? Math.max(baseGrace, 75_000) : baseGrace;
             if (Date.now() - t.entryTime < grace) {
               // Catastrophic loss override: bypass grace if loss exceeds threshold.
@@ -590,7 +588,7 @@ const priceStream = (() => {
               // the pre-crossing oscillation (observed MIN AFTER 0.130-0.150), which triggers
               // the old 70% threshold on correct-direction trades. 85% only fires at ~8-9 cents,
               // safely below the observed oscillation trough, protecting against true collapse.
-              const catThreshold = t.signalAgainstGap ? 0.85 : 0.50;
+              const catThreshold = t.signalAgainstGap ? 0.85 : 0.35;
               const catastrophic = t.unrealizedPnl <= -t.amount * catThreshold;
               if (!catastrophic) return false;
             }
@@ -2745,8 +2743,8 @@ function startCryptoCountdown() {
         : t.totalSecs < 200
         ? Math.min(20_000, Math.max(15_000, t.totalSecs * 100))
         : t.totalSecs < 500
-        ? 60_000
-        : Math.min(60_000, Math.max(45_000, t.totalSecs * 60));
+        ? 30_000
+        : 60_000;
       const grace = t.signalAgainstGap ? Math.max(baseGrace, 75_000) : baseGrace;
       if (Date.now() - t.entryTime < grace) continue;
       // Same widened thresholds as the WS handler for thin-book noise protection.
