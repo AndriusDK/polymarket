@@ -2137,10 +2137,10 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       const normalGate      = Math.max(30_000, Math.min(120_000, totalWindowSecs * 150));
       const earlyGate       = crossActive ? 30_000 : normalGate;
 
-      // In Limit/GTC mode the order rests on the book and fills as depth arrives —
-      // no FOK failure, so no need to wait for the book to thicken first.
+      // In FAK mode the order fills synchronously against whatever depth exists
+      // and cancels the rest — no need to wait for the book to thicken first.
       if (!c.useFOK && windowAge < earlyGate) {
-        logEntry("dim", `  → <span class="green">limit mode</span> — skipping early-window wait, placing resting bid at ${Math.round(windowAge/1000)}s`);
+        logEntry("dim", `  → <span class="green">FAK mode</span> — skipping early-window wait, firing at ${Math.round(windowAge/1000)}s (partial fill OK)`);
         if (crossActive) {
           state[asset].crossWindowSignal = null;
           logEntry("dim", `  ↳ <span class="amber">⚡ cross-window</span> — ${analysis.signal} carry from prior close (${(crossSig.odds*100).toFixed(0)}%), entering at ${Math.round(windowAge/1000)}s`);
@@ -2510,7 +2510,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
       side:           "BUY",
       amount_usdc:    amount,
       entry_price:    entryPrice,   // used server-side to cap slippage
-      order_type:     c.useFOK !== false ? "fok" : "gtc",
+      order_type:     c.useFOK !== false ? "fok" : "fak",
       private_key:    c.polyPrivateKey,
       api_key:        c.polyApiKey,
       api_secret:     c.polyApiSecret,
@@ -2525,12 +2525,13 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
       market: market.question.slice(0, 60),
     });
     const handleBuyResult = (result, isRetry) => {
-      // GTC/limit orders: "live" status means the order is on the book (partial/unfilled) — treat as success.
-      // FOK: any non-error response means the order fully filled.
-      const isGTC = orderPayload.order_type === "gtc";
-      if (isGTC) {
+      // FAK (Fill And Kill): fills synchronously against existing depth, cancels the rest.
+      // The only source of truth for position size is makingAmount/takingAmount in the response.
+      // Zero fill (makingAmount=0) = the book had no asks at our price cap → treat as error,
+      // DO NOT add a card or track fake P&L like the earlier GTC implementation did.
+      const isFAK = orderPayload.order_type === "fak";
+      if (isFAK) {
         if (result.error) {
-          // GTC errors are terminal — no retry (resting orders don't "fail to fill").
           const idx = state.trades.indexOf(trade);
           if (idx !== -1) state.trades.splice(idx, 1);
           priceStream.unsubscribe(tokenId);
@@ -2540,19 +2541,41 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
-          logEntry("warn", `  [LIVE] Limit order failed: ${result.error}`);
+          logEntry("warn", `  [LIVE] FAK order failed: ${result.error}`);
           return;
         }
-        trade.confirmed = true;
-        const statusStr = result.status ?? result.orderID ?? JSON.stringify(result);
-        logEntry("info", `  [LIVE] Limit order placed: ${statusStr} (resting bid — fills as book depth arrives)`);
-        const fillPrice = parseFillPrice(result, "BUY");
-        if (fillPrice && fillPrice > 0 && fillPrice < 1) {
-          trade.entryPrice   = fillPrice;
-          trade.currentPrice = fillPrice;
-          trade.shares       = trade.amount / fillPrice;
-          logEntry("dim", `  → actual fill ${(fillPrice*100).toFixed(1)}¢ (intended ${(entryPrice*100).toFixed(1)}¢)`);
+        const makingUsdc  = parseFloat(result.makingAmount)  || 0;
+        const takingShares = parseFloat(result.takingAmount) || 0;
+        if (makingUsdc < 0.01 || takingShares < 0.001) {
+          // No fill: book had no depth at our price cap.  Clean up stats, skip card.
+          const idx = state.trades.indexOf(trade);
+          if (idx !== -1) state.trades.splice(idx, 1);
+          priceStream.unsubscribe(tokenId);
+          state.stats.trades = Math.max(0, state.stats.trades - 1);
+          state.stats.spent  = Math.max(0, state.stats.spent - trade.amount);
+          setStat("trades",    String(state.stats.trades));
+          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          setStat("positions", String(state.trades.length));
+          logEntry("warn", `  [LIVE] FAK: 0 shares filled (book too thin at ≤${((entryPrice+0.05)*100).toFixed(0)}¢ cap) — no position opened`);
+          return;
         }
+        // Partial or full fill: size the trade to the actual fill, not the intended amount.
+        const actualFillPrice = makingUsdc / takingShares;
+        const spentDiff = trade.amount - makingUsdc;
+        if (spentDiff > 0.01) {
+          state.stats.spent = Math.max(0, state.stats.spent - spentDiff);
+          setStat("spent",  `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget", `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+        }
+        trade.amount       = makingUsdc;
+        trade.shares       = takingShares;
+        trade.entryPrice   = actualFillPrice;
+        trade.currentPrice = actualFillPrice;
+        trade.peakPrice    = actualFillPrice;
+        trade.confirmed    = true;
+        const pct = (makingUsdc / amount * 100).toFixed(0);
+        logEntry("info", `  [LIVE] FAK filled: ${takingShares.toFixed(2)} shares @ ${(actualFillPrice*100).toFixed(1)}¢ = $${makingUsdc.toFixed(2)} (${pct}% of $${amount.toFixed(2)} intended)`);
         addCryptoCard(trade);
         startCryptoCountdown();
         return;
