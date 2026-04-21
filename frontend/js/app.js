@@ -2383,29 +2383,28 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
     const slippageCap = (isFAK && windowAge < 60_000) ? 0.08 : 0.05;
 
     await new Promise(r => setTimeout(r, 2000));   // 2s pause — let stale data expire
-    let priceCheckWas404 = false; // set below if /price returns 404 (unindexed book)
+    let priceCheckWas404 = false; // reserved — kept for future grace-period use
     try {
       const priceResp = await fetch(`/price?token_id=${encodeURIComponent(tokenId)}`);
       if (!priceResp.ok) {
-        if (priceResp.status >= 500) {
-          // 5xx = price server error — abort, let next cycle retry.
-          logEntry("warn", `  ↳ <span class="amber">price check ${priceResp.status}</span> — server error, skipping (next cycle will retry)`);
-          const idx = state.trades.indexOf(trade);
-          if (idx !== -1) state.trades.splice(idx, 1);
-          priceStream.unsubscribe(tokenId);
-          state.stats.trades = Math.max(0, state.stats.trades - 1);
-          state.stats.spent  = Math.max(0, state.stats.spent - amount);
-          setStat("trades",    String(state.stats.trades));
-          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
-          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
-          setStat("positions", String(state.trades.length));
-          updatePnlStat();
-          return;
-        }
-        // 404 = price server hasn't indexed this token yet, but the CLOB exists.
-        // Skip depth gates and proceed to place the order — let the FOK self-protect.
-        priceCheckWas404 = true;
-        logEntry("dim", `  → <span class="amber">price check 404</span> — token not yet indexed, skipping depth gates`);
+        // Any non-200 response (network error gives status=0, server errors give 5xx,
+        // CLOB-not-indexed can give 4xx) means we have no book data.
+        // Firing blind into an unprobed CLOB always results in "no orders found to match"
+        // FAK failures.  Abort and let the next cycle retry once the book is established.
+        const sc = priceResp.status || 0;
+        const lvl = sc >= 500 ? "warn" : "dim";
+        logEntry(lvl, `  ↳ <span class="amber">price check ${sc || "err"}</span> — book not ready, skipping (next cycle will retry)`);
+        const idx = state.trades.indexOf(trade);
+        if (idx !== -1) state.trades.splice(idx, 1);
+        priceStream.unsubscribe(tokenId);
+        state.stats.trades = Math.max(0, state.stats.trades - 1);
+        state.stats.spent  = Math.max(0, state.stats.spent - amount);
+        setStat("trades",    String(state.stats.trades));
+        setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+        setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+        setStat("positions", String(state.trades.length));
+        updatePnlStat();
+        return;
       } else {
       const priceData = await priceResp.json();
       if (!priceData.error) {
