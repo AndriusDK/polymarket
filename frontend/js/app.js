@@ -2178,31 +2178,10 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     // The CLOB depth check already guards bad fills — we don't need a hard odds ceiling here.
     const postDiscovery = entryOdds > 0.72;
 
+    // All entry decisions left to AI — only hard-block on concurrent position or exhausted budget.
     const qualifies =
       analysis.signal !== "SKIP" &&
-      oddsOk &&
-      crossable &&
-      !postDiscovery &&
-      !longWindowLowConv &&
-      !btcMidWindowLowOdds &&
-      (!btcCoinFlipBlocked || momentumTradeBypass) &&
-      !shortWindowMedium &&
-      !solMediumLongWindow &&
-      !btcMediumGapBlocked &&
-      !gapFlipMidWindowBlocked &&
-      !nearResGapFlipMomOpposed &&
-      !nearResGapFlipLowOdds &&
-      !btcMacroVeto &&
-      (!pumpSkeptic || momentumTradeBypass) &&
-      !stalled &&
-      !nearResLowOdds &&
-      !nearResSmallGap &&
-      (!midWindowSmallGap || momentumTradeBypass) &&
-      !solLargeGapUp &&
       !assetPositionOpen &&
-      (!weakLongWindowGapFlip || momentumTradeBypass) &&
-      !weakPathQualityFlip &&
-      (analysis.confidence === "HIGH" || analysis.absEdge >= minEdge) &&
       state.stats.spent < c.maxDaily;
 
     if (autoMomentumTrade && !analysis.momentumTrade) {
@@ -2239,92 +2218,10 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       }
     } else if (analysis.signal !== "SKIP") {
       const reasons = [];
-      try {
-      // Re-examined market whose gap grew but was blocked by a different filter — clean up watch.
-      if (isGapWatched && !nearResSmallGap) state[asset].gapWatch.delete(market.conditionId);
-      if (postDiscovery) reasons.push(`post-discovery — ${(entryOdds * 100).toFixed(1)}% > 72%, book already thin — wait for next window`);
-      if (!oddsOk) {
-        if (entryOdds > maxOdds)
-          reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% > max ${(maxOdds * 100).toFixed(0)}% (bad risk/reward)`);
-        else
-          reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% < min ${(minOdds * 100).toFixed(0)}%`);
-      }
-      if (!crossable) reasons.push(`gap $${Math.abs(gap).toFixed(pd)} too large to cross in ${timeRemaining}s (max ≈${maxMovement.toFixed(pd)})`);
-      if (longWindowLowConv) reasons.push(`long window (${timeRemaining}s) needs ≥${asset === "btc" ? "60" : "55"}% conviction odds — got ${(entryOdds * 100).toFixed(1)}%`);
-      if (btcMidWindowLowOdds) reasons.push(`BTC mid-window low odds — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥55% or HIGH conf + ≥12% edge (crowd reversion signal)`);
-      if (btcCoinFlipBlocked) reasons.push(`BTC coin-flip zone — ${(entryOdds * 100).toFixed(1)}% is near 50/50; need HIGH conf + ≥${(btcCoinFlipEdgeFloor*100).toFixed(0)}% edge to enter (AI overconfidence risk at these odds, session evidence)`);
-
-      if (shortWindowMedium) reasons.push(`short window (${timeRemaining}s) requires HIGH confidence — endgame volatility too high for MEDIUM (<120s)`);
-      if (solMediumLongWindow) reasons.push(`SOL mid-window MEDIUM — ${(entryOdds * 100).toFixed(1)}% entry with ${timeRemaining}s left needs ≥60% (SOL whipsaw risk too high for MEDIUM conviction)`);
-      if (btcMediumGapBlocked) {
-        if (Math.abs(analysis.gap) > 800)
-          reasons.push(`BTC gap-flip blocked — MEDIUM confidence with gap $${Math.abs(analysis.gap).toFixed(0)} > $800 rarely flips in time`);
-        else
-          reasons.push(`BTC gap-flip blocked — MEDIUM confidence gap-flip at ${(entryOdds * 100).toFixed(1)}% (<55%) with ${timeRemaining}s left — crowd skepticism too strong`);
-      }
-      if (gapFlipMidWindowBlocked) reasons.push(`gap-flip momentum too weak — need ${momNeededToFlip.toFixed(3)}/m to close gap, got ${Math.abs(analysis.momentum ?? 0).toFixed(3)}/m (need ≥50%)`);
-      if (nearResGapFlipMomOpposed) reasons.push(`near-res gap-flip blocked — momentum ${(analysis.momentum ?? 0).toFixed(2)}/m opposes ${analysis.signal} flip with only ${timeRemaining}s left`);
-      if (nearResGapFlipLowOdds) reasons.push(`near-res gap-flip low-odds — ${(entryOdds * 100).toFixed(1)}% entry (<72%) with only ${timeRemaining}s left — market uncertainty too high for gap-flip in limited time`);
-      if (btcMacroVeto) {
-        const mDir = btcMacro.bearCount >= 3 ? "bearish" : "bullish";
-        const mCnt = btcMacro.bearCount >= 3 ? btcMacro.bearCount : btcMacro.bullCount;
-        reasons.push(`BTC macro veto — BTC ${mDir} (${mCnt}/5 candles, ${btcMacro.momentum.toFixed(1)}/min) opposes ${analysis.signal}`);
-      }
-      if (pumpSkeptic) reasons.push(`pump-skeptic — price already ${analysis.signal === "BUY_UP" ? "above" : "below"} target but market prices it at ${(entryOdds * 100).toFixed(1)}% (<50%) — crowd expects reversion`);
-      if (stalled) reasons.push(`stall guard — gap ${(stallGapPct * 100).toFixed(1)}% but momentum ≈0 (${(analysis.momentum ?? 0).toFixed(2)}/m < threshold ${momThresholdStall.toFixed(2)}/m) — no driving force`);
-      if (nearResLowOdds) reasons.push(`near-res low-odds — ${timeRemaining}s left but market only at ${(entryOdds * 100).toFixed(1)}% (need ≥50% for near-res entries ≤200s)`);
-      if (nearResSmallGap) {
-        if (isGapWatched) {
-          // Second look: gap still hasn't grown — give up.
-          state[asset].gapWatch.delete(market.conditionId);
-          reasons.push(`near-res small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% still <0.05% after observation — skipping`);
-        } else {
-          // First time: gap is tiny but signal is present — observe one more cycle (~30s).
-          state[asset].gapWatch.set(market.conditionId, { signal: analysis.signal, startedAt: Date.now() });
-          reasons.push(`near-res small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% (<0.05%) — watching for gap expansion next cycle`);
-        }
-      }
-      if (midWindowSmallGap && !momentumTradeBypass) {
-        if (isGapWatched) {
-          state[asset].gapWatch.delete(market.conditionId);
-          reasons.push(`mid-window small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% still <0.05% after observation — skipping`);
-        } else {
-          state[asset].gapWatch.set(market.conditionId, { signal: analysis.signal, startedAt: Date.now() });
-          reasons.push(`mid-window small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% (<0.05%) — watching for gap expansion next cycle`);
-        }
-      } else if (midWindowSmallGap && momentumTradeBypass) {
-        reasons.push(`mid-window small gap bypassed — momentum trade: AI predicts token will hit take-profit from momentum alone (gap=${(stallGapPct * 100).toFixed(3)}% but HIGH conf momentum signal)`);
-      }
-      if (solLargeGapUp) reasons.push(`SOL large-gap BUY_UP — SOL ${(stallGapPct * 100).toFixed(1)}% above target with vol spike ${(analysis.volSpikeRatio ?? 0).toFixed(2)}× — fresh pump reversal risk`);
-      if (assetPositionOpen) reasons.push(`${asset.toUpperCase()} position already open — max 1 per asset (correlated stop risk)`);
-      if (weakLongWindowGapFlip) {
-        const why = [];
-        if (!lwfDriftOk) why.push(`drift ${expectedDriftPts.toFixed(0)}pts < ${lwfDriftMult}× gap ${Math.abs(analysis.gap ?? 0).toFixed(0)}pts`);
-        if (!pqStrongMom) why.push(`momentum ${Math.abs(analysis.momentum ?? 0).toFixed(2)}/m < ${pqMomThr}`);
-        if (pqCandleAligned < 4) why.push(`${pqCandleAligned}/5 candles aligned`);
-        if (!pqStrongBook) why.push(`book ${pqBookRatio.toFixed(2)}× (need 3×)`);
-        reasons.push(`long-window flip blocked — ${timeRemaining}s, needs all 4: ${why.join(", ")} — no clean near-term path`);
-      }
-      if (weakPathQualityFlip) {
-        const pqWhy = [];
-        if (!pqStrongMom) pqWhy.push(`momentum ${Math.abs(analysis.momentum ?? 0).toFixed(2)}/m`);
-        if (!pqStrongCandles) pqWhy.push(`${pqCandleAligned}/5 candles`);
-        if (!pqStrongBook) pqWhy.push(`book ${pqBookRatio.toFixed(2)}×`);
-        reasons.push(`gap flip needs stronger path — ${pqConfirmCnt}/3 signals (${pqWhy.join(", ")}) — need ≥2 for early TP`);
-      }
-      if (analysis.confidence === "LOW") reasons.push("confidence LOW");
-      else if (analysis.confidence === "MEDIUM" && analysis.absEdge < minEdge)
-        reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}% required for MEDIUM`);
-      if (analysis.absEdge < minEdge)
-        reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < minEdge ${(minEdge * 100).toFixed(1)}%`);
-      if (state.stats.spent >= c.maxDaily)
-        reasons.push("daily budget exhausted");
-      if (reasons.length === 0)
-        reasons.push(`all filters ok but qualifies=false [oddsOk=${oddsOk} nearResSmallGap=${nearResSmallGap} midWindowSmallGap=${midWindowSmallGap} momentumBypass=${momentumTradeBypass} absEdge=${(analysis.absEdge??'?')} minEdge=${minEdge}]`);
+      if (assetPositionOpen) reasons.push(`${asset.toUpperCase()} position already open — max 1 per asset`);
+      if (state.stats.spent >= c.maxDaily) reasons.push("daily budget exhausted");
+      if (reasons.length === 0) reasons.push("qualifies=false [unexpected]");
       logEntry("info", `  ↳ <span class="amber">no trade</span> — ${reasons.join(", ")}`);
-      } catch (err) {
-        logEntry("dim", `  ↳ <span class="amber">no trade</span> — [reason build error: ${err.message}]`);
-      }
     }
   }
 
@@ -2399,11 +2296,8 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
   const oddsFraction = entryPrice > 0.65 ? Math.max(0.40, 1 - (entryPrice - 0.65) / 0.367)
                      : entryPrice < 0.35 ? Math.max(0.40, 1 - (0.35 - entryPrice) / 0.250)
                      : 1.0;
-  // MEDIUM confidence gets half size — near-50% entries with uncertain direction shouldn't
-  // get max exposure (e.g. the -$27.45 ETH loss at 51% MEDIUM with full $50 stake).
-  const confidenceFraction = analysis.confidence === "HIGH" ? 1.0 : 0.5;
   const maxBet = c[`${asset}MaxBet`] ?? c.btcMaxBet ?? 5;
-  const rawAmount = Math.min(maxBet * timeFraction * oddsFraction * confidenceFraction, c.maxDaily - state.stats.spent);
+  const rawAmount = Math.min(maxBet * timeFraction * oddsFraction, c.maxDaily - state.stats.spent);
   // Near-resolution size cap: prediction markets become illiquid in the final 120s and a stop
   // can fire on a single bad tick even with a large underlying gap intact.  Cap exposure at $25
   // to bound catastrophic stop losses that outweigh the edge (e.g. SOL -$33.53 at 156s).
@@ -2416,14 +2310,13 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
                                   (analysis.signal === "BUY_DOWN" && (analysis.gap ?? 0) > 0);
   const gapFlipCap = signalAgainstGapSizing ? 50 : Infinity;
   let amount = Math.min(rawAmount, nearResCap, gapFlipCap);
-  // Sub-$1 rescue: HIGH-conf qualified signals were silently lost to $0.75-0.95 sizes;
-  // bump to the $1 minimum so we actually take the position (budget permitting).
-  if (amount >= 0.50 && amount < 1.00 && analysis.confidence === "HIGH" && (c.maxDaily - state.stats.spent) >= 1.00) {
-    logEntry("dim", `  ↳ <span class="amber">size bump</span> — computed $${amount.toFixed(2)} → $1.00 (HIGH conf, Polymarket minimum)`);
+  // $1 floor: Polymarket enforces a $1 minimum per order.
+  if (amount < 1.00 && (c.maxDaily - state.stats.spent) >= 1.00) {
+    logEntry("dim", `  ↳ <span class="amber">size bump</span> — computed $${amount.toFixed(2)} → $1.00 (Polymarket minimum)`);
     amount = 1.00;
   }
   if (amount < 1.00) {
-    logEntry("dim", `  ↳ <span class="dim">skipped</span> — computed size $${amount.toFixed(2)} < $1.00 Polymarket minimum (maxBet=${maxBet} time=${timeFraction.toFixed(2)} odds=${oddsFraction.toFixed(2)} conf=${confidenceFraction})`);
+    logEntry("dim", `  ↳ <span class="dim">skipped</span> — computed size $${amount.toFixed(2)} < $1.00 and only $${(c.maxDaily - state.stats.spent).toFixed(2)} budget remaining`);
     return;
   }
 
@@ -2738,24 +2631,8 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           // worse price beats losing the signal entirely. At coin-flip odds the ask
           // book above entry+5pp is often too thin for full size.
           const retryCap    = Math.min(entryPrice + 0.06, 0.92);
-          const retryAmount = amount / 2;
+          const retryAmount = Math.max(1.00, amount / 2);
           const amountDiff  = amount - retryAmount;
-
-          // Polymarket enforces a $1 minimum per order. If half-size is below that,
-          // skip the retry entirely and roll back — a $0.81 order will be rejected.
-          if (retryAmount < 1.00) {
-            const idx = state.trades.indexOf(trade);
-            if (idx !== -1) state.trades.splice(idx, 1);
-            priceStream.unsubscribe(tokenId);
-            state.stats.trades = Math.max(0, state.stats.trades - 1);
-            state.stats.spent  = Math.max(0, state.stats.spent - amount);
-            setStat("trades",    String(state.stats.trades));
-            setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
-            setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
-            setStat("positions", String(state.trades.length));
-            logEntry("warn", `  ↳ FOK miss — retry skipped ($${retryAmount.toFixed(2)} < $1 minimum order size)`);
-            return;
-          }
 
           logEntry("dim", `  ↳ FOK miss — retrying $${retryAmount.toFixed(2)} at ${(retryCap * 100).toFixed(0)}¢ cap in 2s…`);
 
