@@ -1697,7 +1697,10 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       const snap = state[asset].gapPending.get(market.conditionId) ?? state[asset].analyzed.get(market.conditionId);
       if (snap) state[asset].analyzed.set(market.conditionId, snap);
       state[asset].gapPending.delete(market.conditionId);
-      logEntry("dim", `  → <${timeRemaining}s left — too close to resolution, skipping`);
+      // Remove from gapWatch too — otherwise re-queued FOK markets spam this log every cycle.
+      if (state[asset].gapWatch.delete(market.conditionId)) {
+        logEntry("dim", `  → <${timeRemaining}s left — too close to resolution, skipping`);
+      }
       continue;
     }
 
@@ -2481,7 +2484,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
         // passes the "fresh" filter again. After 30s the book may have more liquidity and
         // the AI will re-vet before retrying. Without this the market stays in `analyzed`
         // and is silently skipped for the rest of the window.
-        if ((analysis.timeRemaining ?? 0) > 60) state[asset].gapWatch.set(market.conditionId, true);
+        if ((analysis.timeRemaining ?? 0) > 90) state[asset].gapWatch.set(market.conditionId, true);
         console.error(`[LIVE] Order FAILED after retry — no card created`, result);
         logEntry("warn", `  [LIVE] Order failed after retry: ${result.error}`);
       } else {
