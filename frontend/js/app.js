@@ -617,11 +617,12 @@ const priceStream = (() => {
           const toTakeProfit = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             if (t.unrealizedPnl >= t.amount * takeProfitPct) return true;
-            // Trailing stop: arms at 15% gain, lock-in % scales with absolute peak gain
-            // Small gains: loose trail (40%) — let it run; large gains: tight trail (65%) — protect profit
+            // Trailing stop: arms at 30% gain, lock-in % scales with absolute peak gain.
+            // Small gains: loose trail (25%) — let it run; large gains: tight trail (60%) — protect profit.
+            // Was 15% arm + 40% lock-in, causing single bad WS bid ticks to prematurely exit winners.
             const peakGain = t.peakPrice * t.shares - t.amount;
-            const lockIn = peakGain >= 12 ? 0.65 : peakGain >= 6 ? 0.55 : 0.40;
-            if (peakGain >= t.amount * 0.15 && t.unrealizedPnl < peakGain * lockIn) return true;
+            const lockIn = peakGain >= 12 ? 0.60 : peakGain >= 6 ? 0.50 : 0.25;
+            if (peakGain >= t.amount * 0.30 && t.unrealizedPnl < peakGain * lockIn) return true;
             return false;
           });
           for (const t of toTakeProfit) closePosition(t, "TAKE PROFIT");
