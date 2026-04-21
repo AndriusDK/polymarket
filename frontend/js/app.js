@@ -16,10 +16,10 @@ const state = {
   losses: 0,
   sessionStart: Date.now(),
   bootTime: null,      // set when first asset starts; used for startup cooldown
-  btc: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map() },  // conditionId → endDateMs
-  eth: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map() },
-  sol: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map() },
-  xrp: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map() },
+  btc: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map() },  // conditionId → endDateMs
+  eth: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map() },
+  sol: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map() },
+  xrp: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map() },
   tradeHistory: [],    // { ts, pnl, asset, reason } — every closed position, used by profit chart
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
@@ -1356,6 +1356,10 @@ function stopCryptoMode(asset) {
   state[asset].timer = null;
   if (state[asset].discoveryTimer) { clearInterval(state[asset].discoveryTimer); state[asset].discoveryTimer = null; }
   if (state[asset].accelTimer) { clearTimeout(state[asset].accelTimer); state[asset].accelTimer = null; }
+  if (state[asset].scheduledOpens) {
+    for (const h of state[asset].scheduledOpens.values()) clearTimeout(h);
+    state[asset].scheduledOpens.clear();
+  }
 
   const cfg = CRYPTO_CONFIG[asset];
   const btn = $(`#btn-${asset}`);
@@ -1485,6 +1489,25 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     // lack an explicit HH:MM-HH:MM time range.  Their near-expiry tokens can be at 1-4% which
     // falsely passes the flash entry ≤52% check, causing catastrophic fills on worthless tokens.
     if (!/\d+:\d+[AP]M-\d+:\d+[AP]M/i.test(market.question)) continue;
+
+    // Clock-aligned wakeup: fire a cycle the moment this market's window opens.
+    // Markets have exact HH:MM-HH:MM boundaries; the 5s discovery tick adds up to 5s of
+    // entry delay.  Schedule a one-shot setTimeout at the exact open time so we land
+    // within ~300ms of window open (Gamma API lag).  Dedupe per conditionId.
+    {
+      const mm       = market.question.match(/(\d+:\d+)(AM|PM)-(\d+:\d+)(AM|PM)/i);
+      const toMin    = (hhmm, ampm) => { let [h, m] = hhmm.split(":").map(Number); if (ampm.toUpperCase()==="PM"&&h!==12) h+=12; if (ampm.toUpperCase()==="AM"&&h===12) h=0; return h*60+m; };
+      const wMs      = ((toMin(mm[3], mm[4]) - toMin(mm[1], mm[2]) + 1440) % 1440) * 60_000;
+      const openMs   = new Date(market.endDate).getTime() - wMs;
+      const waitMs   = openMs - Date.now() + 300;   // +300ms lets Gamma flip the market to open
+      if (waitMs > 500 && waitMs < 30 * 60_000 && !state[asset].scheduledOpens.has(market.conditionId)) {
+        const handle = setTimeout(() => {
+          state[asset].scheduledOpens.delete(market.conditionId);
+          if (state[asset].timer) runCryptoCycle(asset);
+        }, waitMs);
+        state[asset].scheduledOpens.set(market.conditionId, handle);
+      }
+    }
 
     // Derive window duration from title e.g. "March 26, 4:55PM-5:10PM ET" → 15 min → 900s.
     // Fallback to 300s (5 min) if parsing fails.
@@ -2096,19 +2119,42 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     }
 
     if (qualifies) {
-      // Fresh-window gate: pre-gap (0-15s) and flash (15-45s) cover early entries with explicit
-      // quality gates.  Main-path analysis gate scales with window length (15% of total, 30s–120s):
-      //   5-min window (300s) → 45s gate, 15-min window (900s) → 120s gate.
-      // Cross-window carry lowers the gate to 30s regardless of window length.
+      // Fresh-window gate: the original intent was to delay entry until the CLOB book indexes
+      // (~45s for 5-min windows, ~120s for 15-min).  We now probe the book directly via /price
+      // — if asks exist the book is ready, so we skip the wait entirely.  The fixed timer only
+      // fires as a fallback when the probe fails or the book is still empty.
+      //   5-min window (300s) fallback → 45s, 15-min (900s) fallback → 120s.
+      // Cross-window carry lowers the fallback to 30s regardless of window length.
       const windowAge      = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
       const totalWindowSecs = windowAge / 1000 + timeRemaining;
       const crossSig        = state[asset].crossWindowSignal;
       const crossActive     = crossSig && Date.now() < crossSig.expiresAt && crossSig.signal === analysis.signal;
       const normalGate      = Math.max(30_000, Math.min(120_000, totalWindowSecs * 150));
       const earlyGate       = crossActive ? 30_000 : normalGate;
+
+      let bookReady = false;
       if (windowAge < earlyGate) {
-        logEntry("dim", `  ↳ <span class="amber">early window</span> — ${Math.round(windowAge/1000)}s since open, waiting ${Math.round(earlyGate/1000)}s${crossActive ? ' (cross-window carry: book indexing)' : ' for book to index'}`);
+        // Probe the CLOB: if the chosen token's book already has ask levels, the fixed wait
+        // is wasted time — proceed to placeCryptoTrade where the full depth gate will run.
+        const isUp         = analysis.signal === "BUY_UP";
+        const probeTokenId = isUp ? market.upTokenId : market.downTokenId;
+        if (probeTokenId) {
+          try {
+            const r = await fetch(`/price?token_id=${encodeURIComponent(probeTokenId)}`);
+            if (r.ok) {
+              const pd = await r.json();
+              if (!pd.error && Array.isArray(pd.asks) && pd.asks.length > 0) bookReady = true;
+            }
+          } catch (_) { /* network blip — fall through to fixed wait */ }
+        }
+      }
+
+      if (windowAge < earlyGate && !bookReady) {
+        logEntry("dim", `  ↳ <span class="amber">early window</span> — ${Math.round(windowAge/1000)}s since open, book not yet indexed (fallback wait ${Math.round(earlyGate/1000)}s)${crossActive ? ' [cross-window carry]' : ''}`);
       } else {
+        if (bookReady && windowAge < earlyGate) {
+          logEntry("dim", `  → <span class="green">book indexed</span> — skipping ${Math.round((earlyGate - windowAge)/1000)}s fallback wait at ${Math.round(windowAge/1000)}s into window`);
+        }
         if (crossActive) {
           state[asset].crossWindowSignal = null;
           logEntry("dim", `  ↳ <span class="amber">⚡ cross-window</span> — ${analysis.signal} carry from prior close (${(crossSig.odds*100).toFixed(0)}%), entering at ${Math.round(windowAge/1000)}s`);
