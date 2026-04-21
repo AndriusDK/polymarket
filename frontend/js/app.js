@@ -2477,6 +2477,11 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
         // empty book (session: flash BUY_DOWN FOK failed → BUY_UP entered 10s later
         // → filled at 23%, -$1.57; the market had NOT repriced between attempts).
         (state.fokCooldown ??= new Map()).set(market.conditionId, Date.now() + 30_000);
+        // Re-queue for AI re-analysis after the cooldown: add to gapWatch so the market
+        // passes the "fresh" filter again. After 30s the book may have more liquidity and
+        // the AI will re-vet before retrying. Without this the market stays in `analyzed`
+        // and is silently skipped for the rest of the window.
+        if ((analysis.timeRemaining ?? 0) > 60) state[asset].gapWatch.set(market.conditionId, true);
         console.error(`[LIVE] Order FAILED after retry — no card created`, result);
         logEntry("warn", `  [LIVE] Order failed after retry: ${result.error}`);
       } else {
