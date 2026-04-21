@@ -2418,65 +2418,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           updatePnlStat();
           return;
         }
-        // 404 = price server hasn't indexed this token yet, but the CLOB exists (BTC/ETH/SOL/XRP
-        // markets form instantly).  Skip depth gates and let the FOK self-protect on thin fills.
+        // 404 = price server hasn't indexed this token yet, but the CLOB exists.
+        // Skip depth gates and proceed to place the order — let the FOK self-protect.
         priceCheckWas404 = true;
         logEntry("dim", `  → <span class="amber">price check 404</span> — token not yet indexed, skipping depth gates`);
-        // Pre-gap and flash entries on unindexed books = double uncertainty: no book data to
-        // validate direction AND either no gap (pre-gap) or tiny gap (flash).
-        // Session: 10:10AM BTC pre-gap on 404 book → -$3.72 stop loss.
-        if (analysis.reasoning?.startsWith('Pre-gap') || analysis.reasoning?.startsWith('Window-open flash')) {
-          const idx = state.trades.indexOf(trade);
-          if (idx !== -1) state.trades.splice(idx, 1);
-          priceStream.unsubscribe(tokenId);
-          state.stats.trades = Math.max(0, state.stats.trades - 1);
-          state.stats.spent  = Math.max(0, state.stats.spent - amount);
-          setStat("trades",    String(state.stats.trades));
-          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
-          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
-          setStat("positions", String(state.trades.length));
-          const entryType = analysis.reasoning?.startsWith('Pre-gap') ? 'pre-gap' : 'flash';
-          logEntry("dim", `  → ${entryType} on unindexed book — skipping (no book data yet, next cycle will retry)`);
-          updatePnlStat();
-          return;
-        }
-        // Fresh window + unindexed: any entry type risks catastrophic slippage on a thin book.
-        // The flash/pre-gap checks above cover T=0-45s; this catches MOM auto entries that fire
-        // just after the early-window gate clears but before the book actually indexes.
-        // 4:50PM BTC stinker: flash blocked at T=44s, but main-cycle MOM auto fired at T=47s with
-        // different reasoning, bypassed the checks, and filled at 16% vs 47.5% requested (-$4.50).
-        // Raised 90s→120s: T=94s and T=100s fills in follow-up session still slipped through at 90s.
-        if (windowAge < 120_000) {
-          const idx = state.trades.indexOf(trade);
-          if (idx !== -1) state.trades.splice(idx, 1);
-          priceStream.unsubscribe(tokenId);
-          state.stats.trades = Math.max(0, state.stats.trades - 1);
-          state.stats.spent  = Math.max(0, state.stats.spent - amount);
-          setStat("trades",    String(state.stats.trades));
-          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
-          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
-          setStat("positions", String(state.trades.length));
-          logEntry("dim", `  → unindexed book at ${Math.round(windowAge/1000)}s into window — skipping until book indexes`);
-          updatePnlStat();
-          return;
-        }
-        // Near-res + unindexed: FOK would miss anyway (<150s no-retry) — skip the API call.
-        // 300s was too aggressive: after the 45s early-window gate, a 5-min window only has ~255s left,
-        // so every 404 entry was blocked even on strong fresh-window signals.
-        if ((analysis.timeRemaining ?? 999) < 150) {
-          const idx = state.trades.indexOf(trade);
-          if (idx !== -1) state.trades.splice(idx, 1);
-          priceStream.unsubscribe(tokenId);
-          state.stats.trades = Math.max(0, state.stats.trades - 1);
-          state.stats.spent  = Math.max(0, state.stats.spent - amount);
-          setStat("trades",    String(state.stats.trades));
-          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
-          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
-          setStat("positions", String(state.trades.length));
-          logEntry("dim", `  → unindexed book with ${Math.round(analysis.timeRemaining ?? 0)}s left — skipping (FOK would miss, no retry <150s)`);
-          updatePnlStat();
-          return;
-        }
       } else {
       const priceData = await priceResp.json();
       if (!priceData.error) {
