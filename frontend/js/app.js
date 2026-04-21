@@ -2172,7 +2172,10 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
         const budgetLeft   = c.maxDaily - state.stats.spent;
         const targetBet    = Math.max(1, Math.min(maxBetCfg, budgetLeft));
         const depthFloor   = Math.max(3, Math.min(10, targetBet * 0.5));  // need at least half the bet, $3-$10 bracket
-        const priceCapFOK  = Math.min(probeEntry + 0.05, 0.92);
+        // Mirror the real slippage cap used by placeCryptoTrade: FAK in the first minute of a
+        // window gets +8% (Chainlink ticks + thin book can outrun +5%); everything else stays at +5%.
+        const probeSlipCap = (c.useFOK === false && windowAge < 60_000) ? 0.08 : 0.05;
+        const priceCapFOK  = Math.min(probeEntry + probeSlipCap, 0.92);
         if (probeTokenId) {
           try {
             const r = await fetch(`/price?token_id=${encodeURIComponent(probeTokenId)}`);
@@ -2371,6 +2374,14 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
     // 2) Gate 2 (depth sweep): walk the ask ladder to estimate avg fill for our USDC amount.
     //    Skip if: book too thin to absorb our order, OR |avg fill − expected| > 10pp.
     //    This catches thick-book sweeps like 52¢ entry sweeping to 24¢ fill.
+
+    // FAK fired in the first minute of a window hits a book that's still settling — Chainlink
+    // price ticks outrun our +5% cap and FAK returns "no orders to match" with 0 fill.
+    // Widen to +8% for those shots so the order actually lands; keep +5% for FOK (all-or-nothing,
+    // where a wider cap would invite catastrophic sweeps) and for later-window FAK (stable book).
+    const isFAK       = c.useFOK === false;
+    const slippageCap = (isFAK && windowAge < 60_000) ? 0.08 : 0.05;
+
     await new Promise(r => setTimeout(r, 2000));   // 2s pause — let stale data expire
     let priceCheckWas404 = false; // set below if /price returns 404 (unindexed book)
     try {
@@ -2419,10 +2430,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
         // Gate 2: depth / slippage simulation
         // Walk ask levels (sorted lowest price first) to estimate weighted average fill.
         // Each ask level has {price, size} where size is in shares (1 share ≈ 1 USDC / price).
-        // Only count levels the FOK order can actually reach — the server caps price at
-        // entry + 5% (max 92%).  Counting higher levels overstates fillable depth and causes
-        // FOK failures that the simulation wrongly predicted would succeed.
-        const priceCapFOK  = Math.min(entryPrice + 0.05, 0.92);  // mirrors server max_slippage
+        // Only count levels the order can actually reach — the server caps price at
+        // entry + slippageCap (max 92%).  Counting higher levels overstates fillable depth
+        // and causes FAK/FOK failures that the simulation wrongly predicted would succeed.
+        const priceCapFOK  = Math.min(entryPrice + slippageCap, 0.92);  // mirrors server max_slippage
         const askLevels = priceData.asks || [];
         if (askLevels.length > 0) {
           let usdcRemaining  = amount;
@@ -2511,6 +2522,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
       side:           "BUY",
       amount_usdc:    amount,
       entry_price:    entryPrice,   // used server-side to cap slippage
+      max_slippage:   slippageCap,  // 0.05 default, 0.08 for early-window FAK
       order_type:     c.useFOK !== false ? "fok" : "fak",
       private_key:    c.polyPrivateKey,
       api_key:        c.polyApiKey,
@@ -2558,7 +2570,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
-          logEntry("warn", `  [LIVE] FAK: 0 shares filled (book too thin at ≤${((entryPrice+0.05)*100).toFixed(0)}¢ cap) — no position opened`);
+          logEntry("warn", `  [LIVE] FAK: 0 shares filled (book too thin at ≤${((entryPrice+slippageCap)*100).toFixed(0)}¢ cap) — no position opened`);
           return;
         }
         // Partial or full fill: size the trade to the actual fill, not the intended amount.
