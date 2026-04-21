@@ -1921,7 +1921,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
                                 timeRemaining > 600 &&
                                 entryOdds < 0.57;
 
-    // BTC near-coin-flip block: entries in the 46–54% odds range are essentially coin-flips for BTC.
+    // BTC near-coin-flip block: entries in the 47.5–52.5% odds range are essentially coin-flips for BTC.
     // At these odds the AI's expressed HIGH confidence is unreliable — BTC is driven by macro and
     // momentum factors that 5-min candles can't fully resolve, making 50% real uncertainty.
     // Session evidence: BTC BUY_DOWN at 49.5–51% with HIGH conf resolved $0.06 (UP won) repeatedly.
@@ -1943,8 +1943,8 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
 
     const btcCoinFlipEdgeFloor = timeRemaining < 400 ? 0.10 : 0.13;
     const btcCoinFlipBlocked = asset === "btc" &&
-                               entryOdds >= 0.46 &&
-                               entryOdds <= 0.54 &&
+                               entryOdds >= 0.475 &&
+                               entryOdds <= 0.525 &&
                                !(analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= btcCoinFlipEdgeFloor) &&
                                !strongMomMedium;  // very strong momentum MEDIUM also clears the coin-flip hurdle
 
@@ -2062,10 +2062,11 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     // Upper bound extended from 600s → 900s to close the 600-900s dead zone where longWindowLowConv
     // hasn't kicked in yet but midWindowSmallGap had already stopped watching.
     // Use gapWatch for one observation cycle: if gap grows to threshold on re-check, allow entry.
-    // Thresholds relaxed: HIGH 0.05%→0.03%→0.02%, MEDIUM/LOW 0.10%→0.07% — session log showed
+    // Thresholds relaxed: HIGH 0.05%→0.03%→0.02%, MEDIUM/LOW 0.10%→0.07%→0.05% — session log showed
     // HIGH conf signals at 0.023-0.029% gaps being blocked; momentumTradeBypass floor (0.02%)
-    // still protects pure zero-gap plays.
-    const midGapThreshold = analysis.confidence === "HIGH" ? 0.0002 : 0.0007;
+    // still protects pure zero-gap plays. 0.07%→0.05%: $38 gaps on BTC ($76k) = 0.05% still
+    // have real directional content but were being blocked as "small".
+    const midGapThreshold = analysis.confidence === "HIGH" ? 0.0002 : 0.0005;
     const midWindowSmallGap = timeRemaining >= 200 && timeRemaining < 900 &&
                               stallGapPct < midGapThreshold;
 
@@ -2286,10 +2287,10 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       if (midWindowSmallGap && !momentumTradeBypass) {
         if (isGapWatched) {
           state[asset].gapWatch.delete(market.conditionId);
-          reasons.push(`mid-window small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% still <0.10% after observation — skipping`);
+          reasons.push(`mid-window small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% still <0.05% after observation — skipping`);
         } else {
           state[asset].gapWatch.set(market.conditionId, { signal: analysis.signal, startedAt: Date.now() });
-          reasons.push(`mid-window small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% (<0.10%) — watching for gap expansion next cycle`);
+          reasons.push(`mid-window small gap — ${timeRemaining}s left, gap ${(stallGapPct * 100).toFixed(3)}% (<0.05%) — watching for gap expansion next cycle`);
         }
       } else if (midWindowSmallGap && momentumTradeBypass) {
         reasons.push(`mid-window small gap bypassed — momentum trade: AI predicts token will hit take-profit from momentum alone (gap=${(stallGapPct * 100).toFixed(3)}% but HIGH conf momentum signal)`);
