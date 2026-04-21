@@ -1434,11 +1434,12 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     return;
   }
 
-  let spot, candles, orderBook, fundingRate;
+  let spot, candles, candles5m, orderBook, fundingRate;
   try {
-    [spot, candles, orderBook, fundingRate] = await Promise.all([
+    [spot, candles, candles5m, orderBook, fundingRate] = await Promise.all([
       fetchCryptoSpot(cfg.symbol),
       fetchCryptoCandles(cfg.symbol, 6),
+      fetchCryptoCandles5m(cfg.symbol, 3).catch(() => null),
       fetchCryptoOrderBook(cfg.symbol).catch(() => null),
       fetchCryptoFundingRate(cfg.symbol).catch(() => null),
     ]);
@@ -1754,7 +1755,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     let analysis;
     try {
       analysis = await analyzeCryptoMarket(
-        market, { spot, candles, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds }, c.anthropicKey, { model: c.model }, asset
+        market, { spot, candles, candles5m, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds }, c.anthropicKey, { model: c.model }, asset
       );
     } catch (err) {
       logEntry("error", `  ${cfg.ticker} analysis failed: ${err.message}`);

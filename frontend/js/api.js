@@ -262,6 +262,22 @@ async function fetchCryptoCandles(symbol, limit = 6) {
   }));
 }
 
+// 5-min candles show sustained trend direction (vs 1-min micro-noise).
+// Claude uses these alongside 1-min bars to distinguish a 1-min blip from
+// a real trend change before committing to against-gap direction trades.
+async function fetchCryptoCandles5m(symbol, limit = 3) {
+  const resp = await fetch(`${BINANCE_API}/klines?symbol=${symbol}&interval=5m&limit=${limit}`);
+  if (!resp.ok) throw new Error(`Binance 5m candles ${resp.status}`);
+  return (await resp.json()).map(c => ({
+    time:   new Date(c[0]),
+    open:   parseFloat(c[1]),
+    high:   parseFloat(c[2]),
+    low:    parseFloat(c[3]),
+    close:  parseFloat(c[4]),
+    volume: parseFloat(c[5]),
+  }));
+}
+
 async function fetchCryptoOrderBook(symbol) {
   const resp = await fetch(`${BINANCE_API}/depth?symbol=${symbol}&limit=50`);
   if (!resp.ok) throw new Error(`Binance depth ${resp.status}`);
@@ -428,6 +444,9 @@ const CRYPTO_PROMPT = [
   "1-min candles newest→oldest (Open / High / Low / Close / Volume):",
   "{candles}",
   "",
+  "5-min candles newest→oldest (longer-term trend — overrides 1-min noise):",
+  "{candles5m}",
+  "",
   "── ORDER BOOK DEPTH (near target ±0.5%) ──────────────────────────",
   "{orderBookBlock}",
   "",
@@ -479,6 +498,19 @@ const CRYPTO_PROMPT = [
   "    Confidence: HIGH only if 5/5 candles aligned AND volume spike ratio > 1.5. MEDIUM if 4/5 candles aligned.",
   "    SKIP if timeRemaining < 150s (not enough drift time) or if candle trend contradicts momentum direction.",
   "    This is independent of gap direction — you're trading the MOVE, not the final score.",
+  "",
+  "",
+  "── HARD FLOORS (these override everything above — no exceptions) ──",
+  "H1. ENTRY PRICE FLOOR: If the token you would buy (BUY_UP→upPrice, BUY_DOWN→downPrice) is below 0.30,",
+  "    the crowd is ≥70% against you.  Signal SKIP regardless of gap/momentum.  At 19¢ entry you need to 5x",
+  "    your edge just to break even in expectation — almost never worth it in a 5-15 min window.",
+  "H2. GAP-VS-VOLATILITY FLOOR: |effectiveGap| must exceed 1× avg volatility to be tradeable.",
+  "    If effectiveGap is within one volatility unit, the gap is within normal price noise and the outcome",
+  "    is essentially a coin-flip.  Signal SKIP.",
+  "H3. AGAINST-GAP STRICTNESS: If you are betting AGAINST the current gap direction (gap sign ≠ signal direction,",
+  "    e.g. gap is +$34 UP winning but you call BUY_DOWN), require |effectiveGap| > 2× volatility AND 5-min",
+  "    candles confirming the reversal trend.  Otherwise SKIP — momentum forecasts reverse often enough that",
+  "    without 5-min confirmation these trades are negative-EV.",
   "",
   "Bet only when estimated true probability exceeds 60%. When in doubt, SKIP.",
   "",
@@ -532,6 +564,21 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     const vol = c.volume != null ? `  Vol=${fmtQty(c.volume)}` : "";
     return `  ${hh}:${mm}  O=${c.open.toFixed(pd)} H=${c.high.toFixed(pd)} L=${c.low.toFixed(pd)} C=${c.close.toFixed(pd)} ${dir}${vol}`;
   }).join("\n");
+
+  // 5-min candles for trend confirmation (against-gap trades require 5m alignment)
+  const candles5m = cryptoData.candles5m ?? null;
+  let candles5mStr = "N/A (fetch failed)";
+  if (candles5m && candles5m.length > 0) {
+    const c5mBull = candles5m.filter(c => c.close > c.open).length;
+    const c5mBear = candles5m.filter(c => c.close < c.open).length;
+    const c5mTrend = c5mBull > c5mBear ? "bullish" : c5mBear > c5mBull ? "bearish" : "mixed";
+    candles5mStr = candles5m.map(c => {
+      const hh  = c.time.getUTCHours().toString().padStart(2, "0");
+      const mm  = c.time.getUTCMinutes().toString().padStart(2, "0");
+      const dir = c.close > c.open ? "▲" : c.close < c.open ? "▼" : "→";
+      return `  ${hh}:${mm}  O=${c.open.toFixed(pd)} H=${c.high.toFixed(pd)} L=${c.low.toFixed(pd)} C=${c.close.toFixed(pd)} ${dir}`;
+    }).join("\n") + `\n  Overall 5m trend: ${c5mTrend} (${c5mBull}▲ / ${c5mBear}▼ of ${candles5m.length})`;
+  }
 
   // UTC time (session context: thin liquidity at night vs active US/EU hours)
   const utcTime = new Date().toUTCString().replace(/^.*, /, "").replace(/ GMT$/, " UTC");
@@ -619,6 +666,7 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     .replace("{trendLabel}",        trendLabel)
     .replace("{expectedDrift}",     (expectedDrift >= 0 ? "+" : "") + expectedDrift.toFixed(pd))
     .replace("{candles}",           candleStr)
+    .replace("{candles5m}",         candles5mStr)
     .replace("{orderBookBlock}",    orderBookBlock)
     .replace("{utcTime}",           utcTime)
     .replace("{gapTrendBlock}",     gapTrendBlock)
@@ -726,6 +774,26 @@ function parseCryptoResponse(raw, market, metrics) {
   const vol          = volatility ?? 0;
   const gapDominant  = vol > 0 && Math.abs(effectiveGap) > 3 * vol;
   const momThreshold = (spot || 70000) * 0.00007;
+
+  if (signal !== "SKIP") {
+    // ── Hard floor H1: entry price floor ─────────────────────────
+    // If the token we'd buy is priced below 30¢, the crowd is ≥70% against us.
+    // The market's collective wisdom is almost always more accurate than a momentum
+    // forecast at that extreme — SKIP regardless of gap or drift.
+    const entryPrice = signal === "BUY_UP" ? market.upPrice : market.downPrice;
+    if (entryPrice < 0.30) {
+      signal = "SKIP"; confidence = "LOW";
+    }
+  }
+
+  if (signal !== "SKIP") {
+    // ── Hard floor H2: effective gap must exceed 1× volatility ───
+    // If effectiveGap is within noise (< 1 volatility unit), the outcome is
+    // essentially random — no edge to exploit.
+    if (vol > 0 && Math.abs(effectiveGap) < vol) {
+      signal = "SKIP"; confidence = "LOW";
+    }
+  }
 
   if (signal !== "SKIP") {
     if (effectiveGap * gap <= 0) {
