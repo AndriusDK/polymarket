@@ -2528,7 +2528,21 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
       // GTC/limit orders: "live" status means the order is on the book (partial/unfilled) — treat as success.
       // FOK: any non-error response means the order fully filled.
       const isGTC = orderPayload.order_type === "gtc";
-      if (isGTC && !result.error) {
+      if (isGTC) {
+        if (result.error) {
+          // GTC errors are terminal — no retry (resting orders don't "fail to fill").
+          const idx = state.trades.indexOf(trade);
+          if (idx !== -1) state.trades.splice(idx, 1);
+          priceStream.unsubscribe(tokenId);
+          state.stats.trades = Math.max(0, state.stats.trades - 1);
+          state.stats.spent  = Math.max(0, state.stats.spent - trade.amount);
+          setStat("trades",    String(state.stats.trades));
+          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          setStat("positions", String(state.trades.length));
+          logEntry("warn", `  [LIVE] Limit order failed: ${result.error}`);
+          return;
+        }
         trade.confirmed = true;
         const statusStr = result.status ?? result.orderID ?? JSON.stringify(result);
         logEntry("info", `  [LIVE] Limit order placed: ${statusStr} (resting bid — fills as book depth arrives)`);

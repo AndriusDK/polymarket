@@ -298,18 +298,18 @@ class PolymarketClient:
         # The CLOB fills whatever depth is available immediately; the remainder rests
         # on the book until the market resolves.  No retry needed — partial fills are OK.
         if order_type.lower() == "gtc":
-            from py_clob_client.clob_types import LimitOrderArgs
+            from py_clob_client.clob_types import OrderArgs
             limit_price = price_limit if price_limit is not None else (
                 round(min((entry_price or 0.50) + 0.05, 0.92), 4) if side.upper() == "BUY"
                 else round(max((entry_price or 0.50) - 0.05, 0.03), 4)
             )
-            order_args = LimitOrderArgs(
+            order_args = OrderArgs(
                 token_id=token_id,
                 price=limit_price,
                 size=round(amount_usdc / limit_price, 4),   # shares = USDC / price
                 side=side_const,
             )
-            signed_order = client.create_limit_order(order_args)
+            signed_order = client.create_order(order_args)
             response = client.post_order(signed_order, OrderType.GTC)
             logger.info("GTC limit order placed: %s", response)
             return response
