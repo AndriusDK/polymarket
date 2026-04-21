@@ -2387,24 +2387,26 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
     try {
       const priceResp = await fetch(`/price?token_id=${encodeURIComponent(tokenId)}`);
       if (!priceResp.ok) {
-        // Any non-200 response (network error gives status=0, server errors give 5xx,
-        // CLOB-not-indexed can give 4xx) means we have no book data.
-        // Firing blind into an unprobed CLOB always results in "no orders found to match"
-        // FAK failures.  Abort and let the next cycle retry once the book is established.
         const sc = priceResp.status || 0;
-        const lvl = sc >= 500 ? "warn" : "dim";
-        logEntry(lvl, `  ↳ <span class="amber">price check ${sc || "err"}</span> — book not ready, skipping (next cycle will retry)`);
-        const idx = state.trades.indexOf(trade);
-        if (idx !== -1) state.trades.splice(idx, 1);
-        priceStream.unsubscribe(tokenId);
-        state.stats.trades = Math.max(0, state.stats.trades - 1);
-        state.stats.spent  = Math.max(0, state.stats.spent - amount);
-        setStat("trades",    String(state.stats.trades));
-        setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
-        setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
-        setStat("positions", String(state.trades.length));
-        updatePnlStat();
-        return;
+        if (sc >= 500) {
+          // 5xx = server fault — CLOB unreachable, abort and let next cycle retry.
+          logEntry("warn", `  ↳ <span class="amber">price check ${sc}</span> — server error, skipping (next cycle will retry)`);
+          const idx = state.trades.indexOf(trade);
+          if (idx !== -1) state.trades.splice(idx, 1);
+          priceStream.unsubscribe(tokenId);
+          state.stats.trades = Math.max(0, state.stats.trades - 1);
+          state.stats.spent  = Math.max(0, state.stats.spent - amount);
+          setStat("trades",    String(state.stats.trades));
+          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          setStat("positions", String(state.trades.length));
+          updatePnlStat();
+          return;
+        }
+        // 4xx / network-error: CLOB token not indexed yet or transient proxy issue.
+        // Skip depth gates — FAK self-protects (0-fill is already handled cleanly;
+        // it won't open a ghost position).  FOK has its own retry logic.
+        logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — book may not be indexed, skipping depth gates`);
       } else {
       const priceData = await priceResp.json();
       if (!priceData.error) {
