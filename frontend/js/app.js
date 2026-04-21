@@ -2281,42 +2281,12 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
   const entryPrice = isUp ? market.upPrice   : market.downPrice;
   const tokenId    = isUp ? market.upTokenId : market.downTokenId;
 
-  // Scale bet size by time remaining — more time = more uncertainty = smaller bet.
-  // Near-res markets are illiquid: large FOK orders fail and exit slippage is severe.
-  // Use smaller sizes in the final 150s to match available book depth (~$3-5).
-  const secsForSizing = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
-  const timeFraction  = secsForSizing <= 150 ? 0.50   // thin book near expiry — keep small
-                      : secsForSizing <= 300 ? 0.60   // 5-min windows and late 15-min entries: reduce exposure
-                      : secsForSizing <= 400 ? 1.0
-                      : secsForSizing <= 800 ? 0.65
-                      : 0.40;
-  // Scale down size for high-odds entries (reversal costly when you paid premium) AND
-  // low-odds entries (gap-flip — market disagrees, token crashes hard when wrong).
-  // High end: 1.0× at 65% → 0.40× at 87%. Low end: 1.0× at 35% → 0.40× at 10%.
-  const oddsFraction = entryPrice > 0.65 ? Math.max(0.40, 1 - (entryPrice - 0.65) / 0.367)
-                     : entryPrice < 0.35 ? Math.max(0.40, 1 - (0.35 - entryPrice) / 0.250)
-                     : 1.0;
+  // Bet sizing: use configured maxBet directly, floored at $1, capped at remaining budget.
   const maxBet = c[`${asset}MaxBet`] ?? c.btcMaxBet ?? 5;
-  const rawAmount = Math.min(maxBet * timeFraction * oddsFraction, c.maxDaily - state.stats.spent);
-  // Near-resolution size cap: prediction markets become illiquid in the final 120s and a stop
-  // can fire on a single bad tick even with a large underlying gap intact.  Cap exposure at $25
-  // to bound catastrophic stop losses that outweigh the edge (e.g. SOL -$33.53 at 156s).
-  const nearResCap = secsForSizing <= 150 ? 5 : secsForSizing <= 300 ? 15 : Infinity;
-  // Gap-flip size cap: gap-flip trades bet against the current price direction — the token crashes
-  // hard to ~$0.03 when wrong, with no partial recovery.  Cap at $50 to limit worst-case losses
-  // while still allowing meaningful upside on the higher-frequency correct-direction wins.
-  // Session data: -$85.57 and -$85.32 on full-size gap-flip entries; winning gap-flips avg ~$40.
-  const signalAgainstGapSizing = (analysis.signal === "BUY_UP"   && (analysis.gap ?? 0) < 0) ||
-                                  (analysis.signal === "BUY_DOWN" && (analysis.gap ?? 0) > 0);
-  const gapFlipCap = signalAgainstGapSizing ? 50 : Infinity;
-  let amount = Math.min(rawAmount, nearResCap, gapFlipCap);
-  // $1 floor: Polymarket enforces a $1 minimum per order.
-  if (amount < 1.00 && (c.maxDaily - state.stats.spent) >= 1.00) {
-    logEntry("dim", `  ↳ <span class="amber">size bump</span> — computed $${amount.toFixed(2)} → $1.00 (Polymarket minimum)`);
-    amount = 1.00;
-  }
-  if (amount < 1.00) {
-    logEntry("dim", `  ↳ <span class="dim">skipped</span> — computed size $${amount.toFixed(2)} < $1.00 and only $${(c.maxDaily - state.stats.spent).toFixed(2)} budget remaining`);
+  const budgetLeft = c.maxDaily - state.stats.spent;
+  let amount = Math.max(1.00, Math.min(maxBet, budgetLeft));
+  if (budgetLeft < 1.00) {
+    logEntry("dim", `  ↳ <span class="dim">skipped</span> — only $${budgetLeft.toFixed(2)} budget remaining (< $1 minimum)`);
     return;
   }
 
