@@ -2555,26 +2555,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
       if (result.error) {
         if (!isRetry) {
           // Near-resolution windows (<300s): don't retry — the 2s delay allows the thin
-          // book to move dramatically, producing a stale fill far above entry that then
-          // triggers stop-loss before the correct-direction recovery.
-          // Session: 46.5% entry, FOK miss, retry 2s later → 60% fill, stopped at 25%,
-          // resolved $0.99 correct direction (-$3.08 unnecessary loss).
-          if (analysis.timeRemaining < 300) {
-            const idx = state.trades.indexOf(trade);
-            if (idx !== -1) state.trades.splice(idx, 1);
-            priceStream.unsubscribe(tokenId);
-            state.stats.trades = Math.max(0, state.stats.trades - 1);
-            state.stats.spent  = Math.max(0, state.stats.spent - amount);
-            setStat("trades",    String(state.stats.trades));
-            setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
-            setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
-            setStat("positions", String(state.trades.length));
-            logEntry("warn", `  ↳ FOK miss — ${Math.round(analysis.timeRemaining)}s left, skip retry (thin near-res book too volatile)`);
-            return;
-          }
-          // Aggressive retry: wider price cap + half size. Getting a small fill at a
-          // worse price beats losing the signal entirely. At coin-flip odds the ask
-          // book above entry+5pp is often too thin for full size.
+          // Aggressive retry: wider price cap + half size (floored at $1).
           const retryCap    = Math.min(entryPrice + 0.06, 0.92);
           const retryAmount = Math.max(1.00, amount / 2);
           const amountDiff  = amount - retryAmount;
