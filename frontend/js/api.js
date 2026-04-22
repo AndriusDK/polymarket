@@ -169,6 +169,7 @@ async function analyzeMarket(market, anthropicKey, { model = "claude-haiku-4-5-2
     const isBillingError = resp.status === 400 || resp.status === 402 || resp.status === 401 || resp.status === 403;
     if (isBillingError) {
       console.warn(`Claude API ${resp.status} — falling back to heuristic.`, err.slice(0, 120));
+      if (typeof logEntry === "function") logEntry("warn", `<span class="red">⚠ Anthropic API ${resp.status} — no AI analysis (check key/credits), using heuristic fallback</span>`);
       return analyzeMarketHeuristic(market);
     }
     throw new Error(`Claude API ${resp.status}: ${err.slice(0, 200)}`);
@@ -705,6 +706,7 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     const isBilling = [400, 401, 402, 403].includes(resp.status);
     if (isBilling) {
       console.warn(`Claude ${cfg.ticker} ${resp.status} — heuristic fallback`);
+      if (typeof logEntry === "function") logEntry("warn", `<span class="red">⚠ Anthropic API ${resp.status} — no AI analysis (check key/credits), using heuristic fallback</span>`);
       return analyzeCryptoHeuristic(market, metrics);
     }
     throw new Error(`Claude ${cfg.ticker} ${resp.status}: ${err.slice(0, 100)}`);
