@@ -593,7 +593,13 @@ const priceStream = (() => {
               // the pre-crossing oscillation (observed MIN AFTER 0.130-0.150), which triggers
               // the old 70% threshold on correct-direction trades. 85% only fires at ~8-9 cents,
               // safely below the observed oscillation trough, protecting against true collapse.
-              const catThreshold = t.signalAgainstGap ? 0.85 : 0.35;
+              // Early-window FAK fills on thin books at inflated prices (e.g., 50¢ for
+              // a 42.5¢ signal): price immediately corrects to fair value hitting ~35-40%
+              // unrealised loss, firing the catastrophic override on correct-direction trades.
+              // Raise threshold to 55% for early entries so the 30s grace period can do its job.
+              const catThreshold = t.signalAgainstGap ? 0.85
+                                 : t.earlyWindow     ? 0.55
+                                 : 0.35;
               const catastrophic = t.unrealizedPnl <= -t.amount * catThreshold;
               if (!catastrophic) return false;
             }
@@ -2344,6 +2350,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
     volSpikeRatio:   analysis.volSpikeRatio ?? null, // last candle vol / avg (>2 = spike)
     signalAgainstGap: (analysis.signal === "BUY_UP"   && (analysis.gap ?? 0) < 0) ||
                       (analysis.signal === "BUY_DOWN" && (analysis.gap ?? 0) > 0), // gap-flip?
+    earlyWindow:     windowAge < 60_000,  // FAK on early books: prices volatile until book settles
     priceHistory:    [],
     totalSecs:       secsLeft,
     entryTime:       Date.now(),
