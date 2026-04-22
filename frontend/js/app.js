@@ -2341,16 +2341,6 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
   const sigClass = isUp ? "green" : "red";
   const pd       = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
 
-  logEntry("trade",
-    `${tag} ${cfg.ticker} <span class="${sigClass}">${analysis.signal}</span>  ` +
-    `$${amount.toFixed(2)}  —  ${market.question.slice(0, 50)}`
-  );
-  logEntry("info",
-    `  Entry: ${(entryPrice * 100).toFixed(1)}%  ` +
-    `${cfg.ticker} $${spot.toFixed(pd)} vs target $${priceToBeat.toFixed(pd)}  ` +
-    `Gap: ${analysis.gap >= 0 ? "+" : ""}$${analysis.gap.toFixed(pd)}`
-  );
-
   const secsLeft  = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
   const searchQ   = cfg.keywords[0].replace(/ /g, "+");
   const marketUrl = market.slug
@@ -2400,6 +2390,15 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
 
   if (c.dryRun) {
     // Dry run: card appears immediately (no real order to wait for)
+    logEntry("trade",
+      `${tag} ${cfg.ticker} <span class="${sigClass}">${analysis.signal}</span>  ` +
+      `$${amount.toFixed(2)}  —  ${market.question.slice(0, 50)}`
+    );
+    logEntry("info",
+      `  Entry: ${(entryPrice * 100).toFixed(1)}%  ` +
+      `${cfg.ticker} $${spot.toFixed(pd)} vs target $${priceToBeat.toFixed(pd)}  ` +
+      `Gap: ${analysis.gap >= 0 ? "+" : ""}$${analysis.gap.toFixed(pd)}`
+    );
     addCryptoCard(trade);
     startCryptoCountdown();
   } else {
@@ -2594,6 +2593,15 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
       api_secret:     c.polyApiSecret,
       api_passphrase: c.polyPassphrase,
     };
+    logEntry("trade",
+      `${tag} ${cfg.ticker} <span class="${sigClass}">${analysis.signal}</span>  ` +
+      `$${amount.toFixed(2)}  —  ${market.question.slice(0, 50)}`
+    );
+    logEntry("info",
+      `  Entry: ${(entryPrice * 100).toFixed(1)}%  ` +
+      `${cfg.ticker} $${spot.toFixed(pd)} vs target $${priceToBeat.toFixed(pd)}  ` +
+      `Gap: ${analysis.gap >= 0 ? "+" : ""}$${analysis.gap.toFixed(pd)}`
+    );
     console.log(`[LIVE] Placing BUY order`, {
       token_id: tokenId,
       asset,
