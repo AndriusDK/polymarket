@@ -1754,6 +1754,22 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       `<span class="${gap >= 0 ? "green" : "red"}">${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)}</span>`
     );
 
+    // Late-window gate: skip AI call entirely when the entry window hasn't opened yet.
+    // e.g. pct=0.50 → only analyse (and potentially enter) in the last 50% of the window.
+    // This is checked before analyzeCryptoMarket to avoid burning AI tokens on markets
+    // we cannot enter yet; the market stays in analyzed/gapWatch and is retried next cycle.
+    {
+      const wAge         = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
+      const totWinSecs   = wAge / 1000 + timeRemaining;
+      const maxEntryPct  = c.entryWindowPct ?? 0.50;
+      const pctRemaining = totWinSecs > 0 ? timeRemaining / totWinSecs : 0;
+      if (pctRemaining > maxEntryPct) {
+        const gateOpenSecs = Math.round(totWinSecs * (1 - maxEntryPct));
+        logEntry("dim", `  → <span class="amber">gate closed</span> — ${Math.round(pctRemaining * 100)}% of window left (>${Math.round(maxEntryPct * 100)}%); entry opens at ~${gateOpenSecs}s into window`);
+        continue;
+      }
+    }
+
     // Track Polymarket token price history (last 3 observations) for trend signal.
     // Newest entry is prepended; older entries shift back. Keyed by conditionId.
     const oddsHist = state[asset].oddsHistory;
@@ -2142,17 +2158,6 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       // Cross-window carry lowers the fallback to 30s regardless of window length.
       const windowAge      = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
       const totalWindowSecs = windowAge / 1000 + timeRemaining;
-
-      // Late-window gate: skip entry if more than entryWindowPct of the window remains.
-      // e.g. pct=0.50 → only enter in the last 50% of the window (thicker books, shorter AI horizon).
-      const maxEntryPct  = c.entryWindowPct ?? 0.50;
-      const pctRemaining = totalWindowSecs > 0 ? timeRemaining / totalWindowSecs : 0;
-      if (pctRemaining > maxEntryPct) {
-        const gateOpenSecs = Math.round(totalWindowSecs * (1 - maxEntryPct));
-        logEntry("dim", `  → <span class="amber">gate closed</span> — ${Math.round(pctRemaining * 100)}% of window left (>${Math.round(maxEntryPct * 100)}%); entry opens at ~${gateOpenSecs}s into window`);
-        continue;
-      }
-
       const crossSig        = state[asset].crossWindowSignal;
       const crossActive     = crossSig && Date.now() < crossSig.expiresAt && crossSig.signal === analysis.signal;
       const normalGate      = Math.max(30_000, Math.min(120_000, totalWindowSecs * 150));
