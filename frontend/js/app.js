@@ -1772,6 +1772,14 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       if (storedData?.gateClosedLoggedAt) storedData.gateClosedLoggedAt = null;
     }
 
+    // FAK retry throttle: after a 404 abort the market is re-queued to gapWatch, but
+    // stats are rolled back so the next WS cycle immediately qualifies and fires again —
+    // creating an infinite loop. Wait 30s between retries so the book has time to index.
+    if (storedData?.fakRetryAfter && Date.now() < storedData.fakRetryAfter) {
+      state[asset].gapWatch.set(market.conditionId, true);
+      continue;
+    }
+
     logEntry("info",
       `${cfg.ticker}: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
       `[${timeRemaining}s left]  ${cfg.ticker} $${spot.toFixed(pd)} vs target $${priceToBeat.toFixed(pd)}  ` +
@@ -2442,7 +2450,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
         // let the market stay in gapWatch for the next cycle to retry once the book indexes.
         // FOK falls through: depth gates below protect it; failing FOK is a clean no-fill.
         if (isFAK) {
-          logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — book not indexed, FAK skipped (will retry next cycle)`);
+          logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — book not indexed, FAK skipped (retry in 30s)`);
           const idx = state.trades.indexOf(trade);
           if (idx !== -1) state.trades.splice(idx, 1);
           priceStream.unsubscribe(tokenId);
@@ -2453,8 +2461,13 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
           updatePnlStat();
-          // Re-queue so the market is picked up by the next cycle once the book indexes.
-          if (conditionId) state[asset].gapWatch.set(conditionId, true);
+          // Re-queue with a 30s throttle so WS cycles don't immediately re-fire
+          // into the same empty book creating an infinite retry loop.
+          if (conditionId) {
+            const snap = state[asset].analyzed.get(conditionId);
+            if (snap) snap.fakRetryAfter = Date.now() + 30_000;
+            state[asset].gapWatch.set(conditionId, true);
+          }
           return;
         }
         logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — book may not be indexed, skipping depth gates`);
