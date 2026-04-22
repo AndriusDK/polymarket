@@ -1764,6 +1764,9 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       const maxEntryPct  = c.entryWindowPct ?? 0.50;
       const pctRemaining = totWinSecs > 0 ? timeRemaining / totWinSecs : 0;
       if (pctRemaining > maxEntryPct) {
+        // Keep market in gapWatch so it stays in `fresh` next cycle (analyzed markets are
+        // otherwise filtered out of fresh and never re-examined).
+        state[asset].gapWatch.set(market.conditionId, true);
         const gateOpenSecs = Math.round(totWinSecs * (1 - maxEntryPct));
         logEntry("dim", `  → <span class="amber">gate closed</span> — ${Math.round(pctRemaining * 100)}% of window left (>${Math.round(maxEntryPct * 100)}%); entry opens at ~${gateOpenSecs}s into window`);
         continue;
