@@ -86,6 +86,7 @@ const PERSIST_FIELDS = [
   ["xrp-min-edge",        "value"],
   ["xrp-mode-toggle",     "checked"],
   ["fok-toggle",          "checked"],
+  ["entry-window-pct",    "value"],
 ];
 
 function saveSettings() {
@@ -171,8 +172,9 @@ function initSetup() {
       xrpMode:       $("#xrp-mode-toggle")?.checked ?? false,
       xrpMaxBet:     parseFloat($("#xrp-max-bet")?.value) || 5,
       xrpMinEdge:    parseFloat($("#xrp-min-edge")?.value) || 0.04,
-      startupCooldown: parseInt($("#startup-cooldown")?.value) || 90,
-      useFOK:          $("#fok-toggle")?.checked ?? true,
+      startupCooldown:  parseInt($("#startup-cooldown")?.value) || 90,
+      entryWindowPct:   parseFloat($("#entry-window-pct")?.value ?? 50) / 100,
+      useFOK:           $("#fok-toggle")?.checked ?? true,
     };
 
     initDashboard();
@@ -1502,16 +1504,17 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     // falsely passes the flash entry ≤52% check, causing catastrophic fills on worthless tokens.
     if (!/\d+:\d+[AP]M-\d+:\d+[AP]M/i.test(market.question)) continue;
 
-    // Clock-aligned wakeup: fire a cycle the moment this market's window opens.
-    // Markets have exact HH:MM-HH:MM boundaries; the 5s discovery tick adds up to 5s of
-    // entry delay.  Schedule a one-shot setTimeout at the exact open time so we land
-    // within ~300ms of window open (Gamma API lag).  Dedupe per conditionId.
+    // Clock-aligned wakeup: fire a cycle when this market's entry gate opens.
+    // When entryWindowPct < 1.0 (e.g. 50%) the gate opens at endDate - wMs*pct rather than
+    // at window open, so we wake exactly when the late-window filter will first pass.
+    // Otherwise (pct=1.0 / disabled) wake at window open as before.
     {
       const mm       = market.question.match(/(\d+:\d+)(AM|PM)-(\d+:\d+)(AM|PM)/i);
       const toMin    = (hhmm, ampm) => { let [h, m] = hhmm.split(":").map(Number); if (ampm.toUpperCase()==="PM"&&h!==12) h+=12; if (ampm.toUpperCase()==="AM"&&h===12) h=0; return h*60+m; };
       const wMs      = ((toMin(mm[3], mm[4]) - toMin(mm[1], mm[2]) + 1440) % 1440) * 60_000;
-      const openMs   = new Date(market.endDate).getTime() - wMs;
-      const waitMs   = openMs - Date.now() + 300;   // +300ms lets Gamma flip the market to open
+      const entryPct = c.entryWindowPct ?? 0.50;
+      const gateMs   = new Date(market.endDate).getTime() - wMs * entryPct;
+      const waitMs   = gateMs - Date.now() + 300;   // +300ms lets Gamma flip the market to open
       if (waitMs > 500 && waitMs < 30 * 60_000 && !state[asset].scheduledOpens.has(market.conditionId)) {
         const handle = setTimeout(() => {
           state[asset].scheduledOpens.delete(market.conditionId);
@@ -2139,6 +2142,17 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       // Cross-window carry lowers the fallback to 30s regardless of window length.
       const windowAge      = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
       const totalWindowSecs = windowAge / 1000 + timeRemaining;
+
+      // Late-window gate: skip entry if more than entryWindowPct of the window remains.
+      // e.g. pct=0.50 → only enter in the last 50% of the window (thicker books, shorter AI horizon).
+      const maxEntryPct  = c.entryWindowPct ?? 0.50;
+      const pctRemaining = totalWindowSecs > 0 ? timeRemaining / totalWindowSecs : 0;
+      if (pctRemaining > maxEntryPct) {
+        const gateOpenSecs = Math.round(totalWindowSecs * (1 - maxEntryPct));
+        logEntry("dim", `  → <span class="amber">gate closed</span> — ${Math.round(pctRemaining * 100)}% of window left (>${Math.round(maxEntryPct * 100)}%); entry opens at ~${gateOpenSecs}s into window`);
+        continue;
+      }
+
       const crossSig        = state[asset].crossWindowSignal;
       const crossActive     = crossSig && Date.now() < crossSig.expiresAt && crossSig.signal === analysis.signal;
       const normalGate      = Math.max(30_000, Math.min(120_000, totalWindowSecs * 150));

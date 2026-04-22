@@ -113,6 +113,10 @@
           <label class="field-label">Startup Cooldown (s)</label>
           <input type="number" id="startup-cooldown" class="neon-input" value="90" min="0" max="300" step="10" title="Observe markets for this many seconds after launch before placing any trades — avoids jumping into already-running markets" />
         </div>
+        <div>
+          <label class="field-label">Entry Window (% remaining) <span class="hint">e.g. 50 = only enter when ≤50% of window left</span></label>
+          <input type="number" id="entry-window-pct" class="neon-input" value="50" min="20" max="90" step="5" title="Only enter a market when at most this percentage of the window remains. Higher % = earlier entry (thinner books). Lower % = later entry (thicker books, shorter prediction horizon)." />
+        </div>
       </div>
 
       <div class="switch-row">
