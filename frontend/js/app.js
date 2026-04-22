@@ -1767,10 +1767,17 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
         // Keep market in gapWatch so it stays in `fresh` next cycle (analyzed markets are
         // otherwise filtered out of fresh and never re-examined).
         state[asset].gapWatch.set(market.conditionId, true);
-        const gateOpenSecs = Math.round(totWinSecs * (1 - maxEntryPct));
-        logEntry("dim", `  → <span class="amber">gate closed</span> — ${Math.round(pctRemaining * 100)}% of window left (>${Math.round(maxEntryPct * 100)}%); entry opens at ~${gateOpenSecs}s into window`);
+        // Log only once per gate-close episode to avoid flooding the log every few seconds.
+        const now = Date.now();
+        if (!storedData?.gateClosedLoggedAt || now - storedData.gateClosedLoggedAt > 60_000) {
+          if (storedData) storedData.gateClosedLoggedAt = now;
+          const gateOpenSecs = Math.round(totWinSecs * (1 - maxEntryPct));
+          logEntry("dim", `  → <span class="amber">gate closed</span> — ${Math.round(pctRemaining * 100)}% of window left (>${Math.round(maxEntryPct * 100)}%); entry opens at ~${gateOpenSecs}s into window`);
+        }
         continue;
       }
+      // Gate just opened — clear the log-throttle flag so a future gate-close logs again.
+      if (storedData?.gateClosedLoggedAt) storedData.gateClosedLoggedAt = null;
     }
 
     // Track Polymarket token price history (last 3 observations) for trend signal.
@@ -2432,9 +2439,24 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           updatePnlStat();
           return;
         }
-        // 4xx / network-error: CLOB token not indexed yet or transient proxy issue.
-        // Skip depth gates — FAK self-protects (0-fill is already handled cleanly;
-        // it won't open a ghost position).  FOK has its own retry logic.
+        // 4xx = CLOB token not indexed yet (book genuinely empty).
+        // In FAK mode, "no orders found" is an error not a clean 0-fill — abort and
+        // let the market stay in gapWatch for the next cycle to retry once the book indexes.
+        // FOK falls through: depth gates below protect it; failing FOK is a clean no-fill.
+        if (isFAK) {
+          logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — book not indexed, FAK skipped (will retry next cycle)`);
+          const idx = state.trades.indexOf(trade);
+          if (idx !== -1) state.trades.splice(idx, 1);
+          priceStream.unsubscribe(tokenId);
+          state.stats.trades = Math.max(0, state.stats.trades - 1);
+          state.stats.spent  = Math.max(0, state.stats.spent - amount);
+          setStat("trades",    String(state.stats.trades));
+          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+          setStat("positions", String(state.trades.length));
+          updatePnlStat();
+          return;
+        }
         logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — book may not be indexed, skipping depth gates`);
       } else {
       const priceData = await priceResp.json();
