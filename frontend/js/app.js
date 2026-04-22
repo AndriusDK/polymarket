@@ -1748,26 +1748,18 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     const recentRange = candles.slice(-3).reduce((mx, c) => Math.max(mx, c.high - c.low), 0);
     const maxMovement = Math.max(recentRange, spot * 0.001) * Math.max(timeRemaining / 60, 0.25) * 3;
 
-    logEntry("info",
-      `${cfg.ticker}: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
-      `[${timeRemaining}s left]  ${cfg.ticker} $${spot.toFixed(pd)} vs target $${priceToBeat.toFixed(pd)}  ` +
-      `<span class="${gap >= 0 ? "green" : "red"}">${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)}</span>`
-    );
-
     // Late-window gate: skip AI call entirely when the entry window hasn't opened yet.
-    // e.g. pct=0.50 → only analyse (and potentially enter) in the last 50% of the window.
-    // This is checked before analyzeCryptoMarket to avoid burning AI tokens on markets
-    // we cannot enter yet; the market stays in analyzed/gapWatch and is retried next cycle.
+    // Checked BEFORE the header log so gated markets produce no per-cycle noise — only
+    // the once-per-60s throttled gate-closed message.
     {
       const wAge         = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
       const totWinSecs   = wAge / 1000 + timeRemaining;
       const maxEntryPct  = c.entryWindowPct ?? 0.50;
       const pctRemaining = totWinSecs > 0 ? timeRemaining / totWinSecs : 0;
       if (pctRemaining > maxEntryPct) {
-        // Keep market in gapWatch so it stays in `fresh` next cycle (analyzed markets are
-        // otherwise filtered out of fresh and never re-examined).
+        // Keep market in gapWatch so it stays in `fresh` next cycle.
         state[asset].gapWatch.set(market.conditionId, true);
-        // Log only once per gate-close episode to avoid flooding the log every few seconds.
+        // Log only once per gate-close episode (not on every WS-triggered cycle).
         const now = Date.now();
         if (!storedData?.gateClosedLoggedAt || now - storedData.gateClosedLoggedAt > 60_000) {
           if (storedData) storedData.gateClosedLoggedAt = now;
@@ -1779,6 +1771,12 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       // Gate just opened — clear the log-throttle flag so a future gate-close logs again.
       if (storedData?.gateClosedLoggedAt) storedData.gateClosedLoggedAt = null;
     }
+
+    logEntry("info",
+      `${cfg.ticker}: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
+      `[${timeRemaining}s left]  ${cfg.ticker} $${spot.toFixed(pd)} vs target $${priceToBeat.toFixed(pd)}  ` +
+      `<span class="${gap >= 0 ? "green" : "red"}">${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)}</span>`
+    );
 
     // Track Polymarket token price history (last 3 observations) for trend signal.
     // Newest entry is prepended; older entries shift back. Keyed by conditionId.
@@ -2182,7 +2180,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
           logEntry("dim", `  ↳ <span class="amber">⚡ cross-window</span> — ${analysis.signal} carry from prior close (${(crossSig.odds*100).toFixed(0)}%), entering at ${Math.round(windowAge/1000)}s`);
         }
         state[asset].gapWatch.delete(market.conditionId);
-        placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge });
+        placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge, conditionId: market.conditionId });
         continue;
       }
 
@@ -2255,7 +2253,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
           logEntry("dim", `  ↳ <span class="amber">⚡ cross-window</span> — ${analysis.signal} carry from prior close (${(crossSig.odds*100).toFixed(0)}%), entering at ${Math.round(windowAge/1000)}s`);
         }
         state[asset].gapWatch.delete(market.conditionId);
-        placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge });
+        placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge, conditionId: market.conditionId });
       }
     } else if (analysis.signal !== "SKIP") {
       const reasons = [];
@@ -2293,7 +2291,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
 
 const runBtcCycle = () => runCryptoCycle("btc");
 
-async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge = Infinity }) {
+async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge = Infinity, conditionId = null }) {
   const c      = state.config;
   const cfg    = CRYPTO_CONFIG[asset];
 
@@ -2455,6 +2453,8 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
           updatePnlStat();
+          // Re-queue so the market is picked up by the next cycle once the book indexes.
+          if (conditionId) state[asset].gapWatch.set(conditionId, true);
           return;
         }
         logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — book may not be indexed, skipping depth gates`);
