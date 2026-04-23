@@ -23,7 +23,8 @@ const state = {
   tradeHistory: [],    // { ts, pnl, asset, reason } — every closed position, used by profit chart
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
-  chainlinkPrices: { btc: null, eth: null, sol: null, xrp: null }, // live Chainlink prices from RTDS
+  chainlinkPrices:   { btc: null, eth: null, sol: null, xrp: null }, // live Chainlink prices from RTDS
+  chainlinkPricesAt: { btc: 0,    eth: 0,    sol: 0,    xrp: 0    }, // epoch ms of last update per asset
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────
@@ -717,10 +718,11 @@ const chainlinkStream = (() => {
       const sym = msg.payload.symbol;
       const val = parseFloat(msg.payload.value);
       if (!isNaN(val)) {
-        if      (sym === "btc/usd") state.chainlinkPrices.btc = val;
-        else if (sym === "eth/usd") state.chainlinkPrices.eth = val;
-        else if (sym === "sol/usd") state.chainlinkPrices.sol = val;
-        else if (sym === "xrp/usd") state.chainlinkPrices.xrp = val;
+        const now = Date.now();
+        if      (sym === "btc/usd") { state.chainlinkPrices.btc = val; state.chainlinkPricesAt.btc = now; }
+        else if (sym === "eth/usd") { state.chainlinkPrices.eth = val; state.chainlinkPricesAt.eth = now; }
+        else if (sym === "sol/usd") { state.chainlinkPrices.sol = val; state.chainlinkPricesAt.sol = now; }
+        else if (sym === "xrp/usd") { state.chainlinkPrices.xrp = val; state.chainlinkPricesAt.xrp = now; }
       }
     }
   }
@@ -1417,9 +1419,12 @@ async function _runCryptoCycleInner(asset) {
   }
 
   // Prefer Chainlink live price as spot — same source as Polymarket resolution.
-  // Candles stay Binance (trend/momentum analysis only, source doesn't matter there).
+  // Only use it when the last push arrived within 60s; Chainlink's 0.5% deviation
+  // threshold means the oracle can lag actual price by several dollars for minutes.
+  // A stale Chainlink value flips the direction signal — fall back to Binance when stale.
   const clSpot = state.chainlinkPrices[asset];
-  if (clSpot) spot = clSpot;
+  const clAge  = Date.now() - (state.chainlinkPricesAt[asset] ?? 0);
+  if (clSpot && clAge < 60_000) spot = clSpot;
 
   const pd = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
 
@@ -1523,7 +1528,7 @@ async function _runCryptoCycleInner(asset) {
     // When Chainlink supplies both spot and priceToBeat the delta is ~0, so 0.01% is enough.
     // Fall back to 0.05% when either value came from Binance (0.07-0.10% inter-source noise).
     // If minGapPct is explicitly set (including 0 = fully disabled), that overrides auto value.
-    const usingChainlink = state.chainlinkPrices[asset] != null &&
+    const usingChainlink = clSpot != null && clAge < 60_000 &&
                            storedData?.chainlinkPriceToBeat != null;
     // Use !isNaN so that 0 means "user explicitly disabled" (not "not configured").
     // With > 0 check, typing 0 fell through to autoGap — filter never truly turned off.
