@@ -2420,7 +2420,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
     // Widen to +8% for those shots so the order actually lands; keep +5% for FOK (all-or-nothing,
     // where a wider cap would invite catastrophic sweeps) and for later-window FAK (stable book).
     const isFAK       = c.useFOK === false;
-    const slippageCap = (isFAK && windowAge < 60_000) ? 0.08 : 0.05;
+    const slippageCap = (isFAK && windowAge < 60_000) ? 0.12 : 0.10;
 
     await new Promise(r => setTimeout(r, 2000));   // 2s pause — let stale data expire
     let priceCheckWas404 = false; // reserved — kept for future grace-period use
