@@ -3,7 +3,7 @@
    ═══════════════════════════════════════════════════════════════════ */
 
 // ── Login gate ───────────────────────────────────────────────────
-const ACCESS_PASSWORD = "2112";   // ← change this to whatever you like
+const ACCESS_PASSWORD = "Ru$h!#2112";
 
 function submitLogin() {
   const input = document.getElementById("login-password");
