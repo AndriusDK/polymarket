@@ -2608,11 +2608,26 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
-          logEntry("warn", `  [LIVE] FAK order failed: ${result.error}`);
-          if (conditionId) {
+          const isEmptyBook = typeof result.error === "string" && result.error.includes("no orders found");
+          if (isEmptyBook && conditionId) {
             const snap = state[asset].analyzed.get(conditionId);
-            if (snap) snap.fakRetryAfter = Date.now() + fakRetryMs();
-            state[asset].gapWatch.set(conditionId, true);
+            const n = snap ? (snap.fakClobErrors = (snap.fakClobErrors ?? 0) + 1) : 1;
+            if (n >= 4) {
+              logEntry("dim", `  → <span class="amber">CLOB: book empty</span> — 4 consecutive empty-book responses, giving up on this window`);
+              if (snap) snap.fakRetryAfter = Date.now() + 5 * 60_000; // effectively done for this window
+            } else {
+              const ms = fakRetryMs();
+              logEntry("dim", `  → <span class="amber">CLOB: book empty</span> — no asks at ${((entryPrice + slippageCap) * 100).toFixed(0)}¢ cap (attempt ${n}/4), retry in ${Math.round(ms / 1000)}s`);
+              if (snap) snap.fakRetryAfter = Date.now() + ms;
+              state[asset].gapWatch.set(conditionId, true);
+            }
+          } else {
+            logEntry("warn", `  [LIVE] FAK order failed: ${result.error}`);
+            if (conditionId) {
+              const snap = state[asset].analyzed.get(conditionId);
+              if (snap) snap.fakRetryAfter = Date.now() + fakRetryMs();
+              state[asset].gapWatch.set(conditionId, true);
+            }
           }
           return;
         }
