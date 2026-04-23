@@ -1779,6 +1779,10 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       state[asset].gapWatch.set(market.conditionId, true);
       continue;
     }
+    // After 4 consecutive 404s the CLOB book is not going to index this window — give up.
+    if (storedData?.fak404GaveUp) {
+      continue;
+    }
 
     logEntry("info",
       `${cfg.ticker}: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
@@ -2465,13 +2469,26 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           updatePnlStat();
           if (conditionId) {
             const snap = state[asset].analyzed.get(conditionId);
-            if (snap) snap.fakRetryAfter = Date.now() + retryDelaySecs * 1_000;
-            state[asset].gapWatch.set(conditionId, true);
+            if (snap) {
+              snap.fak404Count = (snap.fak404Count ?? 0) + 1;
+              if (snap.fak404Count >= 4) {
+                snap.fak404GaveUp = true;
+                logEntry("dim", `  → <span class="amber">book never indexed</span> — 4 consecutive 404s, giving up on this window`);
+              } else {
+                snap.fakRetryAfter = Date.now() + retryDelaySecs * 1_000;
+                state[asset].gapWatch.set(conditionId, true);
+              }
+            }
           }
           return;
         }
         logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — book may not be indexed, skipping depth gates`);
       } else {
+      // Book is now indexed — reset the 404 streak so a previously-404'd market can trade.
+      if (conditionId) {
+        const snap = state[asset].analyzed.get(conditionId);
+        if (snap) { snap.fak404Count = 0; snap.fak404GaveUp = false; }
+      }
       const priceData = await priceResp.json();
       if (!priceData.error) {
         const liveAsk  = priceData.best_ask;
