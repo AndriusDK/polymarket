@@ -13,8 +13,33 @@
   <!-- ═══ Scanline overlay ═══ -->
   <div class="scanlines"></div>
 
+  <!-- ═══ LOGIN SCREEN ═══ -->
+  <div id="login-screen" class="screen active">
+    <div class="login-container">
+      <pre class="login-logo">
+ ██████╗  ██████╗ ██╗  ██╗   ██╗███╗   ███╗ █████╗ ██████╗ ██╗  ██╗███████╗████████╗
+ ██╔══██╗██╔═══██╗██║  ╚██╗ ██╔╝████╗ ████║██╔══██╗██╔══██╗██║ ██╔╝██╔════╝╚══██╔══╝
+ ██████╔╝██║   ██║██║   ╚████╔╝ ██╔████╔██║███████║██████╔╝█████╔╝ █████╗     ██║
+ ██╔═══╝ ██║   ██║██║    ╚██╔╝  ██║╚██╔╝██║██╔══██║██╔══██╗██╔═██╗ ██╔══╝     ██║
+ ██║     ╚██████╔╝███████╗██║   ██║ ╚═╝ ██║██║  ██║██║  ██║██║  ██╗███████╗   ██║
+ ╚═╝      ╚═════╝ ╚══════╝╚═╝   ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝   ╚═╝</pre>
+      <div class="login-subtitle">AI TRADING SYSTEM &nbsp;—&nbsp; <span class="magenta">RESTRICTED ACCESS</span></div>
+      <div class="login-divider"></div>
+      <div class="login-box">
+        <div class="login-label">ENTER ACCESS CODE</div>
+        <div class="login-input-row">
+          <input type="password" id="login-password" class="login-input" placeholder="••••••••••••"
+            autocomplete="off" spellcheck="false" />
+          <button class="login-btn" onclick="submitLogin()">AUTHENTICATE</button>
+        </div>
+        <div id="login-error" class="login-error"></div>
+      </div>
+      <div class="login-footer dim">POLYMARKET AI v2.0 &nbsp;·&nbsp; AUTHORIZED PERSONNEL ONLY</div>
+    </div>
+  </div>
+
   <!-- ═══ SETUP SCREEN ═══ -->
-  <div id="setup-screen" class="screen active">
+  <div id="setup-screen" class="screen">
     <div class="setup-container">
       <pre class="ascii-logo">
  ██████╗  ██████╗ ██╗  ██╗   ██╗███╗   ███╗ █████╗ ██████╗ ██╗  ██╗███████╗████████╗
