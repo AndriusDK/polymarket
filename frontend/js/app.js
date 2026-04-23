@@ -174,6 +174,7 @@ function initSetup() {
       xrpMinEdge:    parseFloat($("#xrp-min-edge")?.value) || 0.04,
       startupCooldown:  parseInt($("#startup-cooldown")?.value) || 90,
       entryWindowPct:   parseFloat($("#entry-window-pct")?.value ?? 50) / 100,
+      slippageCents:    parseFloat($("#slippage-cents")?.value ?? 10),
       useFOK:           $("#fok-toggle")?.checked ?? true,
     };
 
@@ -2212,9 +2213,9 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
         const budgetLeft   = c.maxDaily - state.stats.spent;
         const targetBet    = Math.max(1, Math.min(maxBetCfg, budgetLeft));
         const depthFloor   = Math.max(3, Math.min(10, targetBet * 0.5));  // need at least half the bet, $3-$10 bracket
-        // Mirror the real slippage cap used by placeCryptoTrade: FAK in the first minute of a
-        // window gets +8% (Chainlink ticks + thin book can outrun +5%); everything else stays at +5%.
-        const probeSlipCap = (c.useFOK === false && windowAge < 60_000) ? 0.08 : 0.05;
+        // Mirror the real slippage cap used by placeCryptoTrade.
+        const baseSlip     = (c.slippageCents ?? 10) / 100;
+        const probeSlipCap = (c.useFOK === false && windowAge < 60_000) ? Math.min(baseSlip + 0.02, 0.25) : baseSlip;
         const priceCapFOK  = Math.min(probeEntry + probeSlipCap, 0.92);
         if (probeTokenId) {
           try {
@@ -2420,7 +2421,8 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
     // Widen to +8% for those shots so the order actually lands; keep +5% for FOK (all-or-nothing,
     // where a wider cap would invite catastrophic sweeps) and for later-window FAK (stable book).
     const isFAK       = c.useFOK === false;
-    const slippageCap = (isFAK && windowAge < 60_000) ? 0.12 : 0.10;
+    const baseSlip    = (c.slippageCents ?? 10) / 100;
+    const slippageCap = (isFAK && windowAge < 60_000) ? Math.min(baseSlip + 0.02, 0.25) : baseSlip;
 
     await new Promise(r => setTimeout(r, 2000));   // 2s pause — let stale data expire
     let priceCheckWas404 = false; // reserved — kept for future grace-period use

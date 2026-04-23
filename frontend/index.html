@@ -119,6 +119,14 @@
         </div>
       </div>
 
+      <div class="row-2">
+        <div>
+          <label class="field-label">Slippage Tolerance (¢) <span class="hint">max above Gamma mid-price</span></label>
+          <input type="number" id="slippage-cents" class="neon-input" value="10" min="2" max="25" step="1" title="Max cents above Gamma mid-price the bot will pay to fill. Low = fewer fills (tight), High = more fills but worse entry price. 10¢ is a good default for FAK." />
+        </div>
+        <div></div>
+      </div>
+
       <div class="switch-row">
         <span class="field-label">Dry Run (simulate trades)</span>
         <label class="toggle-switch">
