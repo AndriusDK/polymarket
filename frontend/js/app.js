@@ -1779,11 +1779,6 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       state[asset].gapWatch.set(market.conditionId, true);
       continue;
     }
-    // After 4 consecutive 404s the CLOB book is not going to index this window — give up.
-    if (storedData?.fak404GaveUp) {
-      continue;
-    }
-
     logEntry("info",
       `${cfg.ticker}: <span class="cyan">${market.question.slice(0, 55)}</span>  ` +
       `[${timeRemaining}s left]  ${cfg.ticker} $${spot.toFixed(pd)} vs target $${priceToBeat.toFixed(pd)}  ` +
@@ -2448,47 +2443,11 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           updatePnlStat();
           return;
         }
-        // 4xx = CLOB token not indexed yet (book genuinely empty).
-        // In FAK mode, "no orders found" is an error not a clean 0-fill — abort and
-        // let the market stay in gapWatch for the next cycle to retry once the book indexes.
-        // FOK falls through: depth gates below protect it; failing FOK is a clean no-fill.
-        if (isFAK) {
-          // Scale retry delay to remaining window: don't wait 30s when only 180s are left.
-          const secsLeftNow    = Math.max(0, Math.round((new Date(market.endDate) - Date.now()) / 1000));
-          const retryDelaySecs = secsLeftNow < 180 ? 8 : secsLeftNow < 300 ? 15 : 30;
-          logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — book not indexed, FAK skipped (retry in ${retryDelaySecs}s)`);
-          const idx = state.trades.indexOf(trade);
-          if (idx !== -1) state.trades.splice(idx, 1);
-          priceStream.unsubscribe(tokenId);
-          state.stats.trades = Math.max(0, state.stats.trades - 1);
-          state.stats.spent  = Math.max(0, state.stats.spent - amount);
-          setStat("trades",    String(state.stats.trades));
-          setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
-          setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
-          setStat("positions", String(state.trades.length));
-          updatePnlStat();
-          if (conditionId) {
-            const snap = state[asset].analyzed.get(conditionId);
-            if (snap) {
-              snap.fak404Count = (snap.fak404Count ?? 0) + 1;
-              if (snap.fak404Count >= 4) {
-                snap.fak404GaveUp = true;
-                logEntry("dim", `  → <span class="amber">book never indexed</span> — 4 consecutive 404s, giving up on this window`);
-              } else {
-                snap.fakRetryAfter = Date.now() + retryDelaySecs * 1_000;
-                state[asset].gapWatch.set(conditionId, true);
-              }
-            }
-          }
-          return;
-        }
-        logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — book may not be indexed, skipping depth gates`);
+        // 4xx = price cache empty; skip drift/depth gates and let the CLOB decide.
+        // Both FAK and FOK fall through to order submission — if the book truly has no
+        // depth the CLOB returns an error which handleBuyResult throttles correctly.
+        logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — price cache empty, skipping drift/depth gates`);
       } else {
-      // Book is now indexed — reset the 404 streak so a previously-404'd market can trade.
-      if (conditionId) {
-        const snap = state[asset].analyzed.get(conditionId);
-        if (snap) { snap.fak404Count = 0; snap.fak404GaveUp = false; }
-      }
       const priceData = await priceResp.json();
       if (!priceData.error) {
         const liveAsk  = priceData.best_ask;
@@ -2635,6 +2594,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
       // DO NOT add a card or track fake P&L like the earlier GTC implementation did.
       const isFAK = orderPayload.order_type === "fak";
       if (isFAK) {
+        const fakRetryMs = () => {
+          const s = Math.max(0, Math.round((new Date(market.endDate) - Date.now()) / 1000));
+          return (s < 180 ? 8 : s < 300 ? 15 : 30) * 1_000;
+        };
         if (result.error) {
           const idx = state.trades.indexOf(trade);
           if (idx !== -1) state.trades.splice(idx, 1);
@@ -2646,12 +2609,17 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
           logEntry("warn", `  [LIVE] FAK order failed: ${result.error}`);
+          if (conditionId) {
+            const snap = state[asset].analyzed.get(conditionId);
+            if (snap) snap.fakRetryAfter = Date.now() + fakRetryMs();
+            state[asset].gapWatch.set(conditionId, true);
+          }
           return;
         }
         const makingUsdc  = parseFloat(result.makingAmount)  || 0;
         const takingShares = parseFloat(result.takingAmount) || 0;
         if (makingUsdc < 0.01 || takingShares < 0.001) {
-          // No fill: book had no depth at our price cap.  Clean up stats, skip card.
+          // No fill: book had no depth at our price cap.  Throttle and requeue.
           const idx = state.trades.indexOf(trade);
           if (idx !== -1) state.trades.splice(idx, 1);
           priceStream.unsubscribe(tokenId);
@@ -2662,6 +2630,11 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
           logEntry("warn", `  [LIVE] FAK: 0 shares filled (book too thin at ≤${((entryPrice+slippageCap)*100).toFixed(0)}¢ cap) — no position opened`);
+          if (conditionId) {
+            const snap = state[asset].analyzed.get(conditionId);
+            if (snap) snap.fakRetryAfter = Date.now() + fakRetryMs();
+            state[asset].gapWatch.set(conditionId, true);
+          }
           return;
         }
         // Partial or full fill: size the trade to the actual fill, not the intended amount.
