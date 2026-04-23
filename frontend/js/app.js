@@ -1459,13 +1459,12 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     return;
   }
 
-  // Prefer Chainlink live price as spot — same source as Polymarket resolution.
-  // Only use it when the last push arrived within 60s; Chainlink's 0.5% deviation
-  // threshold means the oracle can lag actual price by several dollars for minutes.
-  // A stale Chainlink value flips the direction signal — fall back to Binance when stale.
-  const clSpot = state.chainlinkPrices[asset];
-  const clAge  = Date.now() - (state.chainlinkPricesAt[asset] ?? 0);
-  if (clSpot && clAge < 60_000) spot = clSpot;
+  // Binance is always used as spot for the direction signal. Chainlink oracle has a
+  // 0.5% deviation threshold — for BTC that's ~$400, so the oracle can sit $47+ stale
+  // while Binance tracks the actual move in real time. Even a "fresh" Chainlink value
+  // (arrived 10s ago) can already be misleading. Chainlink is used only for
+  // priceToBeat (window-open baseline) since that's what Polymarket resolves against.
+  // The 0.05% autoGap noise floor absorbs the Binance↔Chainlink inter-source delta.
 
   const pd = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
 
@@ -1590,16 +1589,12 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
 
     const gap = spot - priceToBeat;
 
-    // Skip near-zero gaps — noise floor depends on price source.
-    // When Chainlink supplies both spot and priceToBeat the delta is ~0, so 0.01% is enough.
-    // Fall back to 0.05% when either value came from Binance (0.07-0.10% inter-source noise).
+    // Skip near-zero gaps — use 0.05% floor to absorb Binance↔Chainlink inter-source delta.
     // If minGapPct is explicitly set (including 0 = fully disabled), that overrides auto value.
-    const usingChainlink = clSpot != null && clAge < 60_000 &&
-                           storedData?.chainlinkPriceToBeat != null;
     // Use !isNaN so that 0 means "user explicitly disabled" (not "not configured").
     // With > 0 check, typing 0 fell through to autoGap — filter never truly turned off.
     const configGap = !isNaN(c.minGapPct) ? c.minGapPct / 100 : null;
-    const autoGap   = usingChainlink ? 0.0001 : 0.0005;
+    const autoGap   = 0.0005;
     const minGapFrac = configGap ?? autoGap;
     if (minGapFrac > 0 && Math.abs(gap) < spot * minGapFrac) {
       const minGap = spot * minGapFrac;
