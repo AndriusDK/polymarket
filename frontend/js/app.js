@@ -2449,7 +2449,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
         // let the market stay in gapWatch for the next cycle to retry once the book indexes.
         // FOK falls through: depth gates below protect it; failing FOK is a clean no-fill.
         if (isFAK) {
-          logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — book not indexed, FAK skipped (retry in 30s)`);
+          // Scale retry delay to remaining window: don't wait 30s when only 180s are left.
+          const secsLeftNow    = Math.max(0, Math.round((new Date(market.endDate) - Date.now()) / 1000));
+          const retryDelaySecs = secsLeftNow < 180 ? 8 : secsLeftNow < 300 ? 15 : 30;
+          logEntry("dim", `  → <span class="amber">price check ${sc || "err"}</span> — book not indexed, FAK skipped (retry in ${retryDelaySecs}s)`);
           const idx = state.trades.indexOf(trade);
           if (idx !== -1) state.trades.splice(idx, 1);
           priceStream.unsubscribe(tokenId);
@@ -2460,11 +2463,9 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
           updatePnlStat();
-          // Re-queue with a 30s throttle so WS cycles don't immediately re-fire
-          // into the same empty book creating an infinite retry loop.
           if (conditionId) {
             const snap = state[asset].analyzed.get(conditionId);
-            if (snap) snap.fakRetryAfter = Date.now() + 30_000;
+            if (snap) snap.fakRetryAfter = Date.now() + retryDelaySecs * 1_000;
             state[asset].gapWatch.set(conditionId, true);
           }
           return;
