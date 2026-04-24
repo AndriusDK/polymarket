@@ -661,6 +661,10 @@ const priceStream = (() => {
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
           const toTakeProfit = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
+            // Near-certainty exit: at 98¢ the market has essentially resolved.
+            // Liquidity dries up above this and we risk getting stuck then stopped out
+            // even when the direction is correct — just take the money.
+            if (bid >= 0.98) return true;
             if (t.unrealizedPnl >= t.amount * takeProfitPct) return true;
             // Trailing stop: arms at 30% gain, lock-in % scales with absolute peak gain.
             // Small gains: loose trail (25%) — let it run; large gains: tight trail (60%) — protect profit.
