@@ -856,7 +856,10 @@ function closePosition(trade, reason) {
       token_id:       trade.tokenId,
       side:           "SELL",
       amount_usdc:    trade.shares,  // for SELL, amount = shares (tokens), not USDC
-      entry_price:    trade.currentPrice,  // sell limit: don't accept more than 8% below current
+      // Stop-loss: no price limit — exit at market immediately so a crashing token doesn't
+      // fail the first attempt and fill the retry 2s later at an even worse price.
+      // Take-profit: use currentPrice as floor to protect realized gains.
+      entry_price:    reason === "STOP LOSS" ? undefined : trade.currentPrice,
       private_key:    c.polyPrivateKey,
       api_key:        c.polyApiKey,
       api_secret:     c.polyApiSecret,
