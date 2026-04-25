@@ -457,6 +457,9 @@ const CRYPTO_PROMPT = [
   "── FUTURES FUNDING RATE ───────────────────────────────────────────",
   "{fundingBlock}",
   "",
+  "── BINANCE vs CHAINLINK ORACLE LEAD ──────────────────────────────",
+  "{binanceLeadBlock}",
+  "",
   "── POLYMARKET ODDS ────────────────────────────────────────────────",
   "UP price  : {upPrice} ({upPct}% implied)",
   "DOWN price: {downPrice} ({downPct}% implied)",
@@ -635,6 +638,32 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     volumeBlock = `Last 1-min vol: ${fmtQty(volSpike.recentVol)} | 4-min avg: ${fmtQty(volSpike.avgVol)} | Spike ratio: ${volSpike.ratio.toFixed(2)}x → ${volSpike.signal}`;
   }
 
+  // Binance vs Chainlink oracle lead block
+  // Chainlink heartbeats every ~20-27s (or on 0.5% deviation). When Binance has moved
+  // further than Chainlink in the gap direction, the next oracle tick will likely widen
+  // the gap; when Binance has reversed toward target, the oracle may be near its peak.
+  let binanceLeadBlock = "N/A (Chainlink not yet synced)";
+  const binanceLead = cryptoData.binanceLead;
+  if (binanceLead != null) {
+    const binanceSpotVal = spot + binanceLead;  // spot is already Chainlink; recover Binance
+    const binanceGap  = binanceSpotVal - priceToBeat;
+    const oracleGap   = gap;  // spot - priceToBeat (Chainlink)
+    const leadDir     = binanceLead >= 0 ? "above" : "below";
+    const leadSign    = binanceLead >= 0 ? "+" : "";
+    const gapConf     = Math.sign(binanceGap) === Math.sign(oracleGap)
+      ? "confirms" : "CONTRADICTS";
+    const tickPred    = binanceLead > 0
+      ? "next oracle tick likely to push price UP (Binance already there)"
+      : binanceLead < 0
+        ? "next oracle tick likely to push price DOWN (Binance already there)"
+        : "no lead — oracle is current";
+    binanceLeadBlock = [
+      `Binance live  : ${binanceSpotVal.toFixed(pd)} | Oracle/Chainlink: ${spot.toFixed(pd)} | Lead: ${leadSign}${binanceLead.toFixed(pd)} (Binance is ${Math.abs(binanceLead).toFixed(pd)} ${leadDir} oracle)`,
+      `Binance gap   : ${binanceGap >= 0 ? "+" : ""}${binanceGap.toFixed(pd)} vs priceToBeat | Oracle gap: ${oracleGap >= 0 ? "+" : ""}${oracleGap.toFixed(pd)} — Binance ${gapConf} oracle direction`,
+      `Oracle lag    : ${tickPred}`,
+    ].join("\n");
+  }
+
   // Funding rate block
   let fundingBlock = "N/A (unavailable)";
   if (cryptoData.fundingRate != null) {
@@ -674,6 +703,7 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     .replace("{oddsTrendBlock}",    oddsTrendBlock)
     .replace("{volumeBlock}",       volumeBlock)
     .replace("{fundingBlock}",      fundingBlock)
+    .replace("{binanceLeadBlock}",  binanceLeadBlock)
     .replace("{upPrice}",           market.upPrice.toFixed(3))
     .replace("{upPct}",             (market.upPrice * 100).toFixed(1))
     .replace("{downPrice}",         market.downPrice.toFixed(3))

@@ -1508,8 +1508,12 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
 
   // Prefer Chainlink live price as spot — same source as Polymarket resolution.
   // Candles stay Binance (trend/momentum analysis only, source doesn't matter there).
+  // Keep raw Binance price to compute oracle lead: Chainlink heartbeat lags Binance
+  // by 0-27s, so the Binance-Chainlink delta predicts the direction of the next oracle tick.
+  const binanceSpot = spot;
   const clSpot = state.chainlinkPrices[asset];
   if (clSpot) spot = clSpot;
+  const binanceLead = (clSpot && clSpot > 0) ? binanceSpot - clSpot : null;
 
   const pd = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
 
@@ -1590,6 +1594,14 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
 
     const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
     const windowSecs    = windowMs / 1000;
+
+    // Window-size filter: only trade 5-min (300s) and 15-min (900s) markets.
+    // 30-min+ windows have too much time for reversals and don't fit the bot's risk model.
+    if (windowSecs > 900) {
+      state[asset].analyzed.set(market.conditionId, { endDateMs: new Date(market.endDate).getTime() });
+      logEntry("dim", `  → <span class="dim">skip — ${Math.round(windowSecs / 60)}min window (5/15min only)</span>`);
+      continue;
+    }
 
     // Pre-window gate — Polymarket lists markets 10–20 minutes before their window opens.
     // Entering pre-window is wrong for two reasons:
@@ -1867,7 +1879,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     } else {
       try {
         analysis = await analyzeCryptoMarket(
-          market, { spot, candles, candles5m, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds }, c.anthropicKey, { model: c.model }, asset
+          market, { spot, candles, candles5m, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds, binanceLead }, c.anthropicKey, { model: c.model }, asset
         );
       } catch (err) {
         logEntry("error", `  ${cfg.ticker} analysis failed: ${err.message}`);
