@@ -47,10 +47,10 @@ const state = {
   losses: 0,
   sessionStart: Date.now(),
   bootTime: null,      // set when first asset starts; used for startup cooldown
-  btc: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map() },  // conditionId → endDateMs
-  eth: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map() },
-  sol: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map() },
-  xrp: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map() },
+  btc: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map(), analysisCache: new Map() },  // conditionId → endDateMs
+  eth: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map(), analysisCache: new Map() },
+  sol: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map(), analysisCache: new Map() },
+  xrp: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map(), analysisCache: new Map() },
   tradeHistory: [],    // { ts, pnl, asset, reason } — every closed position, used by profit chart
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
@@ -1386,6 +1386,8 @@ function startCryptoMode(asset) {
   const now = Date.now();
   for (const [cid, data] of state[asset].analyzed)
     if ((data?.endDateMs ?? data) < now) state[asset].analyzed.delete(cid);
+  for (const [cid, entry] of state[asset].analysisCache)
+    if ((now - entry.ts) > 300_000) state[asset].analysisCache.delete(cid);
 
   const cfg = CRYPTO_CONFIG[asset];
   const btn = $(`#btn-${asset}`);
@@ -1839,28 +1841,53 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     const updatedOdds = [{ up: market.upPrice, ts: Date.now() }, ...prevOdds].slice(0, 3);
     oddsHist.set(market.conditionId, updatedOdds);
 
-    let analysis;
-    try {
-      analysis = await analyzeCryptoMarket(
-        market, { spot, candles, candles5m, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds }, c.anthropicKey, { model: c.model }, asset
-      );
-    } catch (err) {
-      logEntry("error", `  ${cfg.ticker} analysis failed: ${err.message}`);
-      continue;
-    }
-
-    const sigColor = analysis.signal === "BUY_UP" ? "green"
-                   : analysis.signal === "BUY_DOWN" ? "red" : "dim";
-    logEntry("info",
-      `  → <span class="${sigColor}">${analysis.signal}</span>  ` +
-      `Conf: ${analysis.confidence}  ` +
-      `Edge: ${(analysis.edge >= 0 ? "+" : "")}${(analysis.edge * 100).toFixed(1)}%  ` +
-      (analysis.momentumTrade ? `<span class="amber">⚡MOM</span>  ` : "") +
-      `| ${analysis.reasoning}`
+    // Analysis result cache: skip re-calling the AI when market conditions haven't
+    // changed since the last cycle. WS price events re-trigger cycles every 7-15s on
+    // active markets — without caching, a stagnant SKIP market burns one API call
+    // per event. Cache is invalidated when gap moves ≥threshold, odds shift ≥3pp,
+    // or timeRemaining crosses a near-resolution boundary (200s or 120s).
+    const aCache     = state[asset].analysisCache;
+    const cached     = aCache.get(market.conditionId);
+    const gapThr     = asset === "btc" ? 10 : 3;
+    const cacheMaxMs = (cached?.analysis?.signal === "SKIP") ? 45_000 : 25_000;
+    const crossedBoundary = cached && (
+      (timeRemaining < 200 && cached.timeRemaining >= 200) ||
+      (timeRemaining < 120 && cached.timeRemaining >= 120)
     );
+    const cacheHit = cached &&
+      (Date.now() - cached.ts) < cacheMaxMs &&
+      Math.abs(gap - cached.gap) < gapThr &&
+      Math.abs(market.upPrice - cached.upPrice) < 0.03 &&
+      !crossedBoundary;
 
-    const sigEl = $(`#stat-${asset}-signals`);
-    if (sigEl) sigEl.textContent = String(parseInt(sigEl.textContent || "0") + 1);
+    let analysis;
+    if (cacheHit) {
+      analysis = cached.analysis;
+      logEntry("dim", `  → <span class="dim">↩ ${analysis.signal}</span> (cached ${Math.round((Date.now()-cached.ts)/1000)}s ago)`);
+    } else {
+      try {
+        analysis = await analyzeCryptoMarket(
+          market, { spot, candles, candles5m, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds }, c.anthropicKey, { model: c.model }, asset
+        );
+      } catch (err) {
+        logEntry("error", `  ${cfg.ticker} analysis failed: ${err.message}`);
+        continue;
+      }
+      aCache.set(market.conditionId, { ts: Date.now(), gap, upPrice: market.upPrice, timeRemaining, analysis });
+
+      const sigColor = analysis.signal === "BUY_UP" ? "green"
+                     : analysis.signal === "BUY_DOWN" ? "red" : "dim";
+      logEntry("info",
+        `  → <span class="${sigColor}">${analysis.signal}</span>  ` +
+        `Conf: ${analysis.confidence}  ` +
+        `Edge: ${(analysis.edge >= 0 ? "+" : "")}${(analysis.edge * 100).toFixed(1)}%  ` +
+        (analysis.momentumTrade ? `<span class="amber">⚡MOM</span>  ` : "") +
+        `| ${analysis.reasoning}`
+      );
+
+      const sigEl = $(`#stat-${asset}-signals`);
+      if (sigEl) sigEl.textContent = String(parseInt(sigEl.textContent || "0") + 1);
+    }
 
     const minEdge     = c[`${asset}MinEdge`] ?? 0.06;
     const minOdds     = (c.minEntryOdds ?? 32) / 100;   // raised from 10% — blocks low-odds entries where stop loss produces outsized losses
