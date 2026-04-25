@@ -637,12 +637,6 @@ const priceStream = (() => {
               const catastrophic = t.unrealizedPnl <= -t.amount * catThreshold;
               if (!catastrophic) return false;
             }
-            // HIGH confidence + high entry odds = near-certain binary outcome.
-            // e.g., entering DOWN at 83% — a 25% stop fires at 65%, but position resolves 99%.
-            // Price oscillates on correct-direction trades; only exit on true collapse (<35%).
-            if (t.confidence === "HIGH" && t.entryPrice > 0.70) {
-              return t.unrealizedPnl <= -t.amount * 0.65;
-            }
             // Gap-flip trades (signalAgainstGap=true) bet that price currently on the wrong side
             // of the target will cross before resolution. The prediction market token naturally
             // drops while the price approaches from the wrong direction — a 25% flat stop fires
@@ -656,6 +650,20 @@ const priceStream = (() => {
             const effectiveStop = t.totalSecs < 90  ? Math.max(baseStop, 0.40)  // near-res
                                 : t.totalSecs < 200 ? Math.max(baseStop, 0.32)  // short window
                                 : baseStop;
+            // High-entry-odds: widen stop to survive normal pre-resolution oscillation.
+            // At 90¢ entry a 25% stop fires at 67.5¢ — a routine 15¢ swing during final minutes.
+            // HIGH conf + >70%: full 65% protection (near-certain binary outcome).
+            // Any conf   + >80%: 50% floor — the crowd already says >80% likely, don't exit on noise.
+            // Any conf   + >70%: 40% floor — avoids the 25% stop clipping high-odds MEDIUM entries.
+            if (t.confidence === "HIGH" && t.entryPrice > 0.70) {
+              return t.unrealizedPnl <= -t.amount * Math.max(effectiveStop, 0.65);
+            }
+            if (t.entryPrice > 0.80) {
+              return t.unrealizedPnl <= -t.amount * Math.max(effectiveStop, 0.50);
+            }
+            if (t.entryPrice > 0.70) {
+              return t.unrealizedPnl <= -t.amount * Math.max(effectiveStop, 0.40);
+            }
             return t.unrealizedPnl <= -t.amount * effectiveStop;
           });
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
@@ -2183,15 +2191,15 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     // The CLOB depth check already guards bad fills — we don't need a hard odds ceiling here.
     const postDiscovery = entryOdds > 0.72;
 
+    if (autoMomentumTrade && !analysis.momentumTrade) {
+      logEntry("dim", `  ↳ <span class="amber">⚡MOM auto</span> — gap ${(stallGapPct * 100).toFixed(3)}% but effective gap ${(effectiveGapPct * 100).toFixed(3)}% (drift ${expectedDriftPts >= 0 ? "+" : ""}${expectedDriftPts.toFixed(2)}) — momentum trade bypass active`);
+    }
+
     // All entry decisions left to AI — only hard-block on concurrent position or exhausted budget.
     const qualifies =
       analysis.signal !== "SKIP" &&
       !assetPositionOpen &&
       state.stats.spent < c.maxDaily;
-
-    if (autoMomentumTrade && !analysis.momentumTrade) {
-      logEntry("dim", `  ↳ <span class="amber">⚡MOM auto</span> — gap ${(stallGapPct * 100).toFixed(3)}% but effective gap ${(effectiveGapPct * 100).toFixed(3)}% (drift ${expectedDriftPts >= 0 ? "+" : ""}${expectedDriftPts.toFixed(2)}) — momentum trade bypass active`);
-    }
 
     // Cross-window carry: a market closing with 65%+ odds and with-gap momentum is likely to
     // carry that direction into the next window (strike resets, crowd momentum persists).
@@ -2363,13 +2371,23 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
   const entryPrice = isUp ? market.upPrice   : market.downPrice;
   const tokenId    = isUp ? market.upTokenId : market.downTokenId;
 
-  // Bet sizing: use configured maxBet directly, floored at $1, capped at remaining budget.
+  // Bet sizing: scale by gap magnitude — small gaps carry less signal, so risk less.
+  // Reference gap (full bet): BTC $20, ETH $1.50, SOL $0.15, XRP $0.015.
+  // Below reference: bet scales linearly down to 25% floor. Above: full bet.
+  // This keeps trade frequency unchanged while right-sizing tiny-gap coin-flip risk.
   const maxBet = c[`${asset}MaxBet`] ?? c.btcMaxBet ?? 5;
   const budgetLeft = c.maxDaily - state.stats.spent;
-  let amount = Math.max(1.00, Math.min(maxBet, budgetLeft));
+  const gapRef = asset === "btc" ? 20 : asset === "eth" ? 1.5 : asset === "sol" ? 0.15 : 0.015;
+  const gapAbs = Math.abs(analysis.gap ?? 0);
+  const gapScale = gapRef > 0 ? Math.min(1, Math.max(0.25, gapAbs / gapRef)) : 1;
+  let amount = Math.max(1.00, Math.min(maxBet * gapScale, budgetLeft));
   if (budgetLeft < 1.00) {
     logEntry("dim", `  ↳ <span class="dim">skipped</span> — only $${budgetLeft.toFixed(2)} budget remaining (< $1 minimum)`);
     return;
+  }
+  if (gapScale < 1) {
+    const pd = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
+    logEntry("dim", `  ↳ <span class="dim">gap-scaled</span> — gap $${gapAbs.toFixed(pd)} vs ref $${gapRef} → ${Math.round(gapScale*100)}% bet ($${amount.toFixed(2)})`);
   }
 
   const tag      = c.dryRun ? "[SIM]" : "[LIVE]";
