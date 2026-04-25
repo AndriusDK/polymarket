@@ -1853,6 +1853,14 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     const updatedOdds = [{ up: market.upPrice, ts: Date.now() }, ...prevOdds].slice(0, 3);
     oddsHist.set(market.conditionId, updatedOdds);
 
+    // High-certainty skip: one side ≥90% means the market is essentially resolved —
+    // max gain is ≤10¢/$, CLOB books at these levels are always empty, and the AI
+    // would either SKIP or return a BUY that can't fill. Skip the API call entirely.
+    if (Math.max(market.upPrice, market.downPrice) >= 0.90) {
+      logEntry("dim", `  → <span class="dim">skip — ${(Math.max(market.upPrice, market.downPrice)*100).toFixed(1)}% certainty, no edge</span>`);
+      continue;
+    }
+
     // Analysis result cache: skip re-calling the AI when market conditions haven't
     // changed since the last cycle. WS price events re-trigger cycles every 7-15s on
     // active markets — without caching, a stagnant SKIP market burns one API call
