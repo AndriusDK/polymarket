@@ -2377,7 +2377,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
   // This keeps trade frequency unchanged while right-sizing tiny-gap coin-flip risk.
   const maxBet = c[`${asset}MaxBet`] ?? c.btcMaxBet ?? 5;
   const budgetLeft = c.maxDaily - state.stats.spent;
-  const gapRef = asset === "btc" ? 20 : asset === "eth" ? 1.5 : asset === "sol" ? 0.15 : 0.015;
+  // gapRef scales with maxBet so the useful range ($1 → maxBet) lines up with typical gaps.
+  // Multipliers: BTC×5, ETH×0.5, SOL×0.05, XRP×0.005 — so $2 maxBet → BTC ref $10, ETH ref $1.
+  const gapRefMult = asset === "btc" ? 5 : asset === "eth" ? 0.5 : asset === "sol" ? 0.05 : 0.005;
+  const gapRef = maxBet * gapRefMult;
   const gapAbs = Math.abs(analysis.gap ?? 0);
   const gapScale = gapRef > 0 ? Math.min(1, Math.max(0.25, gapAbs / gapRef)) : 1;
   let amount = Math.max(1.00, Math.min(maxBet * gapScale, budgetLeft));
@@ -2387,7 +2390,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
   }
   if (gapScale < 1) {
     const pd = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
-    logEntry("dim", `  ↳ <span class="dim">gap-scaled</span> — gap $${gapAbs.toFixed(pd)} vs ref $${gapRef} → ${Math.round(gapScale*100)}% bet ($${amount.toFixed(2)})`);
+    logEntry("dim", `  ↳ <span class="dim">gap-scaled</span> — gap $${gapAbs.toFixed(pd)} vs ref $${gapRef.toFixed(pd)} → ${Math.round(gapScale*100)}% bet ($${amount.toFixed(2)})`);
   }
 
   const tag      = c.dryRun ? "[SIM]" : "[LIVE]";
