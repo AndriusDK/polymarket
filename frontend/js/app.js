@@ -903,10 +903,15 @@ function closePosition(trade, reason) {
             logEntry("warn", `  [LIVE] SELL failed${label}: ${result.error}`);
             if (attempt < 2) {
               const delay = (attempt + 1) * 2000;
-              logEntry("warn", `  [LIVE] SELL retry in ${delay / 1000}s (no price limit)…`);
+              // Stop-loss: drop floor entirely (must exit at any price).
+              // All other exits: fall back to entry price as break-even floor so a
+              // transient API error doesn't cause the bot to dump a 97¢ share at 49¢.
+              const isStopLoss  = reason === "STOP LOSS";
+              const retryFloor  = isStopLoss ? undefined : trade.entryPrice;
+              const retryLabel  = isStopLoss ? "no price limit" : `floor ${((retryFloor ?? 0) * 100).toFixed(1)}%`;
+              logEntry("warn", `  [LIVE] SELL retry in ${delay / 1000}s (${retryLabel})…`);
               setTimeout(() => {
-                // Drop price limit on retry — must exit at any price
-                const retryPayload = { ...payload, entry_price: undefined };
+                const retryPayload = { ...payload, entry_price: retryFloor };
                 attemptSell(retryPayload, attempt + 1);
               }, delay);
             } else {
