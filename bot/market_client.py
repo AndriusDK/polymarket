@@ -13,7 +13,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 GAMMA_API = "https://gamma-api.polymarket.com"
-CLOB_API = "https://clob.polymarket.com"
+CLOB_API = "https://clob-v2.polymarket.com"  # V2 staging — revert to clob.polymarket.com after April 28 cutover
 
 
 @dataclass
