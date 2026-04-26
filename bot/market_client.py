@@ -84,11 +84,11 @@ class PolymarketClient:
             )
 
         try:
-            from py_clob_client.client import ClobClient
-            from py_clob_client.clob_types import ApiCreds
+            from py_clob_client_v2.client import ClobClient
+            from py_clob_client_v2.clob_types import ApiCreds
         except ImportError:
             raise RuntimeError(
-                "py-clob-client is not installed. Run: pip install py-clob-client"
+                "py-clob-client-v2 is not installed. Run: pip install py-clob-client-v2"
             )
 
         creds = ApiCreds(
@@ -98,7 +98,7 @@ class PolymarketClient:
         )
         self._clob_client = ClobClient(
             host=CLOB_API,
-            chain_id=137,  # Polygon mainnet
+            chain=137,  # Polygon mainnet (chain_id → chain in V2)
             key=self.private_key,
             creds=creds,
         )
@@ -255,10 +255,10 @@ class PolymarketClient:
             }
 
         try:
-            from py_clob_client.clob_types import MarketOrderArgs, OrderType, BalanceAllowanceParams, AssetType
-            from py_clob_client.order_builder.constants import BUY, SELL
+            from py_clob_client_v2.clob_types import MarketOrderArgs, OrderType, BalanceAllowanceParams, AssetType
+            from py_clob_client_v2.order_builder.constants import BUY, SELL
         except ImportError:
-            raise RuntimeError("py-clob-client is not installed.")
+            raise RuntimeError("py-clob-client-v2 is not installed.")
 
         client = self._get_clob_client()
 
