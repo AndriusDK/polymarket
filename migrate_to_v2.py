@@ -15,6 +15,7 @@ import sys
 
 # ── Addresses (from py_clob_client_v2.config.get_contract_config(137)) ────────
 PUSD                 = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"  # pUSD token
+COLLATERAL_ONRAMP    = "0x93070a847efEf7F70739046A929D47a521F5B8ee"  # CollateralOnramp
 V2_EXCHANGE          = "0xE111180000d2663C0091e4f400237545B87B996B"
 V2_NEG_RISK_EXCHANGE = "0xe2222d279d744050d28e00520010520000310F59"
 CTF_TOKEN            = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"  # unchanged in V2
@@ -40,22 +41,15 @@ ERC20_ABI = [
      "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view"},
 ]
 
-# Try wrap() and deposit() — different contracts use different names for the same operation
-WRAP_ABI = [
-    {"name": "wrap",    "type": "function",
-     "inputs": [{"name": "amount", "type": "uint256"}],
+# CollateralOnramp ABI — wrap(address _asset, address _to, uint256 _amount)
+ONRAMP_ABI = [
+    {"name": "wrap", "type": "function",
+     "inputs": [
+         {"name": "_asset",  "type": "address"},
+         {"name": "_to",     "type": "address"},
+         {"name": "_amount", "type": "uint256"},
+     ],
      "outputs": [], "stateMutability": "nonpayable"},
-    {"name": "deposit", "type": "function",
-     "inputs": [{"name": "amount", "type": "uint256"}],
-     "outputs": [], "stateMutability": "nonpayable"},
-]
-
-# View functions that might point to the Collateral Onramp address
-PROBE_ABI = [
-    {"name": "onramp",          "type": "function", "inputs": [], "outputs": [{"type": "address"}], "stateMutability": "view"},
-    {"name": "collateralOnramp","type": "function", "inputs": [], "outputs": [{"type": "address"}], "stateMutability": "view"},
-    {"name": "wrapper",         "type": "function", "inputs": [], "outputs": [{"type": "address"}], "stateMutability": "view"},
-    {"name": "minter",          "type": "function", "inputs": [], "outputs": [{"type": "address"}], "stateMutability": "view"},
 ]
 
 ERC1155_ABI = [
@@ -89,34 +83,28 @@ def send(w3, contract_fn, wallet, private_key, gas=150_000):
     return ok
 
 
-def try_wrap(w3, wallet, private_key, usdc_e_c, pusd_c, usdc_e_bal, onramp_addr):
-    """Try wrap() then deposit() on the given onramp_addr. Returns True if pUSD received."""
-    cs = w3.eth.to_checksum_address(onramp_addr)
+def do_wrap(w3, wallet, private_key, usdc_e_c, pusd_c, usdc_e_bal):
+    """Approve CollateralOnramp to spend USDC.e, then call wrap(_asset, _to, _amount)."""
+    onramp_cs = w3.eth.to_checksum_address(COLLATERAL_ONRAMP)
+    usdc_e_cs = w3.eth.to_checksum_address(USDC_E)
 
-    # Approve onramp to pull USDC.e
-    current = usdc_e_c.functions.allowance(wallet, cs).call()
+    current = usdc_e_c.functions.allowance(wallet, onramp_cs).call()
     if current < usdc_e_bal:
-        print(f"  Approving USDC.e → {cs[:10]}...", end=" ", flush=True)
-        ok = send(w3, usdc_e_c.functions.approve(cs, MAX_UINT256), wallet, private_key)
+        print("  Approving CollateralOnramp to spend USDC.e...", end=" ", flush=True)
+        ok = send(w3, usdc_e_c.functions.approve(onramp_cs, MAX_UINT256), wallet, private_key)
         if not ok:
             print("  ✗ Approval failed.")
             return False
+    else:
+        print("  ✓ CollateralOnramp allowance already set")
 
-    onramp = w3.eth.contract(address=cs, abi=WRAP_ABI)
-    for fn_name in ("wrap", "deposit"):
-        print(f"  Calling {fn_name}({usdc_e_bal / 1e6:.2f}) on {cs[:10]}...", end=" ", flush=True)
-        try:
-            fn = getattr(onramp.functions, fn_name)(usdc_e_bal)
-            ok = send(w3, fn, wallet, private_key, gas=250_000)
-            if ok:
-                new_pusd = pusd_c.functions.balanceOf(wallet).call()
-                print(f"  pUSD balance after {fn_name}: {new_pusd / 1e6:.2f}")
-                return True
-            else:
-                print(f"  {fn_name}() reverted, trying next...")
-        except Exception as e:
-            print(f"✗ ({e})")
-    return False
+    onramp = w3.eth.contract(address=onramp_cs, abi=ONRAMP_ABI)
+    print(f"  Calling wrap(USDC.e, {wallet[:10]}, {usdc_e_bal / 1e6:.2f})...", end=" ", flush=True)
+    ok = send(w3, onramp.functions.wrap(usdc_e_cs, wallet, usdc_e_bal), wallet, private_key, gas=250_000)
+    if ok:
+        new_pusd = pusd_c.functions.balanceOf(wallet).call()
+        print(f"  pUSD balance after wrap: {new_pusd / 1e6:.2f}")
+    return ok
 
 
 def migrate(private_key: str):
@@ -162,37 +150,8 @@ def migrate(private_key: str):
     # ── Step 1: Wrap USDC.e → pUSD ────────────────────────────────────────────
     print("── Step 1: Wrap USDC.e → pUSD ──────────────────────────────────────")
     if usdc_e_bal > 0:
-        # Probe pUSD contract for a view fn that returns the real Collateral Onramp address
-        onramp_addr = None
-        probe = w3.eth.contract(address=w3.eth.to_checksum_address(PUSD), abi=PROBE_ABI)
-        for fn_name in ("onramp", "collateralOnramp", "wrapper", "minter"):
-            try:
-                addr = getattr(probe.functions, fn_name)().call()
-                if addr and addr != "0x" + "0" * 40:
-                    print(f"  Found Collateral Onramp via {fn_name}(): {addr}")
-                    onramp_addr = addr
-                    break
-            except Exception:
-                pass
-
-        # Try wrapping via discovered onramp, then fall back to pUSD address itself
-        candidates = ([onramp_addr] if onramp_addr else []) + [PUSD]
-        wrapped = False
-        for addr in candidates:
-            print(f"  Trying onramp at {addr}...")
-            if try_wrap(w3, wallet, private_key, usdc_e_c, pusd_c, usdc_e_bal, addr):
-                wrapped = True
-                break
-
-        if not wrapped:
-            print()
-            print("  ✗ Could not wrap USDC.e → pUSD automatically.")
-            print("  The Collateral Onramp address is not exposed by the SDK.")
-            print("  Options:")
-            print("  A) Check Polymarket Discord for the Collateral Onramp contract address,")
-            print("     then add it to this script as ONRAMP and re-run.")
-            print("  B) Wait until April 28 cutover — Polymarket UI handles wrapping on login.")
-            print("  Continuing with pUSD approvals (wrap manually before trading).")
+        print(f"  Wrapping {usdc_e_bal / 1e6:.2f} USDC.e via CollateralOnramp ({COLLATERAL_ONRAMP[:10]}...)")
+        do_wrap(w3, wallet, private_key, usdc_e_c, pusd_c, usdc_e_bal)
     elif pusd_bal > 0:
         print(f"  Already holding {pusd_bal / 1e6:.2f} pUSD — no wrap needed.")
     else:
