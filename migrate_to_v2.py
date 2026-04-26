@@ -85,8 +85,8 @@ def send(w3, contract_fn, wallet, private_key, gas=150_000):
 
 def do_wrap(w3, wallet, private_key, usdc_e_c, pusd_c, usdc_e_bal):
     """Approve CollateralOnramp to spend USDC.e, then call wrap(_asset, _to, _amount)."""
-    onramp_cs = w3.eth.to_checksum_address(COLLATERAL_ONRAMP)
-    usdc_e_cs = w3.eth.to_checksum_address(USDC_E)
+    onramp_cs = Web3.to_checksum_address(COLLATERAL_ONRAMP)
+    usdc_e_cs = Web3.to_checksum_address(USDC_E)
 
     current = usdc_e_c.functions.allowance(wallet, onramp_cs).call()
     if current < usdc_e_bal:
@@ -133,8 +133,8 @@ def migrate(private_key: str):
     wallet  = account.address
     print(f"Wallet : {wallet}\n")
 
-    usdc_e_c = w3.eth.contract(address=w3.eth.to_checksum_address(USDC_E), abi=ERC20_ABI)
-    pusd_c   = w3.eth.contract(address=w3.eth.to_checksum_address(PUSD),   abi=ERC20_ABI)
+    usdc_e_c = w3.eth.contract(address=Web3.to_checksum_address(USDC_E), abi=ERC20_ABI)
+    pusd_c   = w3.eth.contract(address=Web3.to_checksum_address(PUSD),   abi=ERC20_ABI)
 
     usdc_e_bal = usdc_e_c.functions.balanceOf(wallet).call()
     pusd_bal   = pusd_c.functions.balanceOf(wallet).call()
@@ -165,7 +165,7 @@ def migrate(private_key: str):
         ("V2 Neg Risk Exchange", V2_NEG_RISK_EXCHANGE),
     ]
     for name, spender in v2_contracts:
-        cs      = w3.eth.to_checksum_address(spender)
+        cs      = Web3.to_checksum_address(spender)
         current = pusd_c.functions.allowance(wallet, cs).call()
         if current >= 10**18:
             print(f"  ✓ {name}: already approved")
@@ -176,9 +176,9 @@ def migrate(private_key: str):
 
     # ── Step 3: ERC1155 setApprovalForAll (needed for SELL orders) ───────────
     print("── Step 3: ERC1155 approvals for V2 exchanges ───────────────────────")
-    ctf = w3.eth.contract(address=w3.eth.to_checksum_address(CTF_TOKEN), abi=ERC1155_ABI)
+    ctf = w3.eth.contract(address=Web3.to_checksum_address(CTF_TOKEN), abi=ERC1155_ABI)
     for name, addr in v2_contracts:
-        cs = w3.eth.to_checksum_address(addr)
+        cs = Web3.to_checksum_address(addr)
         if ctf.functions.isApprovedForAll(wallet, cs).call():
             print(f"  ✓ {name}: ERC1155 already approved")
             continue
