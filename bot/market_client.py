@@ -98,7 +98,7 @@ class PolymarketClient:
         )
         self._clob_client = ClobClient(
             host=CLOB_API,
-            chain=137,  # Polygon mainnet (chain_id → chain in V2)
+            chain_id=137,  # Polygon mainnet
             key=self.private_key,
             creds=creds,
         )
