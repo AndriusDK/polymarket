@@ -1028,6 +1028,17 @@ function closePosition(trade, reason) {
     `;
     card.insertBefore(strip, card.firstChild);
 
+    // Freeze price values: refreshBtcCards() runs after this trade is removed from
+    // state.trades, so it never writes the WS bid that triggered the close to the DOM.
+    // Snapshot currentPrice/peakPrice explicitly here so EXIT and PEAK show the real values.
+    const tpEl   = $(`#tp-${trade.id}`);
+    const peakEl = $(`#peak-${trade.id}`);
+    if (tpEl)   tpEl.textContent   = (trade.currentPrice * 100).toFixed(1) + "%";
+    if (peakEl) {
+      peakEl.textContent = (trade.peakPrice * 100).toFixed(1) + "%";
+      peakEl.className   = trade.peakPrice > trade.entryPrice + 0.005 ? "btc-v green" : "btc-v dim";
+    }
+
     // Flip CURRENT label → EXIT so the frozen value is clearly the exit price
     const clabel = $(`#clabel-${trade.id}`);
     if (clabel) clabel.textContent = "EXIT";
