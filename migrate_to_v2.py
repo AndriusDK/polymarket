@@ -6,7 +6,7 @@ Run BEFORE April 28, 2026 (~11:00 UTC) cutover:
     venv/bin/python migrate_to_v2.py <private_key>
 
 Steps performed:
-  1. Wrap all USDC.e → pUSD via the Collateral Onramp (wrap() on pUSD contract)
+  1. Wrap all USDC.e → pUSD via the Collateral Onramp
   2. Approve V2 Exchange + V2 Neg Risk Exchange to spend pUSD
   3. Set ERC1155 approvals for V2 contracts (required for SELL orders)
 """
@@ -14,11 +14,10 @@ Steps performed:
 import sys
 
 # ── Addresses (from py_clob_client_v2.config.get_contract_config(137)) ────────
-PUSD                 = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"  # pUSD token / Collateral Onramp
+PUSD                 = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"  # pUSD token
 V2_EXCHANGE          = "0xE111180000d2663C0091e4f400237545B87B996B"
 V2_NEG_RISK_EXCHANGE = "0xe2222d279d744050d28e00520010520000310F59"
 CTF_TOKEN            = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"  # unchanged in V2
-
 USDC_E               = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # old collateral
 
 POLYGON_RPCS = [
@@ -41,10 +40,22 @@ ERC20_ABI = [
      "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view"},
 ]
 
+# Try wrap() and deposit() — different contracts use different names for the same operation
 WRAP_ABI = [
-    {"name": "wrap", "type": "function",
+    {"name": "wrap",    "type": "function",
      "inputs": [{"name": "amount", "type": "uint256"}],
      "outputs": [], "stateMutability": "nonpayable"},
+    {"name": "deposit", "type": "function",
+     "inputs": [{"name": "amount", "type": "uint256"}],
+     "outputs": [], "stateMutability": "nonpayable"},
+]
+
+# View functions that might point to the Collateral Onramp address
+PROBE_ABI = [
+    {"name": "onramp",          "type": "function", "inputs": [], "outputs": [{"type": "address"}], "stateMutability": "view"},
+    {"name": "collateralOnramp","type": "function", "inputs": [], "outputs": [{"type": "address"}], "stateMutability": "view"},
+    {"name": "wrapper",         "type": "function", "inputs": [], "outputs": [{"type": "address"}], "stateMutability": "view"},
+    {"name": "minter",          "type": "function", "inputs": [], "outputs": [{"type": "address"}], "stateMutability": "view"},
 ]
 
 ERC1155_ABI = [
@@ -59,7 +70,13 @@ ERC1155_ABI = [
 MAX_UINT256 = 2**256 - 1
 
 
-def send(w3, contract_fn, wallet, private_key, nonce, gas=150_000):
+def fresh_nonce(w3, wallet):
+    """Always read nonce from chain — avoids stale-nonce bugs after reverts."""
+    return w3.eth.get_transaction_count(wallet)
+
+
+def send(w3, contract_fn, wallet, private_key, gas=150_000):
+    nonce = fresh_nonce(w3, wallet)
     tx = contract_fn.build_transaction({
         "from": wallet, "nonce": nonce,
         "gas": gas, "gasPrice": w3.eth.gas_price, "chainId": 137,
@@ -70,6 +87,36 @@ def send(w3, contract_fn, wallet, private_key, nonce, gas=150_000):
     ok = receipt.status == 1
     print(f"{'✓' if ok else '✗'} ({tx_hash.hex()})")
     return ok
+
+
+def try_wrap(w3, wallet, private_key, usdc_e_c, pusd_c, usdc_e_bal, onramp_addr):
+    """Try wrap() then deposit() on the given onramp_addr. Returns True if pUSD received."""
+    cs = w3.eth.to_checksum_address(onramp_addr)
+
+    # Approve onramp to pull USDC.e
+    current = usdc_e_c.functions.allowance(wallet, cs).call()
+    if current < usdc_e_bal:
+        print(f"  Approving USDC.e → {cs[:10]}...", end=" ", flush=True)
+        ok = send(w3, usdc_e_c.functions.approve(cs, MAX_UINT256), wallet, private_key)
+        if not ok:
+            print("  ✗ Approval failed.")
+            return False
+
+    onramp = w3.eth.contract(address=cs, abi=WRAP_ABI)
+    for fn_name in ("wrap", "deposit"):
+        print(f"  Calling {fn_name}({usdc_e_bal / 1e6:.2f}) on {cs[:10]}...", end=" ", flush=True)
+        try:
+            fn = getattr(onramp.functions, fn_name)(usdc_e_bal)
+            ok = send(w3, fn, wallet, private_key, gas=250_000)
+            if ok:
+                new_pusd = pusd_c.functions.balanceOf(wallet).call()
+                print(f"  pUSD balance after {fn_name}: {new_pusd / 1e6:.2f}")
+                return True
+            else:
+                print(f"  {fn_name}() reverted, trying next...")
+        except Exception as e:
+            print(f"✗ ({e})")
+    return False
 
 
 def migrate(private_key: str):
@@ -98,8 +145,8 @@ def migrate(private_key: str):
     wallet  = account.address
     print(f"Wallet : {wallet}\n")
 
-    usdc_e_c = w3.eth.contract(address=Web3.to_checksum_address(USDC_E), abi=ERC20_ABI)
-    pusd_c   = w3.eth.contract(address=Web3.to_checksum_address(PUSD),   abi=ERC20_ABI)
+    usdc_e_c = w3.eth.contract(address=w3.eth.to_checksum_address(USDC_E), abi=ERC20_ABI)
+    pusd_c   = w3.eth.contract(address=w3.eth.to_checksum_address(PUSD),   abi=ERC20_ABI)
 
     usdc_e_bal = usdc_e_c.functions.balanceOf(wallet).call()
     pusd_bal   = pusd_c.functions.balanceOf(wallet).call()
@@ -112,46 +159,44 @@ def migrate(private_key: str):
     if matic_bal < int(0.01 * 1e18):
         print("WARNING: Low MATIC — you may not have enough gas. Top up the wallet first.\n")
 
-    nonce = w3.eth.get_transaction_count(wallet)
-
     # ── Step 1: Wrap USDC.e → pUSD ────────────────────────────────────────────
     print("── Step 1: Wrap USDC.e → pUSD ──────────────────────────────────────")
     if usdc_e_bal > 0:
-        print(f"  Wrapping {usdc_e_bal / 1e6:.2f} USDC.e → pUSD")
+        # Probe pUSD contract for a view fn that returns the real Collateral Onramp address
+        onramp_addr = None
+        probe = w3.eth.contract(address=w3.eth.to_checksum_address(PUSD), abi=PROBE_ABI)
+        for fn_name in ("onramp", "collateralOnramp", "wrapper", "minter"):
+            try:
+                addr = getattr(probe.functions, fn_name)().call()
+                if addr and addr != "0x" + "0" * 40:
+                    print(f"  Found Collateral Onramp via {fn_name}(): {addr}")
+                    onramp_addr = addr
+                    break
+            except Exception:
+                pass
 
-        allowance = usdc_e_c.functions.allowance(wallet, Web3.to_checksum_address(PUSD)).call()
-        if allowance < usdc_e_bal:
-            print("  Approving USDC.e spend by pUSD contract...", end=" ", flush=True)
-            ok = send(w3, usdc_e_c.functions.approve(Web3.to_checksum_address(PUSD), MAX_UINT256),
-                      wallet, private_key, nonce)
-            if ok:
-                nonce += 1
-            else:
-                print("  ✗ Approval failed — aborting wrap. Check wallet/gas and retry.")
-                sys.exit(1)
-        else:
-            print("  ✓ USDC.e allowance already set")
+        # Try wrapping via discovered onramp, then fall back to pUSD address itself
+        candidates = ([onramp_addr] if onramp_addr else []) + [PUSD]
+        wrapped = False
+        for addr in candidates:
+            print(f"  Trying onramp at {addr}...")
+            if try_wrap(w3, wallet, private_key, usdc_e_c, pusd_c, usdc_e_bal, addr):
+                wrapped = True
+                break
 
-        onramp = w3.eth.contract(address=Web3.to_checksum_address(PUSD), abi=WRAP_ABI)
-        print(f"  Calling wrap({usdc_e_bal / 1e6:.2f} USDC.e)...", end=" ", flush=True)
-        try:
-            ok = send(w3, onramp.functions.wrap(usdc_e_bal), wallet, private_key, nonce, gas=200_000)
-            if ok:
-                nonce += 1
-                new_pusd = pusd_c.functions.balanceOf(wallet).call()
-                print(f"  pUSD balance after wrap: {new_pusd / 1e6:.2f}")
-            else:
-                print("  ✗ wrap() reverted. The Collateral Onramp may be at a different address.")
-                print("    → Check https://docs.polymarket.com for the onramp contract address.")
-                print("    → Continuing with approvals (wrap manually, then re-run).\n")
-        except Exception as e:
-            print(f"✗  wrap() failed: {e}")
-            print("    → The pUSD contract may not be the Collateral Onramp.")
-            print("    → Check https://docs.polymarket.com for the onramp address and wrap manually.\n")
+        if not wrapped:
+            print()
+            print("  ✗ Could not wrap USDC.e → pUSD automatically.")
+            print("  The Collateral Onramp address is not exposed by the SDK.")
+            print("  Options:")
+            print("  A) Check Polymarket Discord for the Collateral Onramp contract address,")
+            print("     then add it to this script as ONRAMP and re-run.")
+            print("  B) Wait until April 28 cutover — Polymarket UI handles wrapping on login.")
+            print("  Continuing with pUSD approvals (wrap manually before trading).")
     elif pusd_bal > 0:
-        print(f"  No USDC.e to wrap — already holding {pusd_bal / 1e6:.2f} pUSD, skipping.")
+        print(f"  Already holding {pusd_bal / 1e6:.2f} pUSD — no wrap needed.")
     else:
-        print("  WARNING: No USDC.e and no pUSD — fund your wallet before April 28.")
+        print("  WARNING: No USDC.e and no pUSD — fund the wallet before trading on V2.")
     print()
 
     # ── Step 2: Approve V2 exchanges to spend pUSD ───────────────────────────
@@ -161,33 +206,31 @@ def migrate(private_key: str):
         ("V2 Neg Risk Exchange", V2_NEG_RISK_EXCHANGE),
     ]
     for name, spender in v2_contracts:
-        cs      = Web3.to_checksum_address(spender)
+        cs      = w3.eth.to_checksum_address(spender)
         current = pusd_c.functions.allowance(wallet, cs).call()
         if current >= 10**18:
             print(f"  ✓ {name}: already approved")
             continue
         print(f"  Approving {name}...", end=" ", flush=True)
-        ok = send(w3, pusd_c.functions.approve(cs, MAX_UINT256), wallet, private_key, nonce)
-        if ok:
-            nonce += 1
+        send(w3, pusd_c.functions.approve(cs, MAX_UINT256), wallet, private_key)
     print()
 
     # ── Step 3: ERC1155 setApprovalForAll (needed for SELL orders) ───────────
     print("── Step 3: ERC1155 approvals for V2 exchanges ───────────────────────")
-    ctf = w3.eth.contract(address=Web3.to_checksum_address(CTF_TOKEN), abi=ERC1155_ABI)
+    ctf = w3.eth.contract(address=w3.eth.to_checksum_address(CTF_TOKEN), abi=ERC1155_ABI)
     for name, addr in v2_contracts:
-        cs = Web3.to_checksum_address(addr)
+        cs = w3.eth.to_checksum_address(addr)
         if ctf.functions.isApprovedForAll(wallet, cs).call():
             print(f"  ✓ {name}: ERC1155 already approved")
             continue
         print(f"  Setting ERC1155 approval for {name}...", end=" ", flush=True)
-        ok = send(w3, ctf.functions.setApprovalForAll(cs, True), wallet, private_key, nonce)
-        if ok:
-            nonce += 1
+        send(w3, ctf.functions.setApprovalForAll(cs, True), wallet, private_key)
     print()
 
-    print("Migration complete. Wallet is ready for Polymarket CLOB V2.")
-    print("Restart the trade server after the April 28 cutover: venv/bin/python server.py")
+    pusd_final = pusd_c.functions.balanceOf(wallet).call()
+    usdc_e_final = usdc_e_c.functions.balanceOf(wallet).call()
+    print(f"Final balances — USDC.e: {usdc_e_final / 1e6:.2f}  pUSD: {pusd_final / 1e6:.2f}")
+    print("Done. Restart the trade server after the April 28 cutover.")
 
 
 if __name__ == "__main__":
