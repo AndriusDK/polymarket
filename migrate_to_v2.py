@@ -13,6 +13,13 @@ Steps performed:
 
 import sys
 
+try:
+    from web3 import Web3
+    from eth_account import Account
+except ImportError:
+    print("ERROR: web3 not installed. Run: venv/bin/pip install web3")
+    sys.exit(1)
+
 # ── Addresses (from py_clob_client_v2.config.get_contract_config(137)) ────────
 PUSD                 = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"  # pUSD token
 COLLATERAL_ONRAMP    = "0x93070a847efEf7F70739046A929D47a521F5B8ee"  # CollateralOnramp
@@ -108,13 +115,6 @@ def do_wrap(w3, wallet, private_key, usdc_e_c, pusd_c, usdc_e_bal):
 
 
 def migrate(private_key: str):
-    try:
-        from web3 import Web3
-        from eth_account import Account
-    except ImportError:
-        print("ERROR: web3 not installed. Run: venv/bin/pip install web3")
-        sys.exit(1)
-
     w3 = None
     for rpc in POLYGON_RPCS:
         try:
