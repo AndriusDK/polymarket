@@ -117,7 +117,8 @@ const PERSIST_FIELDS = [
   ["xrp-min-edge",        "value"],
   ["xrp-mode-toggle",     "checked"],
   ["fok-toggle",          "checked"],
-  ["entry-window-pct",    "value"],
+  ["entry-window-pct-5m",  "value"],
+  ["entry-window-pct-15m", "value"],
 ];
 
 function saveSettings() {
@@ -204,7 +205,8 @@ function initSetup() {
       xrpMaxBet:     parseFloat($("#xrp-max-bet")?.value) || 5,
       xrpMinEdge:    parseFloat($("#xrp-min-edge")?.value) || 0.04,
       startupCooldown:  parseInt($("#startup-cooldown")?.value) || 90,
-      entryWindowPct:   parseFloat($("#entry-window-pct")?.value ?? 50) / 100,
+      entryWindowPct5m:  parseFloat($("#entry-window-pct-5m")?.value  ?? 45) / 100,
+      entryWindowPct15m: parseFloat($("#entry-window-pct-15m")?.value ?? 30) / 100,
       slippageCents:    parseFloat($("#slippage-cents")?.value ?? 10),
       useFOK:           $("#fok-toggle")?.checked ?? true,
     };
@@ -1592,7 +1594,8 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
       const mm       = market.question.match(/(\d+:\d+)(AM|PM)-(\d+:\d+)(AM|PM)/i);
       const toMin    = (hhmm, ampm) => { let [h, m] = hhmm.split(":").map(Number); if (ampm.toUpperCase()==="PM"&&h!==12) h+=12; if (ampm.toUpperCase()==="AM"&&h===12) h=0; return h*60+m; };
       const wMs      = ((toMin(mm[3], mm[4]) - toMin(mm[1], mm[2]) + 1440) % 1440) * 60_000;
-      const entryPct = c.entryWindowPct ?? 0.50;
+      const is15mWin = wMs > 400_000;
+      const entryPct = is15mWin ? (c.entryWindowPct15m ?? 0.30) : (c.entryWindowPct5m ?? 0.45);
       const gateMs   = new Date(market.endDate).getTime() - wMs * entryPct;
       const waitMs   = gateMs - Date.now() + 300;   // +300ms lets Gamma flip the market to open
       if (waitMs > 500 && waitMs < 30 * 60_000 && !state[asset].scheduledOpens.has(market.conditionId)) {
@@ -1842,7 +1845,8 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     {
       const wAge         = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
       const totWinSecs   = wAge / 1000 + timeRemaining;
-      const maxEntryPct  = c.entryWindowPct ?? 0.50;
+      const is15m        = totWinSecs > 400;
+      const maxEntryPct  = is15m ? (c.entryWindowPct15m ?? 0.30) : (c.entryWindowPct5m ?? 0.45);
       const pctRemaining = totWinSecs > 0 ? timeRemaining / totWinSecs : 0;
       if (pctRemaining > maxEntryPct) {
         // Keep market in gapWatch so it stays in `fresh` next cycle.
