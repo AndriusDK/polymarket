@@ -961,6 +961,10 @@ function closePosition(trade, reason) {
                     }
                   }
                 }
+                // Patch the tradeHistory record so the hourly chart reflects actual fill
+                const histEntry = state.tradeHistory.findLast(h => h.tradeId === trade.id);
+                if (histEntry) histEntry.pnl = actualRealized;
+
                 updatePnlStat();
                 logEntry("info", `  [LIVE] PnL reconciled from fill: $${actualRealized.toFixed(2)} (was $${prevRealized.toFixed(2)})`);
               }
@@ -1014,7 +1018,7 @@ function closePosition(trade, reason) {
   trade.realizedPnl = realized;  // stored so SELL fill reconciliation can update it
   state.realizedPnl = (state.realizedPnl || 0) + realized;
   if (realized > 0) state.wins++; else if (realized < 0) state.losses++;
-  state.tradeHistory.push({ ts: Date.now(), pnl: realized, asset: trade.type, reason });
+  state.tradeHistory.push({ ts: Date.now(), pnl: realized, asset: trade.type, reason, tradeId: trade.id });
 
   const card = $(`#card-${trade.id}`);
   if (card) {
