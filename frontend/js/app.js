@@ -398,6 +398,7 @@ function addCryptoCard(trade) {
       <div class="btc-card-badges">
         <span class="btc-badge ${assetClass}">${ticker}</span>
         <span class="btc-badge ${modeClass}">${trade.mode}</span>
+        <span class="btc-badge dim">${trade.totalSecs > 400 ? "15-min" : "5-min"}</span>
         <span class="btc-card-cd ${secsLeft < 60 ? "urgent" : ""}" id="cd-${trade.id}">[${secsLeft}s]</span>
       </div>
     </div>
