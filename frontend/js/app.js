@@ -594,6 +594,7 @@ const priceStream = (() => {
         let changed = false;
         for (const t of state.trades) {
           if (t.tokenId !== tokenId) continue;
+          if (!t.confirmed) continue;  // order not yet filled — don't pollute PnL
           t.currentPrice  = bid;
           t.unrealizedPnl = t.shares * bid - t.amount;
           if (bid > t.peakPrice) t.peakPrice = bid;
@@ -2747,6 +2748,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
+          updatePnlStat();
           const isEmptyBook = typeof result.error === "string" && result.error.includes("no orders found");
           if (isEmptyBook && conditionId) {
             const snap = state[asset].analyzed.get(conditionId);
@@ -2783,6 +2785,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
           setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
           setStat("positions", String(state.trades.length));
+          updatePnlStat();
           logEntry("warn", `  [LIVE] FAK: 0 shares filled (book too thin at ≤${((entryPrice+slippageCap)*100).toFixed(0)}¢ cap) — no position opened`);
           if (conditionId) {
             const snap = state[asset].analyzed.get(conditionId);
