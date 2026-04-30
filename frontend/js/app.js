@@ -398,7 +398,7 @@ function addCryptoCard(trade) {
       <div class="btc-card-badges">
         <span class="btc-badge ${assetClass}">${ticker}</span>
         <span class="btc-badge ${modeClass}">${trade.mode}</span>
-        <span class="btc-badge dim">${trade.totalSecs > 400 ? "15-min" : "5-min"}</span>
+        <span class="btc-badge dim">${(trade.windowSecs ?? trade.totalSecs) > 400 ? "15-min" : "5-min"}</span>
         <span class="btc-card-cd ${secsLeft < 60 ? "urgent" : ""}" id="cd-${trade.id}">[${secsLeft}s]</span>
       </div>
     </div>
@@ -2515,7 +2515,8 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
                       (analysis.signal === "BUY_DOWN" && (analysis.gap ?? 0) > 0), // gap-flip?
     earlyWindow:     windowAge < 60_000,  // FAK on early books: prices volatile until book settles
     priceHistory:    [],
-    totalSecs:       secsLeft,
+    totalSecs:       secsLeft,            // time remaining at entry — used by stop-loss tiers
+    windowSecs:      windowAge < Infinity ? Math.round(windowAge / 1000) + secsLeft : secsLeft,  // total market window — badge detection
     entryTime:       Date.now(),
     entryVolume:     market.volume ?? null,
     marketUrl,
