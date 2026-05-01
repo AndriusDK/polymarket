@@ -1706,6 +1706,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
           // a second early re-check at 35s so fast-developing gaps are caught quickly.
           pendSnap.firstSeenAt = Date.now();
           pendSnap.checkCount  = 0;
+          pendSnap.lastLoggedAt = Date.now();
           if (!state[asset].pendingCheckTimer) {
             state[asset].pendingCheckTimer = setTimeout(() => {
               state[asset].pendingCheckTimer = null;
@@ -1717,8 +1718,13 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
           logEntry("dim", `  → gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} (first check) — observing, early re-checks at ~15s and ~35s`);
         } else {
           pendSnap.checkCount = (pendSnap.checkCount ?? 0) + 1;
-          const elapsed = Math.round((Date.now() - (pendSnap.firstSeenAt ?? Date.now())) / 1000);
-          logEntry("dim", `  → gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} (re-check #${pendSnap.checkCount} at ${elapsed}s) — still watching, next check ~30s`);
+          // Throttle: only log once every 10s — WS events fire the cycle on every tick
+          const sinceLog = Date.now() - (pendSnap.lastLoggedAt ?? 0);
+          if (sinceLog >= 10_000) {
+            pendSnap.lastLoggedAt = Date.now();
+            const elapsed = Math.round((Date.now() - (pendSnap.firstSeenAt ?? Date.now())) / 1000);
+            logEntry("dim", `  → gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} (re-check #${pendSnap.checkCount} at ${elapsed}s) — still watching`);
+          }
         }
       }
       continue;
