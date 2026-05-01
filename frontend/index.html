@@ -119,25 +119,31 @@
           <input type="number" id="min-market-volume" class="neon-input" value="500" min="0" step="50" title="Skip markets with total volume below this threshold (OR velocity ≥ $10/min passes regardless)" />
         </div>
         <div>
-          <label class="field-label">Min Gap % (0 = off)</label>
-          <input type="number" id="min-gap-pct" class="neon-input" value="0" min="0" max="1" step="0.01" title="Minimum price gap as % of spot before analysis runs. 0 disables the filter entirely." />
+          <label class="field-label">Min Entry Odds (%)</label>
+          <input type="number" id="min-entry-odds" class="neon-input" value="10" min="5" max="49" step="1" title="Skip trade if the chosen side is already priced below this % (avoids betting into overwhelming market consensus)" />
         </div>
       </div>
       <div class="row-2">
         <div>
-          <label class="field-label">Min Entry Odds (%)</label>
-          <input type="number" id="min-entry-odds" class="neon-input" value="10" min="5" max="49" step="1" title="Skip trade if the chosen side is already priced below this % (avoids betting into overwhelming market consensus)" />
+          <label class="field-label">BTC Min Gap $ (0 = off)</label>
+          <input type="number" id="min-gap-btc" class="neon-input" value="0" min="0" step="1" title="Minimum BTC price gap in dollars before analysis runs. 0 disables the filter." />
         </div>
+        <div>
+          <label class="field-label">ETH Min Gap $ (0 = off)</label>
+          <input type="number" id="min-gap-eth" class="neon-input" value="0" min="0" step="0.5" title="Minimum ETH price gap in dollars before analysis runs. 0 disables the filter." />
+        </div>
+      </div>
+      <div class="row-2">
         <div>
           <label class="field-label">Max Entry Odds (%)</label>
           <input type="number" id="max-entry-odds" class="neon-input" value="92" min="50" max="99" step="1" title="Skip trade if the chosen side is already priced above this % — avoids terrible risk/reward (e.g. buying at 97% has max gain of 3¢ but full downside risk)" />
         </div>
-      </div>
-      <div class="row-2">
         <div>
           <label class="field-label">Startup Cooldown (s)</label>
           <input type="number" id="startup-cooldown" class="neon-input" value="90" min="0" max="300" step="10" title="Observe markets for this many seconds after launch before placing any trades — avoids jumping into already-running markets" />
         </div>
+      </div>
+      <div class="row-2">
         <div>
           <label class="field-label">Entry Gate — 5-min markets (% remaining) <span class="hint">e.g. 45 = enter when ≤2m 15s left</span></label>
           <input type="number" id="entry-window-pct-5m" class="neon-input" value="45" min="10" max="90" step="5" title="5-minute markets: only enter when at most this % of the window remains. 45% = enter with ≤2m 15s left." />

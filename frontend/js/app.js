@@ -100,7 +100,8 @@ const PERSIST_FIELDS = [
   ["markets-count",       "value"],
   ["take-profit-pct",     "value"],
   ["min-market-volume",   "value"],
-  ["min-gap-pct",         "value"],
+  ["min-gap-btc",         "value"],
+  ["min-gap-eth",         "value"],
   ["min-entry-odds",      "value"],
   ["max-entry-odds",      "value"],
   ["dry-run-toggle",      "checked"],
@@ -189,7 +190,8 @@ function initSetup() {
       takeProfitPct:    parseFloat($("#take-profit-pct")?.value) || 50,
       stopLossPct:      parseFloat($("#stop-loss-pct")?.value)   || 25,
       minMarketVolume:  parseFloat($("#min-market-volume")?.value) || 1000,
-      minGapPct:        parseFloat($("#min-gap-pct")?.value ?? ""),   // 0 = disabled
+      minGapBtc:        parseFloat($("#min-gap-btc")?.value ?? ""),   // 0 = disabled
+      minGapEth:        parseFloat($("#min-gap-eth")?.value ?? ""),   // 0 = disabled
       minEntryOdds:     parseFloat($("#min-entry-odds")?.value)    || 10,
       maxEntryOdds:     parseFloat($("#max-entry-odds")?.value)    || 87,
       btcMode:       $("#btc-mode-toggle")?.checked ?? false,
@@ -1683,18 +1685,15 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     const gap = spot - priceToBeat;
 
     // Skip near-zero gaps — noise floor depends on price source.
-    // When Chainlink supplies both spot and priceToBeat the delta is ~0, so 0.01% is enough.
-    // Fall back to 0.05% when either value came from Binance (0.07-0.10% inter-source noise).
-    // If minGapPct is explicitly set (including 0 = fully disabled), that overrides auto value.
+    // Per-asset dollar thresholds (from UI); 0 = fully disabled.
+    // Auto-floor: 0.01% of spot for Chainlink, 0.05% for Binance (inter-source noise).
     const usingChainlink = state.chainlinkPrices[asset] != null &&
                            storedData?.chainlinkPriceToBeat != null;
-    // Use !isNaN so that 0 means "user explicitly disabled" (not "not configured").
-    // With > 0 check, typing 0 fell through to autoGap — filter never truly turned off.
-    const configGap = !isNaN(c.minGapPct) ? c.minGapPct / 100 : null;
-    const autoGap   = usingChainlink ? 0.0001 : 0.0005;
-    const minGapFrac = configGap ?? autoGap;
-    if (minGapFrac > 0 && Math.abs(gap) < spot * minGapFrac) {
-      const minGap = spot * minGapFrac;
+    const configGapDollar = asset === "btc" ? c.minGapBtc : c.minGapEth;
+    const autoGapDollar   = spot * (usingChainlink ? 0.0001 : 0.0005);
+    // !isNaN + > 0: 0 in the field means "user explicitly disabled"
+    const minGap = (!isNaN(configGapDollar) && configGapDollar > 0) ? configGapDollar : autoGapDollar;
+    if (minGap > 0 && Math.abs(gap) < minGap) {
       if (timeRemaining < 90) {
         // Too close to resolution — give up watching, mark analyzed so we stop re-checking
         const snap = state[asset].gapPending.get(market.conditionId);
