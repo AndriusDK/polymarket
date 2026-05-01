@@ -2763,12 +2763,14 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
             } else {
               const ms = fakRetryMs();
               logEntry("dim", `  → <span class="amber">CLOB: book empty</span> — no asks at ${((entryPrice + slippageCap) * 100).toFixed(0)}¢ cap (attempt ${n}/4), retry in ${Math.round(ms / 1000)}s`);
-              fetch(`/price?token_id=${encodeURIComponent(tokenId)}`)
+              fetch(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`)
                 .then(r => r.ok ? r.json() : null).then(pd => {
-                  if (!pd || pd.error) return;
+                  if (!pd) return;
                   const asks = pd.asks ?? [];
+                  const bids = pd.bids ?? [];
                   const nearest = asks.length ? (asks[0].price * 100).toFixed(0) + "¢" : "no asks at all";
-                  logEntry("dim", `  ↳ nearest ask: ${nearest}  best_bid: ${pd.best_bid ? (pd.best_bid * 100).toFixed(0) + "¢" : "—"}`);
+                  const bestBid = bids.length ? (bids[0].price * 100).toFixed(0) + "¢" : "—";
+                  logEntry("dim", `  ↳ nearest ask: ${nearest}  best_bid: ${bestBid}`);
                 }).catch(() => {});
               if (snap) snap.fakRetryAfter = Date.now() + ms;
               state[asset].gapWatch.set(conditionId, true);
