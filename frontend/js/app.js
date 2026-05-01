@@ -442,8 +442,8 @@ function addCryptoCard(trade) {
           <span class="btc-v dim" id="sl-${trade.id}">${secsLeft > 0 ? (Math.floor(secsLeft/60) > 0 ? `${Math.floor(secsLeft/60)}m ${String(secsLeft%60).padStart(2,'0')}s` : `${secsLeft}s`) : "—"}</span>
         </div>
         <div class="btc-kv">
-          <span class="btc-k">GAP %</span>
-          <span class="btc-v ${gapClass}">${gapPctStr}</span>
+          <span class="btc-k">GAP $</span>
+          <span class="btc-v ${gapClass}">${gapSign}$${gapFmt}</span>
         </div>
         <div class="btc-kv">
           <span class="btc-k">MOMENTUM</span>
