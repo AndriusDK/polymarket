@@ -2563,7 +2563,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
     const baseSlip    = (c.slippageCents ?? 10) / 100;
     const slippageCap = (isFAK && windowAge < 60_000) ? Math.min(baseSlip + 0.02, 0.25) : baseSlip;
 
-    await new Promise(r => setTimeout(r, 2000));   // 2s pause — let stale data expire
+    // FOK: pause 2s so Gamma API prices catch up and the drift/depth gates have fresh data.
+    // FAK: fills synchronously against whatever depth exists and retries on empty book —
+    //      the /price check always 404s anyway, so the pause just adds latency.
+    if (!isFAK) await new Promise(r => setTimeout(r, 2000));
     let priceCheckWas404 = false; // reserved — kept for future grace-period use
     try {
       const priceResp = await fetch(`/price?token_id=${encodeURIComponent(tokenId)}`);
