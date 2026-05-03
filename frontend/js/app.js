@@ -875,6 +875,8 @@ function closePosition(trade, reason) {
       token_id:       trade.tokenId,
       side:           "SELL",
       amount_usdc:    trade.shares,  // for SELL, amount = shares (tokens), not USDC
+      order_type:     "fak",         // FAK: fill whatever bid depth exists immediately — FOK kills
+                                     // the whole order on a thin book, leaving the position open
       // Stop-loss: no price limit — exit at market immediately so a crashing token doesn't
       // fail the first attempt and fill the retry 2s later at an even worse price.
       // Take-profit: use currentPrice as floor to protect realized gains.
@@ -1704,6 +1706,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
         logEntry("dim", `  → gap never grew (${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)}) — ${timeRemaining}s left, giving up`);
       } else {
         const pendSnap = state[asset].gapPending.get(market.conditionId);
+        if (!pendSnap) continue;  // gapWatched market with tiny gap — no pending snap, skip silently
         if (!isGapPending) {
           // First detection — record timestamp and schedule an early re-check at 15s, then
           // a second early re-check at 35s so fast-developing gaps are caught quickly.
