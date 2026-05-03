@@ -709,8 +709,10 @@ const priceStream = (() => {
           if (bid < s.minPriceAfterClose) s.minPriceAfterClose = bid;
           if (bid > s.maxPriceAfterClose) s.maxPriceAfterClose = bid;
           s.lastKnownPrice = bid;
-          // Resolution: token converges to ~0 (wrong direction) or ~1 (correct direction)
-          if (bid >= 0.97 || bid <= 0.03) {
+          // Resolution: token converges to ~0 (wrong) or ~1 (correct) only after market end.
+          // Don't resolve early — Chainlink oracle settlement can flip direction in the final
+          // seconds even after the token price crossed 97¢ (market consensus ≠ oracle result).
+          if ((bid >= 0.97 || bid <= 0.03) && Date.now() >= s.endDateMs) {
             s.resolved = true;
             s.finalResolutionPrice = bid;
             s.directionCorrect = bid >= 0.97;
@@ -990,6 +992,7 @@ function closePosition(trade, reason) {
     const shadow = {
       tradeId: trade.id,
       tokenId: trade.tokenId,
+      endDateMs: new Date(trade.endDate).getTime(),
       minPriceAfterClose: trade.currentPrice,
       maxPriceAfterClose: trade.currentPrice,
       lastKnownPrice: trade.currentPrice,
