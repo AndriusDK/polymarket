@@ -2542,7 +2542,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
     // Dry run: card appears immediately (no real order to wait for)
     logEntry("trade",
       `${tag} ${cfg.ticker} <span class="${sigClass}">${analysis.signal}</span>  ` +
-      `$${amount.toFixed(2)}  —  ${market.question.slice(0, 50)}`
+      `$${amount.toFixed(2)}  —  <a href="${marketUrl}" target="_blank" rel="noopener" class="btc-market-link">${market.question.slice(0, 50)}</a>`
     );
     logEntry("info",
       `  Entry: ${(entryPrice * 100).toFixed(1)}%  ` +
@@ -2727,7 +2727,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
     };
     logEntry("trade",
       `${tag} ${cfg.ticker} <span class="${sigClass}">${analysis.signal}</span>  ` +
-      `$${amount.toFixed(2)}  —  ${market.question.slice(0, 50)}`
+      `$${amount.toFixed(2)}  —  <a href="${marketUrl}" target="_blank" rel="noopener" class="btc-market-link">${market.question.slice(0, 50)}</a>`
     );
     logEntry("info",
       `  Entry: ${(entryPrice * 100).toFixed(1)}%  ` +
