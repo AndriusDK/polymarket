@@ -118,6 +118,7 @@ const PERSIST_FIELDS = [
   ["xrp-min-edge",        "value"],
   ["xrp-mode-toggle",     "checked"],
   ["fok-toggle",          "checked"],
+  ["h1-floor-toggle",     "checked"],
   ["entry-window-pct-5m",  "value"],
   ["entry-window-pct-15m", "value"],
 ];
@@ -142,6 +143,7 @@ function loadSettings() {
   // Sync toggle labels after restoring checkboxes
   syncToggleLabel("dry-run-toggle",  "dry-run-label",  ["ON","amber"], ["OFF — LIVE","red"]);
   syncToggleLabel("fok-toggle",      "fok-label",      ["ON","green"], ["OFF — Limit/GTC","amber"]);
+  syncToggleLabel("h1-floor-toggle", "h1-floor-label", ["ON","green"], ["OFF","amber"]);
   syncToggleLabel("btc-mode-toggle", "btc-mode-label",  ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("eth-mode-toggle", "eth-mode-label",  ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("sol-mode-toggle", "sol-mode-label",  ["ON","green"], ["OFF","dim"]);
@@ -165,6 +167,8 @@ function initSetup() {
     syncToggleLabel("dry-run-toggle", "dry-run-label", ["ON","amber"], ["OFF — LIVE","red"]));
   $("#fok-toggle")?.addEventListener("change", () =>
     syncToggleLabel("fok-toggle", "fok-label", ["ON","green"], ["OFF — Limit/GTC","amber"]));
+  $("#h1-floor-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("h1-floor-toggle", "h1-floor-label", ["ON","green"], ["OFF","amber"]));
   $("#btc-mode-toggle")?.addEventListener("change", () =>
     syncToggleLabel("btc-mode-toggle", "btc-mode-label", ["ON","green"], ["OFF","dim"]));
   $("#eth-mode-toggle")?.addEventListener("change", () =>
@@ -211,6 +215,7 @@ function initSetup() {
       entryWindowPct15m: parseFloat($("#entry-window-pct-15m")?.value ?? 30) / 100,
       slippageCents:    parseFloat($("#slippage-cents")?.value ?? 10),
       useFOK:           $("#fok-toggle")?.checked ?? true,
+      useH1Floor:       $("#h1-floor-toggle")?.checked ?? true,
     };
 
     initDashboard();
@@ -1943,7 +1948,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     } else {
       try {
         analysis = await analyzeCryptoMarket(
-          market, { spot, candles, candles5m, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds, binanceLead }, c.anthropicKey, { model: c.model }, asset
+          market, { spot, candles, candles5m, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds, binanceLead }, c.anthropicKey, { model: c.model, useH1Floor: c.useH1Floor }, asset
         );
       } catch (err) {
         logEntry("error", `  ${cfg.ticker} analysis failed: ${err.message}`);

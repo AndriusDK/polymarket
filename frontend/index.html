@@ -180,6 +180,15 @@
         <span id="fok-label" class="toggle-status green">ON</span>
       </div>
 
+      <div class="switch-row">
+        <span class="field-label" title="ON = skip any trade where the entry token is below 30¢ (crowd is 70%+ against you). OFF = let the AI decide regardless of market price — useful for testing but risks buying low-liquidity tokens.">H1 Floor (skip entry &lt; 30¢)</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="h1-floor-toggle" checked />
+          <span class="toggle-slider"></span>
+        </label>
+        <span id="h1-floor-label" class="toggle-status green">ON</span>
+      </div>
+
       <!-- Crypto Modes -->
       <div class="section-title"><span class="diamond">◈</span> CRYPTO MODES <span class="hint">(AI-analyzed 5-min &amp; 15-min markets)</span></div>
 
