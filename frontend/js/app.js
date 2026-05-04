@@ -3008,7 +3008,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(orderPayload),
     })
-      .then(r => r.json())
+      .then(r => r.text().then(text => {
+        try { return JSON.parse(text); }
+        catch { throw new Error(`Server returned non-JSON (status ${r.status}): ${text.slice(0, 200)}`); }
+      }))
       .then(result => handleBuyResult(result, false))
       .catch(err => {
         // Network error — remove from state, no card
