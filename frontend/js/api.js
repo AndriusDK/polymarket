@@ -743,7 +743,7 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
   }
 
   const data = await resp.json();
-  return parseCryptoResponse(data.content[0].text.trim(), market, metrics);
+  return parseCryptoResponse(data.content[0].text.trim(), market, metrics, useH1Floor);
 }
 
 const analyzeBtcMarket = (market, data, key, opts) => analyzeCryptoMarket(market, data, key, opts, "btc");
@@ -781,7 +781,7 @@ function analyzeCryptoHeuristic(market, { gap, volatility, timeRemaining, moment
 
 const analyzeBtcHeuristic = (market, metrics) => analyzeCryptoHeuristic(market, { ...metrics, spot: metrics.spot || 70000 });
 
-function parseCryptoResponse(raw, market, metrics) {
+function parseCryptoResponse(raw, market, metrics, useH1Floor = true) {
   let text = raw;
   if (text.startsWith("```")) {
     text = text.split("```")[1];
@@ -807,12 +807,9 @@ function parseCryptoResponse(raw, market, metrics) {
   const gapDominant  = vol > 0 && Math.abs(effectiveGap) > 3 * vol;
   const momThreshold = (spot || 70000) * 0.00007;
 
-  if (signal !== "SKIP" && useH1Floor) {
+  if (signal !== "SKIP") {
     // ── Hard floor H1: entry price floor ─────────────────────────
     // If the token we'd buy is priced below 30¢, the crowd is ≥70% against us.
-    // The market's collective wisdom is almost always more accurate than a momentum
-    // forecast at that extreme — SKIP regardless of gap or drift.
-    // Disabled via UI toggle "H1 Floor (skip entry < 30¢)" for testing.
     const entryPrice = signal === "BUY_UP" ? market.upPrice : market.downPrice;
     if (entryPrice < 0.30) {
       signal = "SKIP"; confidence = "LOW";
