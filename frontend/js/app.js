@@ -2484,7 +2484,24 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
   const entryPrice = isUp ? market.upPrice   : market.downPrice;
   const tokenId    = isUp ? market.upTokenId : market.downTokenId;
 
-  // Bet sizing: use configured maxBet directly, floored at $1, capped at remaining budget.
+  // CLOB retry drift guard: if this is a retry (fakClobErrors > 0) and the market price
+  // has moved >10pp from when we first tried, the book has repriced — abort retry chain.
+  const retrySnap = state[asset].analyzed.get(market.conditionId);
+  if (retrySnap?.fakClobErrors > 0 && retrySnap?.fakEntryPrice != null) {
+    const drift = Math.abs(entryPrice - retrySnap.fakEntryPrice);
+    if (drift > 0.10) {
+      logEntry("dim",
+        `  → CLOB retry aborted — market moved ${(drift * 100).toFixed(0)}pp since first attempt ` +
+        `(was ${(retrySnap.fakEntryPrice * 100).toFixed(1)}%, now ${(entryPrice * 100).toFixed(1)}%)`
+      );
+      retrySnap.fakRetryAfter = Date.now() + 5 * 60_000;
+      retrySnap.fakClobErrors = 0;
+      retrySnap.fakEntryPrice = null;
+      return;
+    }
+  }
+
+
   const maxBet = c[`${asset}MaxBet`] ?? c.btcMaxBet ?? 5;
   const budgetLeft = c.maxDaily - state.stats.spent;
   let amount = Math.max(1.00, Math.min(maxBet, budgetLeft));
@@ -2790,7 +2807,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
                   const bestBid = bids.length ? (bids[0].price * 100).toFixed(0) + "¢" : "—";
                   logEntry("dim", `  ↳ nearest ask: ${nearest}  best_bid: ${bestBid}`);
                 }).catch(() => {});
-              if (snap) snap.fakRetryAfter = Date.now() + ms;
+              if (snap) {
+                snap.fakRetryAfter  = Date.now() + ms;
+                snap.fakEntryPrice  = snap.fakEntryPrice ?? entryPrice; // lock original entry price on first miss
+              }
               state[asset].gapWatch.set(conditionId, true);
             }
           } else {
