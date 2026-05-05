@@ -121,6 +121,8 @@ const PERSIST_FIELDS = [
   ["h1-floor-toggle",     "checked"],
   ["entry-window-pct-5m",  "value"],
   ["entry-window-pct-15m", "value"],
+  ["trail-arm-pct",        "value"],
+  ["trail-lockin-pct",     "value"],
 ];
 
 function saveSettings() {
@@ -696,12 +698,12 @@ const priceStream = (() => {
             // even when the direction is correct — just take the money.
             if (bid >= 0.97) return true;
             if (t.unrealizedPnl >= t.amount * takeProfitPct) return true;
-            // Trailing stop: arms at 30% gain, lock-in % scales with absolute peak gain.
-            // Small gains: loose trail (25%) — let it run; large gains: tight trail (60%) — protect profit.
-            // Was 15% arm + 40% lock-in, causing single bad WS bid ticks to prematurely exit winners.
-            const peakGain = t.peakPrice * t.shares - t.amount;
-            const lockIn = peakGain >= 12 ? 0.60 : peakGain >= 6 ? 0.50 : 0.25;
-            if (peakGain >= t.amount * 0.30 && t.unrealizedPnl < peakGain * lockIn) return true;
+            // Trailing stop: arms when gain reaches trailArmPct% of bet, then protects
+            // trailLockInPct% of peak gain. Both configurable in settings.
+            const peakGain     = t.peakPrice * t.shares - t.amount;
+            const trailArmPct  = (parseFloat($("#trail-arm-pct")?.value)    || 20) / 100;
+            const trailLockIn  = (parseFloat($("#trail-lockin-pct")?.value) || 40) / 100;
+            if (peakGain >= t.amount * trailArmPct && t.unrealizedPnl < peakGain * trailLockIn) return true;
             return false;
           });
           for (const t of toTakeProfit) closePosition(t, "TAKE PROFIT");

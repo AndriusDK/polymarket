@@ -115,6 +115,16 @@
       </div>
       <div class="row-2">
         <div>
+          <label class="field-label">Trail Arm (% of bet) <span class="hint">gain before trailing activates</span></label>
+          <input type="number" id="trail-arm-pct" class="neon-input" value="20" min="5" max="100" step="5" title="Trailing stop arms when unrealized gain reaches this % of the bet size. e.g. 20 = arms at +$0.20 on a $1 trade." />
+        </div>
+        <div>
+          <label class="field-label">Trail Lock-in (% of peak) <span class="hint">peak gain to protect</span></label>
+          <input type="number" id="trail-lockin-pct" class="neon-input" value="40" min="10" max="90" step="5" title="Once armed, exit if unrealized PnL drops below this % of peak gain. e.g. 40 = exit if gain falls to 40% of peak." />
+        </div>
+      </div>
+      <div class="row-2">
+        <div>
           <label class="field-label">Min Market Volume ($)</label>
           <input type="number" id="min-market-volume" class="neon-input" value="500" min="0" step="50" title="Skip markets with total volume below this threshold (OR velocity ≥ $10/min passes regardless)" />
         </div>
