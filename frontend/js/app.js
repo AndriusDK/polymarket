@@ -2803,9 +2803,17 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
                   if (!pd) return;
                   const asks = pd.asks ?? [];
                   const bids = pd.bids ?? [];
-                  const nearest = asks.length ? (asks[0].price * 100).toFixed(0) + "¢" : "no asks at all";
+                  const nearestAskPrice = asks.length ? asks[0].price : null;
+                  const nearest = nearestAskPrice != null ? (nearestAskPrice * 100).toFixed(0) + "¢" : "no asks at all";
                   const bestBid = bids.length ? (bids[0].price * 100).toFixed(0) + "¢" : "—";
-                  logEntry("dim", `  ↳ nearest ask: ${nearest}  best_bid: ${bestBid}`);
+                  // If nearest ask is above our cap by more than 5¢, the book won't fill on any retry — abort.
+                  const cap = entryPrice + slippageCap;
+                  if (nearestAskPrice != null && nearestAskPrice > cap + 0.05) {
+                    logEntry("dim", `  ↳ nearest ask: ${nearest}  best_bid: ${bestBid} — ask is ${((nearestAskPrice - cap) * 100).toFixed(0)}¢ above cap, aborting retries`);
+                    if (snap) { snap.fakRetryAfter = Date.now() + 5 * 60_000; snap.fakClobErrors = 0; snap.fakEntryPrice = null; }
+                  } else {
+                    logEntry("dim", `  ↳ nearest ask: ${nearest}  best_bid: ${bestBid}`);
+                  }
                 }).catch(() => {});
               if (snap) {
                 snap.fakRetryAfter  = Date.now() + ms;
