@@ -115,9 +115,15 @@
       </div>
       <div class="row-2">
         <div>
+          <label class="field-label">Stop Grace (sec)</label>
+          <input type="number" id="stop-grace-sec" class="neon-input" value="10" min="0" max="60" step="5" title="Seconds after entry before stop loss activates (0 = instant, no grace)" />
+        </div>
+        <div>
           <label class="field-label">Trail Arm (% of bet) <span class="hint">gain before trailing activates</span></label>
           <input type="number" id="trail-arm-pct" class="neon-input" value="20" min="5" max="100" step="5" title="Trailing stop arms when unrealized gain reaches this % of the bet size. e.g. 20 = arms at +$0.20 on a $1 trade." />
         </div>
+      </div>
+      <div class="row-2">
         <div>
           <label class="field-label">Trail Lock-in (% of peak) <span class="hint">peak gain to protect</span></label>
           <input type="number" id="trail-lockin-pct" class="neon-input" value="40" min="10" max="90" step="5" title="Once armed, exit if unrealized PnL drops below this % of peak gain. e.g. 40 = exit if gain falls to 40% of peak." />

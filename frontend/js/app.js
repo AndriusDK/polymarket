@@ -121,6 +121,7 @@ const PERSIST_FIELDS = [
   ["h1-floor-toggle",     "checked"],
   ["entry-window-pct-5m",  "value"],
   ["entry-window-pct-15m", "value"],
+  ["stop-grace-sec",       "value"],
   ["trail-arm-pct",        "value"],
   ["trail-lockin-pct",     "value"],
 ];
@@ -195,6 +196,7 @@ function initSetup() {
       dryRun:        $("#dry-run-toggle").checked,
       takeProfitPct:    parseFloat($("#take-profit-pct")?.value) || 50,
       stopLossPct:      parseFloat($("#stop-loss-pct")?.value)   || 25,
+      stopGraceSec:     parseFloat($("#stop-grace-sec")?.value)  ?? 10,
       minMarketVolume:  parseFloat($("#min-market-volume")?.value) || 1000,
       minGapBtc:        parseFloat($("#min-gap-btc")?.value ?? ""),   // 0 = disabled
       minGapEth:        parseFloat($("#min-gap-eth")?.value ?? ""),   // 0 = disabled
@@ -615,26 +617,11 @@ const priceStream = (() => {
           // Read live from DOM so changes take effect instantly without restart
           const stopLossPct   = (parseFloat($("#stop-loss-pct")?.value)   || state.config?.stopLossPct   || 25) / 100;
           const takeProfitPct = (parseFloat($("#take-profit-pct")?.value) || state.config?.takeProfitPct || 50) / 100;
+          const stopGraceMs = (parseFloat($("#stop-grace-sec")?.value) ?? state.config?.stopGraceSec ?? 10) * 1_000;
           const toStopLoss = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
-            // Never stop-loss truly last-second entries — position resolves in seconds
             if (t.totalSecs < 45) return false;
-            // Grace period: short windows get a longer minimum grace now — a 147s trade with
-            // only 5.88s grace was getting nuked in 5 seconds before the position could breathe.
-            // Near-resolution arbs (< 90s) always get 25s since they're entered with high
-            // confidence and a single candle tick can temporarily move the price.
-            // Gap-flip trades get a 75s minimum grace regardless of window size — the token
-            // oscillates steeply downward before price crosses the target, and the 15-20s grace
-            // for 90-200s windows fires the catastrophic stop on a correct-direction dip.
-            const baseGrace = t.totalSecs < 90
-              ? 25_000                                                    // near-res: always 25s
-              : t.totalSecs < 200
-              ? Math.min(20_000, Math.max(15_000, t.totalSecs * 100))    // short window: 15-20s
-              : t.totalSecs < 500
-              ? 30_000                                                    // mid-window (200-500s): 30s
-              : 60_000;                                                   // long window (500s+): 60s
-            const grace = t.signalAgainstGap ? Math.max(baseGrace, 75_000) : baseGrace;
-            if (Date.now() - t.entryTime < grace) {
+            if (Date.now() - t.entryTime < stopGraceMs) {
               // Catastrophic loss override: bypass grace if loss exceeds threshold.
               // Gap-flip trades raise this to 85% — the token dumps to 13-17 cents during
               // the pre-crossing oscillation (observed MIN AFTER 0.130-0.150), which triggers
@@ -3151,21 +3138,10 @@ function startCryptoCountdown() {
     // Periodic stop-loss safety net: catches positions where the price stream
     // stopped updating (token frozen at near-zero), so onMessage never fires.
     const stopLossPct = (parseFloat($("#stop-loss-pct")?.value) || state.config?.stopLossPct || 25) / 100;
+    const stopGraceMs = (parseFloat($("#stop-grace-sec")?.value) ?? state.config?.stopGraceSec ?? 10) * 1_000;
     for (const t of [...cryptoTrades]) {
       if (t.totalSecs < 45) continue;
-      // Grace must match the main WS handler so the safety net doesn't fire prematurely.
-      // The old formula (totalSecs * 40ms for <200s) gave only 3-8s grace, causing stops
-      // to fire in 5-7s on short-window trades that later resolved correctly.
-      // Gap-flip trades get 75s minimum grace — matches WS handler logic.
-      const baseGrace = t.totalSecs < 90
-        ? 25_000
-        : t.totalSecs < 200
-        ? Math.min(20_000, Math.max(15_000, t.totalSecs * 100))
-        : t.totalSecs < 500
-        ? 30_000
-        : 60_000;
-      const grace = t.signalAgainstGap ? Math.max(baseGrace, 75_000) : baseGrace;
-      if (Date.now() - t.entryTime < grace) continue;
+      if (Date.now() - t.entryTime < stopGraceMs) continue;
       // Same widened thresholds as the WS handler for thin-book noise protection.
       // Gap-flip trades use a wider 60% base stop — token oscillates before price crosses target.
       const baseStop = t.signalAgainstGap ? Math.max(stopLossPct, 0.60) : stopLossPct;
