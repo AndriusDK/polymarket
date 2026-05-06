@@ -2778,6 +2778,64 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
           return (s < 180 ? 8 : s < 300 ? 15 : 30) * 1_000;
         };
         if (result.error) {
+          // status_code=None → py-clob-client got a network exception after sending the
+          // request. Polymarket may have received and executed the order before the
+          // connection dropped. Defer cleanup by 4s and verify via the positions API.
+          if (typeof result.error === "string" && result.error.includes("status_code=None")) {
+            logEntry("warn", `  [LIVE] FAK network error — verifying in 4s (order may have filled)…`);
+            if (conditionId) {
+              const snap = state[asset].analyzed.get(conditionId);
+              if (snap) snap.fakRetryAfter = Date.now() + 12_000; // block re-entry while verifying
+            }
+            const _cleanup = () => {
+              const idx = state.trades.indexOf(trade);
+              if (idx !== -1) state.trades.splice(idx, 1);
+              priceStream.unsubscribe(tokenId);
+              state.stats.trades = Math.max(0, state.stats.trades - 1);
+              state.stats.spent  = Math.max(0, state.stats.spent - trade.amount);
+              setStat("trades",    String(state.stats.trades));
+              setStat("spent",     `$${state.stats.spent.toFixed(2)}`);
+              setStat("budget",    `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+              setStat("positions", String(state.trades.length));
+              updatePnlStat();
+              if (conditionId) {
+                const snap = state[asset].analyzed.get(conditionId);
+                if (snap) snap.fakRetryAfter = Date.now() + fakRetryMs();
+                state[asset].gapWatch.set(conditionId, true);
+              }
+            };
+            setTimeout(() => {
+              fetch("/check-position", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ token_id: tokenId, private_key: c.polyPrivateKey }),
+              })
+                .then(r => r.json())
+                .then(pos => {
+                  if (pos.found && pos.shares > 0.01) {
+                    const fp = pos.avg_price > 0 ? pos.avg_price : entryPrice;
+                    trade.amount       = Math.round(fp * pos.shares * 100) / 100;
+                    trade.shares       = pos.shares;
+                    trade.entryPrice   = fp;
+                    trade.currentPrice = fp;
+                    trade.peakPrice    = fp;
+                    trade.confirmed    = true;
+                    logEntry("info", `  [LIVE] Position confirmed: ${pos.shares.toFixed(2)} shares @ ${(fp * 100).toFixed(1)}¢ — trade tracked`);
+                    addCryptoCard(trade);
+                    startCryptoCountdown();
+                  } else {
+                    _cleanup();
+                    logEntry("warn", `  [LIVE] Position check: not filled — cleaned up`);
+                  }
+                })
+                .catch(() => {
+                  _cleanup();
+                  logEntry("warn", `  [LIVE] Position check failed — assuming no fill, cleaned up`);
+                });
+            }, 4_000);
+            return;
+          }
+
           const idx = state.trades.indexOf(trade);
           if (idx !== -1) state.trades.splice(idx, 1);
           priceStream.unsubscribe(tokenId);

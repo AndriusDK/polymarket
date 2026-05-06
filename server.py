@@ -54,6 +54,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/trade":
             self._handle_trade()
+        elif self.path == "/check-position":
+            self._handle_check_position()
         else:
             self.send_response(404)
             self.end_headers()
@@ -94,6 +96,58 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(resp)
 
+        except Exception as e:
+            err = json.dumps({"error": str(e)}).encode()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(err)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(err)
+
+    def _handle_check_position(self):
+        """Check if a position exists for a token_id (used after network errors to detect ghost fills)."""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+
+            token_id    = body["token_id"]
+            private_key = body["private_key"]
+
+            from eth_account import Account
+            address = Account.from_key(private_key).address
+
+            # Public CLOB endpoint — no auth required, just wallet address
+            clob_url = (
+                f"https://clob.polymarket.com/data/positions"
+                f"?user_address={urllib.parse.quote(address)}&size_threshold=0"
+            )
+            req = urllib.request.Request(clob_url, headers={"User-Agent": "polymarket-ai-bot/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                positions_data = json.loads(resp.read())
+
+            positions = positions_data if isinstance(positions_data, list) else positions_data.get("positions", [])
+
+            match = next(
+                (p for p in positions if p.get("asset") == token_id or p.get("token_id") == token_id),
+                None,
+            )
+
+            if match:
+                resp_body = json.dumps({
+                    "found": True,
+                    "shares":    float(match.get("size",     match.get("quantity",  0)) or 0),
+                    "avg_price": float(match.get("avgPrice", match.get("avg_price", 0)) or 0),
+                }).encode()
+            else:
+                resp_body = json.dumps({"found": False}).encode()
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp_body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(resp_body)
         except Exception as e:
             err = json.dumps({"error": str(e)}).encode()
             self.send_response(500)
