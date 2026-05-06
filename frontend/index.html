@@ -90,9 +90,15 @@
       </div>
       <div class="row-2">
         <div>
+          <label class="field-label">Stop Grace (sec)</label>
+          <input type="number" id="stop-grace-sec" class="neon-input" value="10" min="0" max="60" step="5" title="Seconds after entry before stop loss activates (0 = instant, no grace)" />
+        </div>
+        <div>
           <label class="field-label">Min Market Volume ($)</label>
           <input type="number" id="min-market-volume" class="neon-input" value="500" min="0" step="50" title="Skip markets with total volume below this threshold (OR velocity ≥ $10/min passes regardless)" />
         </div>
+      </div>
+      <div class="row-2">
         <div>
           <label class="field-label">Min Gap % (0 = off)</label>
           <input type="number" id="min-gap-pct" class="neon-input" value="0" min="0" max="1" step="0.01" title="Minimum price gap as % of spot before analysis runs. 0 disables the filter entirely." />
