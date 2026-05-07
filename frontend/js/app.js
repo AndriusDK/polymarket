@@ -650,32 +650,7 @@ const priceStream = (() => {
             const effectiveStop = t.totalSecs < 90  ? Math.max(baseStop, 0.40)  // near-res
                                 : t.totalSecs < 200 ? Math.max(baseStop, 0.32)  // short window
                                 : baseStop;
-            // Thesis-intact widening: if the underlying oracle gap still supports the trade
-            // direction, widen the stop to 50% minimum so a transient token dip doesn't stop
-            // out a fundamentally correct position. Only fires when gap hasn't flipped.
-            const currentSpot  = state.chainlinkPrices[t.type] ?? null;
-            const currentGap   = currentSpot != null ? currentSpot - t.priceToBeat : null;
-            const gapThreshold = t.type === "btc" ? 30 : t.type === "eth" ? 3 : 1;
-            const thesisIntact = currentGap != null && (
-              (t.signal === "BUY_UP"   && currentGap >  gapThreshold) ||
-              (t.signal === "BUY_DOWN" && currentGap < -gapThreshold)
-            );
-            const thesisStop = thesisIntact ? Math.max(effectiveStop, 0.50) : effectiveStop;
-            // High-entry-odds: widen stop to survive normal pre-resolution oscillation.
-            // At 90¢ entry a 25% stop fires at 67.5¢ — a routine 15¢ swing during final minutes.
-            // HIGH conf + >70%: full 65% protection (near-certain binary outcome).
-            // Any conf   + >80%: 50% floor — the crowd already says >80% likely, don't exit on noise.
-            // Any conf   + >70%: 40% floor — avoids the 25% stop clipping high-odds MEDIUM entries.
-            if (t.confidence === "HIGH" && t.entryPrice > 0.70) {
-              return t.unrealizedPnl <= -t.amount * Math.max(thesisStop, 0.65);
-            }
-            if (t.entryPrice > 0.80) {
-              return t.unrealizedPnl <= -t.amount * Math.max(thesisStop, 0.50);
-            }
-            if (t.entryPrice > 0.70) {
-              return t.unrealizedPnl <= -t.amount * Math.max(thesisStop, 0.40);
-            }
-            return t.unrealizedPnl <= -t.amount * thesisStop;
+            return t.unrealizedPnl <= -t.amount * effectiveStop;
           });
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
           const toTakeProfit = state.trades.filter(t => {
