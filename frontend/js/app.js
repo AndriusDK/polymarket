@@ -1782,7 +1782,9 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     // is old enough avoids premature momentum entries on ghost data AND saves AI tokens.
     // For meaningful gaps (≥0.04%) we only wait 30s so AI can assess while market is still
     // pre-discovery (~50-55%); tiny gaps (<0.04%) still wait the full 90s.
-    {
+    // When the user explicitly sets minGap = 0 they want immediate analysis (book is
+    // fullest right at window open) — skip the deferral entirely.
+    if (!(!isNaN(configGapDollar) && configGapDollar === 0)) {
       const freshSnap   = state[asset].gapPending.get(market.conditionId);
       const gapFrac     = priceToBeat > 0 ? Math.abs(gap) / priceToBeat : 1;
       const volumeDelta = market.volume - (freshSnap?.firstSeenVolume ?? market.volume);
