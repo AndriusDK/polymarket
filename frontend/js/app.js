@@ -1502,14 +1502,16 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     return;
   }
 
-  let spot, candles, candles5m, orderBook, fundingRate;
+  let spot, candles, candles5m, orderBook, fundingRate, aggTrades, openInterest;
   try {
-    [spot, candles, candles5m, orderBook, fundingRate] = await Promise.all([
+    [spot, candles, candles5m, orderBook, fundingRate, aggTrades, openInterest] = await Promise.all([
       fetchCryptoSpot(cfg.symbol),
       fetchCryptoCandles(cfg.symbol, 6),
       fetchCryptoCandles5m(cfg.symbol, 3).catch(() => null),
       fetchCryptoOrderBook(cfg.symbol).catch(() => null),
       fetchCryptoFundingRate(cfg.symbol).catch(() => null),
+      fetchCryptoAggTrades(cfg.symbol).catch(() => null),
+      fetchCryptoOpenInterestDelta(cfg.symbol).catch(() => null),
     ]);
   } catch (err) {
     logEntry("error", `${cfg.ticker}: Binance data failed — ${err.message}`);
@@ -1919,7 +1921,7 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     } else {
       try {
         analysis = await analyzeCryptoMarket(
-          market, { spot, candles, candles5m, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds, binanceLead }, c.anthropicKey, { model: c.model, useH1Floor: c.useH1Floor }, asset
+          market, { spot, candles, candles5m, priceToBeat, orderBook, fundingRate, aggTrades, openInterest, oddsHistory: updatedOdds, binanceLead }, c.anthropicKey, { model: c.model, useH1Floor: c.useH1Floor }, asset
         );
       } catch (err) {
         logEntry("error", `  ${cfg.ticker} analysis failed: ${err.message}`);

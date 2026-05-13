@@ -296,6 +296,73 @@ async function fetchCryptoFundingRate(symbol) {
   return parseFloat(data.lastFundingRate) || 0;
 }
 
+// Aggressive trades in the last 60s.  m=true ⇒ buyer was maker ⇒ aggressive SELL
+// (someone hit the bid).  m=false ⇒ buyer was taker ⇒ aggressive BUY (lifted ask).
+async function fetchCryptoAggTrades(symbol) {
+  const startTime = Date.now() - 60_000;
+  const resp = await fetch(`${BINANCE_API}/aggTrades?symbol=${symbol}&startTime=${startTime}&limit=1000`);
+  if (!resp.ok) throw new Error(`Binance aggTrades ${resp.status}`);
+  return (await resp.json()).map(t => ({
+    price:        parseFloat(t.p),
+    qty:          parseFloat(t.q),
+    time:         t.T,
+    isBuyerMaker: t.m,
+  }));
+}
+
+// Open interest snapshot now vs ~5 min ago.  Rising OI + rising price = new longs
+// (conviction).  Falling OI + rising price = short-covering (weak, likely to stall).
+async function fetchCryptoOpenInterestDelta(symbol) {
+  const resp = await fetch(`https://fapi.binance.com/futures/data/openInterestHist?symbol=${symbol}&period=5m&limit=2`);
+  if (!resp.ok) throw new Error(`Binance OI ${resp.status}`);
+  const data = await resp.json();
+  if (!Array.isArray(data) || data.length < 2) return null;
+  const prev = parseFloat(data[0].sumOpenInterest);
+  const curr = parseFloat(data[1].sumOpenInterest);
+  if (!prev || !curr) return null;
+  return { current: curr, previous: prev, delta: curr - prev, pctChange: ((curr - prev) / prev) * 100 };
+}
+
+// Aggregate buy vs sell pressure from recent aggressive trades.
+function analyzeAggTrades(trades) {
+  if (!trades || trades.length === 0) return null;
+  let buyVol = 0, sellVol = 0, buyCount = 0, sellCount = 0;
+  for (const t of trades) {
+    if (t.isBuyerMaker) { sellVol += t.qty; sellCount++; }
+    else                { buyVol  += t.qty; buyCount++; }
+  }
+  const totalVol = buyVol + sellVol;
+  const buyPct   = totalVol > 0 ? (buyVol / totalVol) : 0.5;
+  const avgBuy   = buyCount  > 0 ? buyVol  / buyCount  : 0;
+  const avgSell  = sellCount > 0 ? sellVol / sellCount : 0;
+  const sizeRatio = avgSell > 0 ? avgBuy / avgSell : (avgBuy > 0 ? 99 : 1);
+  let signal;
+  if      (buyPct > 0.65) signal = "strong buy pressure — bullish";
+  else if (buyPct > 0.55) signal = "mild buy pressure — slightly bullish";
+  else if (buyPct < 0.35) signal = "strong sell pressure — bearish";
+  else if (buyPct < 0.45) signal = "mild sell pressure — slightly bearish";
+  else                    signal = "balanced flow — no clear pressure";
+  return { buyVol, sellVol, totalVol, buyPct, buyCount, sellCount, avgBuy, avgSell, sizeRatio, signal };
+}
+
+// Tight-range order book: immediate walls within ±0.1% of current spot price.
+// Catches resistance/support that's relevant in the next 30-60s vs the wider
+// ±0.5% range used near the resolution target.
+function analyzeTightBook(book, spot) {
+  if (!book) return null;
+  const range    = spot * 0.001;
+  const bidsNear = book.bids.filter(b => b.price >= spot - range && b.price <= spot);
+  const asksNear = book.asks.filter(a => a.price >= spot && a.price <= spot + range);
+  const bidQty   = bidsNear.reduce((s, b) => s + b.qty, 0);
+  const askQty   = asksNear.reduce((s, a) => s + a.qty, 0);
+  const ratio    = askQty > 0 ? bidQty / askQty : (bidQty > 0 ? 99 : 1);
+  let signal;
+  if      (ratio > 2.5) signal = "tight bid wall — likely floor at current price";
+  else if (ratio < 0.4) signal = "tight ask wall — likely ceiling at current price";
+  else                  signal = "no tight walls — free movement";
+  return { bidQty, askQty, ratio, signal };
+}
+
 // Summarise order book walls within 0.5% of priceToBeat
 function analyzeOrderBook(book, priceToBeat) {
   const range    = priceToBeat * 0.005;
@@ -451,8 +518,17 @@ const CRYPTO_PROMPT = [
   "── ORDER BOOK DEPTH (near target ±0.5%) ──────────────────────────",
   "{orderBookBlock}",
   "",
+  "── TIGHT ORDER BOOK (within ±0.1% of current spot) ───────────────",
+  "{tightBookBlock}",
+  "",
   "── VOLUME ANALYSIS ────────────────────────────────────────────────",
   "{volumeBlock}",
+  "",
+  "── AGGRESSIVE TAKER FLOW (last 60s) ──────────────────────────────",
+  "{aggTradesBlock}",
+  "",
+  "── FUTURES OPEN INTEREST (5m delta) ──────────────────────────────",
+  "{openInterestBlock}",
   "",
   "── FUTURES FUNDING RATE ───────────────────────────────────────────",
   "{fundingBlock}",
@@ -500,6 +576,9 @@ const CRYPTO_PROMPT = [
   "8. ORDER BOOK: Bid/ask ratio > 2 near target = strong bid support → reinforces UP. Ratio < 0.5 = strong ask wall → reinforces DOWN. Use as supporting evidence alongside gap+momentum.",
   "9. VOLUME SPIKE: Last candle vol > 2× avg = strong conviction for current trend. Vol < 0.5× avg = weak signal, reduce confidence one level. Normal volume = no adjustment.",
   "10. FUNDING RATE: Rate > +0.05%/8h = overcrowded longs → bearish pressure on price (supports DOWN). Rate < -0.02%/8h = overcrowded shorts → bullish squeeze pressure (supports UP). Near zero = neutral.",
+  "10a. AGGRESSIVE TAKER FLOW: Last-60s buy share is the most immediate directional signal — it shows who is paying the spread RIGHT NOW. Buy share > 60% = strong UP pressure (supports BUY_UP). Buy share < 40% = strong DOWN pressure (supports BUY_DOWN). When taker flow CONTRADICTS the 1-min candle direction, trust the flow (candles lag; flow leads). Combine with size ratio: avg buy size > 1.5× avg sell size = larger players are buying (stronger conviction).",
+  "10b. OPEN INTEREST: Rising OI + price moving in trade direction = new positions opening, strong conviction → boost confidence by one level (cap at HIGH). Falling OI + price moving in trade direction = short-covering or longs taking profit, trend may exhaust → reduce confidence by one level. OI flat = no positioning signal, use other indicators.",
+  "10c. TIGHT BOOK WALLS: Walls within ±0.1% of spot block immediate movement. Tight bid wall = floor at current price (price unlikely to fall through in next 30s, supports UP-side moves and against momentum down-moves). Tight ask wall = ceiling (price unlikely to break through, supports DOWN-side moves and against momentum up-moves). If your signal direction faces a same-side tight wall (e.g. BUY_UP with tight ask wall above), reduce confidence one level — the wall will dampen the move you need.",
   "11. GAP TREND: If gap at candle close is narrowing toward zero across candles, the leader is losing ground and a flip becomes more likely. If gap is widening or stable, the current leader is in control.",
   "12. UP TOKEN TREND: If the UP token price is falling across cycles, market participants are selling UP (bearish signal). If rising, they are buying UP (bullish). Token trend confirms or contradicts the price gap.",
   "13. MOMENTUM TRADE (zero/tiny gap): When |gap| < 0.05% of price BUT |expectedDrift| > 0.15% of price AND 4+ of the last 5 candles align with the momentum direction, this is a valid MOMENTUM TRADE.",
@@ -681,6 +760,40 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     fundingBlock = `${frPct}%/8h → ${frSignal}`;
   }
 
+  // Aggressive trades buy/sell pressure block (last 60s)
+  let aggTradesBlock = "N/A (unavailable)";
+  const aggTrades = analyzeAggTrades(cryptoData.aggTrades);
+  if (aggTrades) {
+    aggTradesBlock = [
+      `Last 60s: ${aggTrades.buyCount} aggressive buys (${fmtQty(aggTrades.buyVol)}) | ${aggTrades.sellCount} aggressive sells (${fmtQty(aggTrades.sellVol)})`,
+      `Buy share: ${(aggTrades.buyPct * 100).toFixed(1)}% of taker volume | Avg buy size: ${fmtQty(aggTrades.avgBuy)} | Avg sell size: ${fmtQty(aggTrades.avgSell)} (size ratio ${aggTrades.sizeRatio.toFixed(2)}x)`,
+      `Signal: ${aggTrades.signal}`,
+    ].join("\n");
+  }
+
+  // Open interest delta block (futures conviction signal)
+  let openInterestBlock = "N/A (unavailable)";
+  const oi = cryptoData.openInterest;
+  if (oi) {
+    const pctStr  = (oi.pctChange >= 0 ? "+" : "") + oi.pctChange.toFixed(2) + "%";
+    let oiSignal;
+    if      (oi.pctChange >  0.5) oiSignal = "rising fast — new positions opening (conviction building)";
+    else if (oi.pctChange >  0.1) oiSignal = "slight rise — modest new positioning";
+    else if (oi.pctChange < -0.5) oiSignal = "falling fast — positions closing (trend may be exhausting / short-covering rally)";
+    else if (oi.pctChange < -0.1) oiSignal = "slight fall — modest deleveraging";
+    else                          oiSignal = "flat — no positioning shift";
+    openInterestBlock = `OI: ${fmtQty(oi.current)} (was ${fmtQty(oi.previous)} 5min ago) | Change: ${pctStr} → ${oiSignal}`;
+  }
+
+  // Tight-range order book block (±0.1% around current spot — immediate walls)
+  let tightBookBlock = "N/A (unavailable)";
+  if (cryptoData.orderBook) {
+    const tb = analyzeTightBook(cryptoData.orderBook, spot);
+    if (tb) {
+      tightBookBlock = `Within ±0.1% of spot: bids ${fmtQty(tb.bidQty)} | asks ${fmtQty(tb.askQty)} | Ratio ${tb.ratio.toFixed(2)}x → ${tb.signal}`;
+    }
+  }
+
   const prompt = CRYPTO_PROMPT
     .replace(/{label}/g,            cfg.label)
     .replace(/{ticker}/g,           cfg.ticker)
@@ -707,6 +820,9 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     .replace("{oddsTrendBlock}",    oddsTrendBlock)
     .replace("{volumeBlock}",       volumeBlock)
     .replace("{fundingBlock}",      fundingBlock)
+    .replace("{aggTradesBlock}",    aggTradesBlock)
+    .replace("{openInterestBlock}", openInterestBlock)
+    .replace("{tightBookBlock}",    tightBookBlock)
     .replace("{binanceLeadBlock}",  binanceLeadBlock)
     .replace("{upPrice}",           market.upPrice.toFixed(3))
     .replace("{upPct}",             (market.upPrice * 100).toFixed(1))
