@@ -56,6 +56,12 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             self._handle_trade()
         elif self.path == "/check-position":
             self._handle_check_position()
+        elif self.path == "/limit":
+            self._handle_limit()
+        elif self.path == "/cancel":
+            self._handle_cancel()
+        elif self.path == "/order_status":
+            self._handle_order_status()
         else:
             self.send_response(404)
             self.end_headers()
@@ -148,6 +154,101 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(resp_body)
+        except Exception as e:
+            err = json.dumps({"error": str(e)}).encode()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(err)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(err)
+
+    def _handle_limit(self):
+        """Place a GTC maker limit order. Used by trend-sweep mode."""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+
+            from market_client import PolymarketClient
+            client = PolymarketClient(
+                api_key=body["api_key"],
+                api_secret=body["api_secret"],
+                api_passphrase=body["api_passphrase"],
+                private_key=body["private_key"],
+            )
+            result = client.place_limit_order(
+                token_id=body["token_id"],
+                side=body.get("side", "BUY"),
+                price=float(body["price"]),
+                size=float(body["size"]),
+            )
+            resp = json.dumps(result, default=str).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(resp)
+        except Exception as e:
+            err = json.dumps({"error": str(e)}).encode()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(err)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(err)
+
+    def _handle_cancel(self):
+        """Cancel a single open order by ID."""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+
+            from market_client import PolymarketClient
+            client = PolymarketClient(
+                api_key=body["api_key"],
+                api_secret=body["api_secret"],
+                api_passphrase=body["api_passphrase"],
+                private_key=body["private_key"],
+            )
+            result = client.cancel_order(body["order_id"])
+            resp = json.dumps(result, default=str).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(resp)
+        except Exception as e:
+            err = json.dumps({"error": str(e)}).encode()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(err)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(err)
+
+    def _handle_order_status(self):
+        """Fetch the live status of a single order (for fill polling)."""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+
+            from market_client import PolymarketClient
+            client = PolymarketClient(
+                api_key=body["api_key"],
+                api_secret=body["api_secret"],
+                api_passphrase=body["api_passphrase"],
+                private_key=body["private_key"],
+            )
+            result = client.get_order(body["order_id"])
+            resp = json.dumps(result, default=str).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(resp)
         except Exception as e:
             err = json.dumps({"error": str(e)}).encode()
             self.send_response(500)

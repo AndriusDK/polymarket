@@ -205,6 +205,25 @@
         <span id="h1-floor-label" class="toggle-status green">ON</span>
       </div>
 
+      <div class="switch-row">
+        <span class="field-label" title="When a window opens with a clear trend (≥3 same-direction candles, ≥0.10% move), post a small GTC maker BUY at 50¢ on the trend-direction token BEFORE running AI. The bid sits in the book; when MMs reprice asks downward we fill at fair value instead of fighting them at 90¢.">Trend Sweep (GTC maker bids at 50¢)</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="trend-sweep-toggle" />
+          <span class="toggle-slider"></span>
+        </label>
+        <span id="trend-sweep-label" class="toggle-status dim">OFF</span>
+      </div>
+      <div class="row-2">
+        <div>
+          <label class="field-label">Sweep Bid Price (¢)</label>
+          <input type="number" id="trend-sweep-price" class="neon-input" value="50" min="40" max="60" step="1" title="Price (in cents) to post the GTC maker bid at. 50¢ = top of fair-value range when window opens." />
+        </div>
+        <div>
+          <label class="field-label">Sweep Size ($)</label>
+          <input type="number" id="trend-sweep-size" class="neon-input" value="2" min="1" max="20" step="1" title="USDC notional per sweep bid. Smaller = safer, since each bid is uncorrelated to AI signal quality." />
+        </div>
+      </div>
+
       <!-- Crypto Modes -->
       <div class="section-title"><span class="diamond">◈</span> CRYPTO MODES <span class="hint">(AI-analyzed 5-min &amp; 15-min markets)</span></div>
 

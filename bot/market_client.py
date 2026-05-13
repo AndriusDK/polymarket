@@ -368,3 +368,61 @@ class PolymarketClient:
                 raise  # non-FOK error, propagate immediately
 
         raise last_error  # all retries exhausted
+
+    def place_limit_order(
+        self,
+        token_id: str,
+        side: str,            # "BUY" or "SELL"
+        price: float,         # 0 < price < 1
+        size: float,          # number of shares (not USDC)
+    ) -> dict:
+        """
+        Post a GTC (Good-Till-Cancelled) maker limit order. Sits in the book
+        until filled or cancelled. Used by trend-sweep mode to pre-position
+        bids at fair value before the market reprices.
+        """
+        try:
+            from py_clob_client_v2.clob_types import OrderArgs, OrderType
+            from py_clob_client_v2.order_builder.constants import BUY, SELL
+        except ImportError:
+            raise RuntimeError("py-clob-client-v2 is not installed.")
+
+        if not (0 < price < 1):
+            raise ValueError(f"price must be between 0 and 1, got {price}")
+        if size <= 0:
+            raise ValueError(f"size must be positive, got {size}")
+
+        client = self._get_clob_client()
+        side_const = BUY if side.upper() == "BUY" else SELL
+
+        order_args = OrderArgs(
+            token_id=token_id,
+            price=round(price, 4),
+            size=round(size, 4),
+            side=side_const,
+        )
+        signed_order = client.create_order(order_args)
+        response = client.post_order(signed_order, OrderType.GTC)
+        logger.info("GTC limit order placed: %s @ %.4f x %.4f → %s",
+                    side, price, size, response)
+        return response
+
+    def cancel_order(self, order_id: str) -> dict:
+        """Cancel a single open order by ID."""
+        client = self._get_clob_client()
+        try:
+            response = client.cancel(order_id=order_id)
+            logger.info("Cancelled order %s: %s", order_id[:12], response)
+            return response
+        except Exception as e:
+            logger.warning("Cancel failed for %s: %s", order_id[:12], e)
+            raise
+
+    def get_order(self, order_id: str) -> dict:
+        """Fetch the live status of a single order (for fill polling)."""
+        client = self._get_clob_client()
+        try:
+            return client.get_order(order_id=order_id)
+        except Exception as e:
+            logger.warning("get_order failed for %s: %s", order_id[:12], e)
+            raise
