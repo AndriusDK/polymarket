@@ -47,10 +47,10 @@ const state = {
   losses: 0,
   sessionStart: Date.now(),
   bootTime: null,      // set when first asset starts; used for startup cooldown
-  btc: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map(), analysisCache: new Map() },  // conditionId → endDateMs
-  eth: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map(), analysisCache: new Map() },
-  sol: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map(), analysisCache: new Map() },
-  xrp: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map(), analysisCache: new Map() },
+  btc: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map(), analysisCache: new Map(), pendingLimitOrders: new Map(), sweptWindows: new Set() },  // conditionId → endDateMs
+  eth: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map(), analysisCache: new Map(), pendingLimitOrders: new Map(), sweptWindows: new Set() },
+  sol: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map(), analysisCache: new Map(), pendingLimitOrders: new Map(), sweptWindows: new Set() },
+  xrp: { timer: null, discoveryTimer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, fastRunning: false, oddsHistory: new Map(), volTrack: new Map(), scheduledOpens: new Map(), analysisCache: new Map(), pendingLimitOrders: new Map(), sweptWindows: new Set() },
   tradeHistory: [],    // { ts, pnl, asset, reason } — every closed position, used by profit chart
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
@@ -124,6 +124,9 @@ const PERSIST_FIELDS = [
   ["stop-grace-sec",       "value"],
   ["trail-arm-pct",        "value"],
   ["trail-lockin-pct",     "value"],
+  ["trend-sweep-toggle",  "checked"],
+  ["trend-sweep-price",   "value"],
+  ["trend-sweep-size",    "value"],
 ];
 
 function saveSettings() {
@@ -144,12 +147,13 @@ function loadSettings() {
     if (el && data[id] !== undefined) el[prop] = data[id];
   }
   // Sync toggle labels after restoring checkboxes
-  syncToggleLabel("dry-run-toggle",  "dry-run-label",  ["ON","amber"], ["OFF — LIVE","red"]);
-  syncToggleLabel("fok-toggle",      "fok-label",      ["ON","green"], ["OFF — Limit/GTC","amber"]);
-  syncToggleLabel("h1-floor-toggle", "h1-floor-label", ["ON","green"], ["OFF","amber"]);
-  syncToggleLabel("btc-mode-toggle", "btc-mode-label",  ["ON","green"], ["OFF","dim"]);
-  syncToggleLabel("eth-mode-toggle", "eth-mode-label",  ["ON","green"], ["OFF","dim"]);
-  syncToggleLabel("sol-mode-toggle", "sol-mode-label",  ["ON","green"], ["OFF","dim"]);
+  syncToggleLabel("dry-run-toggle",     "dry-run-label",      ["ON","amber"], ["OFF — LIVE","red"]);
+  syncToggleLabel("fok-toggle",         "fok-label",          ["ON","green"], ["OFF — Limit/GTC","amber"]);
+  syncToggleLabel("h1-floor-toggle",    "h1-floor-label",     ["ON","green"], ["OFF","amber"]);
+  syncToggleLabel("btc-mode-toggle",    "btc-mode-label",     ["ON","green"], ["OFF","dim"]);
+  syncToggleLabel("eth-mode-toggle",    "eth-mode-label",     ["ON","green"], ["OFF","dim"]);
+  syncToggleLabel("sol-mode-toggle",    "sol-mode-label",     ["ON","green"], ["OFF","dim"]);
+  syncToggleLabel("trend-sweep-toggle", "trend-sweep-label",  ["ON","green"], ["OFF","dim"]);
 }
 
 function syncToggleLabel(toggleId, labelId, onState, offState) {
@@ -178,6 +182,8 @@ function initSetup() {
     syncToggleLabel("eth-mode-toggle", "eth-mode-label", ["ON","green"], ["OFF","dim"]));
   $("#sol-mode-toggle")?.addEventListener("change", () =>
     syncToggleLabel("sol-mode-toggle", "sol-mode-label", ["ON","green"], ["OFF","dim"]));
+  $("#trend-sweep-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("trend-sweep-toggle", "trend-sweep-label", ["ON","green"], ["OFF","dim"]));
 
   $("#btn-launch").addEventListener("click", () => {
     $("#setup-error").textContent = "";
@@ -214,12 +220,15 @@ function initSetup() {
       xrpMode:       $("#xrp-mode-toggle")?.checked ?? false,
       xrpMaxBet:     parseFloat($("#xrp-max-bet")?.value) || 5,
       xrpMinEdge:    parseFloat($("#xrp-min-edge")?.value) || 0.04,
-      startupCooldown:  parseInt($("#startup-cooldown")?.value) || 90,
+      startupCooldown:   parseInt($("#startup-cooldown")?.value) || 90,
       entryWindowPct5m:  parseFloat($("#entry-window-pct-5m")?.value  ?? 45) / 100,
       entryWindowPct15m: parseFloat($("#entry-window-pct-15m")?.value ?? 30) / 100,
-      slippageCents:    parseFloat($("#slippage-cents")?.value ?? 10),
-      useFOK:           $("#fok-toggle")?.checked ?? true,
-      useH1Floor:       $("#h1-floor-toggle")?.checked ?? true,
+      slippageCents:     parseFloat($("#slippage-cents")?.value ?? 10),
+      useFOK:            $("#fok-toggle")?.checked ?? true,
+      useH1Floor:        $("#h1-floor-toggle")?.checked ?? true,
+      trendSweep:        $("#trend-sweep-toggle")?.checked ?? false,
+      trendSweepPrice:   parseFloat($("#trend-sweep-price")?.value) || 50,  // cents
+      trendSweepSize:    parseFloat($("#trend-sweep-size")?.value)  || 2,   // USDC
     };
 
     initDashboard();
@@ -314,7 +323,14 @@ function initDashboard() {
 
 function stopBot() {
   if (state.abortCtrl) state.abortCtrl.abort();
-  for (const asset of ["btc", "eth", "sol", "xrp"]) stopCryptoMode(asset);
+  for (const asset of ["btc", "eth", "sol", "xrp"]) {
+    // Cancel any pending sweep bids so they don't fill after the bot is "stopped"
+    for (const conditionId of [...state[asset].pendingLimitOrders.keys()]) {
+      cancelTrendSweepOrder(asset, conditionId, "bot stopped");
+    }
+    stopCryptoMode(asset);
+  }
+  stopPendingLimitPoll();
   chainlinkStream.disconnect();
   setStat("status", "STOPPED", "amber");
   logEntry("warning", "Bot stopped.");
@@ -1421,6 +1437,9 @@ function startCryptoMode(asset) {
   runCryptoCycle(asset);
   state[asset].timer          = setInterval(() => runCryptoCycle(asset), 15_000);
   state[asset].discoveryTimer = setInterval(() => runFastDiscoveryCycle(asset), 5_000);
+
+  // Start polling pending GTC sweep orders (no-op if sweep mode is off / no orders queued)
+  if (state.config?.trendSweep) startPendingLimitPoll();
 }
 
 function stopCryptoMode(asset) {
@@ -1639,6 +1658,17 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
         const displayPrice = snap.chainlinkPriceToBeat ?? 0;
         const src = (clPrice && !state.chainlinkPrices[asset]) ? " (historical)" : "";
         logEntry("dim", `  → window opened — priceToBeat refreshed $${displayPrice >= 1000 ? displayPrice.toFixed(0) : displayPrice.toFixed(2)}${src}`);
+
+        // Trend-Sweep: post a GTC maker bid at 50¢ on the trend-direction token
+        // BEFORE the AI cycle runs. This gets us into the book early so we fill
+        // at fair value when MMs reprice their asks (instead of fighting them
+        // for the last shares at 90¢).
+        if (state.config?.trendSweep) {
+          const sweepSignal = detectClearTrend(candles);
+          if (sweepSignal) {
+            placeTrendSweepBid(asset, market, sweepSignal, spot);
+          }
+        }
       }
       if (timeRemaining > windowSecs) {
         // pre-window polling — no log (too noisy)
@@ -3105,6 +3135,278 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat, windowAge 
 }
 
 const placeBtcTrade = (analysis, data) => placeCryptoTrade("btc", analysis, data);
+
+// ── Trend-Sweep mode (GTC maker bids) ────────────────────────────
+//
+// Posts a GTC limit BUY at ~50¢ on the trend-direction token the moment a new
+// window opens, BEFORE any AI analysis runs. The order sits in the book as a
+// maker; when market makers reprice their asks (because BTC has clearly moved
+// above/below target), our bid is already at the front of the queue and fills
+// at fair value. Cancelled if the trend reverses, the window is about to
+// resolve, or the asset mode is stopped.
+
+function detectClearTrend(candles) {
+  // Returns "BUY_UP" if last 3 candles are bullish with positive momentum,
+  // "BUY_DOWN" if bearish with negative momentum, null otherwise.
+  if (!candles || candles.length < 3) return null;
+  const last3 = candles.slice(-3);
+  const allBull = last3.every(c => c.close > c.open);
+  const allBear = last3.every(c => c.close < c.open);
+  if (!allBull && !allBear) return null;
+  const totalMove = last3[2].close - last3[0].open;
+  const pctMove   = Math.abs(totalMove) / last3[0].open;
+  if (pctMove < 0.0010) return null;  // need ≥0.10% move across 3 candles
+  return allBull ? "BUY_UP" : "BUY_DOWN";
+}
+
+async function placeTrendSweepBid(asset, market, signal, spot) {
+  const c = state.config;
+  if (!c.trendSweep) return;
+  if (state[asset].sweptWindows.has(market.conditionId)) return;
+  if (state[asset].pendingLimitOrders.has(market.conditionId)) return;
+  if (state.trades.some(t => t.conditionId === market.conditionId)) return;
+  if (state.stats.spent >= c.maxDaily) return;
+
+  const isUp     = signal === "BUY_UP";
+  const tokenId  = isUp ? market.upTokenId : market.downTokenId;
+  const priceCt  = Math.max(40, Math.min(60, c.trendSweepPrice ?? 50));
+  const price    = priceCt / 100;
+  const sizeUsd  = Math.min(c.trendSweepSize ?? 2, c.maxDaily - state.stats.spent);
+  const shares   = sizeUsd / price;
+
+  if (sizeUsd < 1.00 || shares < 1.00) return;
+
+  state[asset].sweptWindows.add(market.conditionId);
+  const cfg = CRYPTO_CONFIG[asset];
+  logEntry("amber",
+    `  ◈ <span class="amber">SWEEP</span> ${cfg.ticker} ${signal} — posting GTC $${sizeUsd.toFixed(2)} @ ${priceCt}¢ ` +
+    `(${cfg.ticker} $${spot.toFixed(spot >= 1000 ? 0 : 2)} trend-clear)`
+  );
+
+  if (c.dryRun) {
+    // In dry run, simulate an immediate fill at our bid price so the strategy
+    // can be observed end-to-end (stop-loss + take-profit on the resulting
+    // position). Real GTC bids only fill when an MM crosses our price.
+    const pending = {
+      orderId:    `dry-${Date.now()}`,
+      market, signal, tokenId, price, shares, sizeUsd,
+      placedAt:   Date.now(),
+      endDateMs:  new Date(market.endDate).getTime(),
+      dryRun:     true,
+    };
+    convertFilledSweepToTrade(asset, pending, price);
+    return;
+  }
+
+  try {
+    const resp = await fetch("/limit", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token_id:       tokenId,
+        side:           "BUY",
+        price,
+        size:           shares,
+        private_key:    c.polyPrivateKey,
+        api_key:        c.polyApiKey,
+        api_secret:     c.polyApiSecret,
+        api_passphrase: c.polyPassphrase,
+      }),
+    });
+    const result = await resp.json();
+    if (result.error) {
+      logEntry("warn", `  ◈ SWEEP failed — ${result.error}`);
+      state[asset].sweptWindows.delete(market.conditionId);
+      return;
+    }
+    const orderId = result.orderID ?? result.orderId ?? result.id;
+    if (!orderId) {
+      logEntry("warn", `  ◈ SWEEP no orderID returned — ${JSON.stringify(result).slice(0, 100)}`);
+      state[asset].sweptWindows.delete(market.conditionId);
+      return;
+    }
+    state[asset].pendingLimitOrders.set(market.conditionId, {
+      orderId, market, signal, tokenId, price, shares, sizeUsd,
+      placedAt:   Date.now(),
+      endDateMs:  new Date(market.endDate).getTime(),
+      dryRun:     false,
+    });
+    logEntry("info", `  ◈ SWEEP placed: order ${String(orderId).slice(0, 12)}…`);
+  } catch (err) {
+    logEntry("warn", `  ◈ SWEEP error: ${err.message}`);
+    state[asset].sweptWindows.delete(market.conditionId);
+  }
+}
+
+async function cancelTrendSweepOrder(asset, conditionId, reason) {
+  const pending = state[asset].pendingLimitOrders.get(conditionId);
+  if (!pending) return;
+  state[asset].pendingLimitOrders.delete(conditionId);
+
+  const c = state.config;
+  if (pending.dryRun) {
+    logEntry("dim", `  ◈ SWEEP cancelled (sim) — ${reason}`);
+    return;
+  }
+  try {
+    await fetch("/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        order_id:       pending.orderId,
+        private_key:    c.polyPrivateKey,
+        api_key:        c.polyApiKey,
+        api_secret:     c.polyApiSecret,
+        api_passphrase: c.polyPassphrase,
+      }),
+    });
+    logEntry("dim", `  ◈ SWEEP cancelled — ${reason}`);
+  } catch (err) {
+    logEntry("warn", `  ◈ SWEEP cancel failed (${err.message}) — ${reason}`);
+  }
+}
+
+function convertFilledSweepToTrade(asset, pending, fillPrice) {
+  const c       = state.config;
+  const cfg     = CRYPTO_CONFIG[asset];
+  const market  = pending.market;
+  const isUp    = pending.signal === "BUY_UP";
+  const secsLeft = Math.max(1, Math.round((pending.endDateMs - Date.now()) / 1000));
+
+  const trade = {
+    id:            Date.now() + state.stats.trades,
+    time:          new Date().toUTCString().slice(-12, -4),
+    question:      market.question,
+    conditionId:   market.conditionId,
+    tokenId:       pending.tokenId,
+    signal:        pending.signal,
+    entryPrice:    fillPrice,
+    amount:        pending.sizeUsd,
+    shares:        pending.shares,
+    currentPrice:  fillPrice,
+    peakPrice:     fillPrice,
+    confidence:    "SWEEP",   // tag so card shows source; closePosition uses .mode for SELL gate
+    unrealizedPnl: 0,
+    mode:          c.dryRun ? "SIM" : "LIVE",
+    type:          asset,
+    endDate:       market.endDate,
+    confirmed:     true,
+    spot:          null,
+    priceToBeat:   null,
+    gap:           null,
+    edge:          null,
+    reasoning:     `Trend-sweep maker bid filled at ${(fillPrice*100).toFixed(1)}¢`,
+    momentum:      null,
+    volatility:    null,
+    volSpikeRatio: null,
+    signalAgainstGap: false,
+    priceHistory:  [],
+    totalSecs:     secsLeft,
+    entryTime:     Date.now(),
+    entryVolume:   market.volume ?? null,
+    marketUrl:     market.slug ? `https://polymarket.com/event/${market.slug}` : "",
+    exitPrice:     null,
+    secsAtClose:   null,
+    earlyWindow:   true,
+  };
+
+  state.trades.push(trade);
+  state.stats.trades++;
+  state.stats.spent += pending.sizeUsd;
+  setStat("trades", String(state.stats.trades));
+  setStat("spent",  `$${state.stats.spent.toFixed(2)}`);
+  setStat("budget", `$${(c.maxDaily - state.stats.spent).toFixed(2)}`);
+  const tradesEl = $(`#stat-${asset}-trades`);
+  if (tradesEl) tradesEl.textContent = String(parseInt(tradesEl.textContent || "0") + 1);
+
+  priceStream.subscribe(pending.tokenId);
+  addCryptoCard(trade);
+  startCryptoCountdown();
+
+  logEntry("trade",
+    `  ◈ <span class="green">SWEEP FILL</span> ${cfg.ticker} ${pending.signal} ` +
+    `$${pending.sizeUsd.toFixed(2)} @ ${(fillPrice*100).toFixed(1)}¢ — ${market.question.slice(0, 50)}`
+  );
+}
+
+let pendingLimitPollTimer = null;
+
+function startPendingLimitPoll() {
+  if (pendingLimitPollTimer) return;
+  pendingLimitPollTimer = setInterval(pollPendingLimitOrders, 8_000);
+}
+
+function stopPendingLimitPoll() {
+  if (!pendingLimitPollTimer) return;
+  clearInterval(pendingLimitPollTimer);
+  pendingLimitPollTimer = null;
+}
+
+async function pollPendingLimitOrders() {
+  const c = state.config;
+  for (const asset of ["btc", "eth", "sol", "xrp"]) {
+    for (const [conditionId, pending] of [...state[asset].pendingLimitOrders]) {
+      const secsToEnd = Math.round((pending.endDateMs - Date.now()) / 1000);
+
+      // Cancel near resolution: at <60s left a fill creates a position with no time to manage.
+      if (secsToEnd < 60) {
+        cancelTrendSweepOrder(asset, conditionId, `${secsToEnd}s before resolution`);
+        continue;
+      }
+
+      // Cancel if signal flipped: BTC trend reversed, no longer want to be long this direction.
+      // Re-detect from latest BTC macro state (refreshed every cycle).
+      const macro = state.btcMacro;
+      if (macro && (Date.now() - macro.updatedAt) < 180_000) {
+        const macroFlip =
+          (pending.signal === "BUY_UP"   && macro.bearCount >= 4 && macro.momentum <= -20) ||
+          (pending.signal === "BUY_DOWN" && macro.bullCount >= 4 && macro.momentum >=  20);
+        if (macroFlip) {
+          cancelTrendSweepOrder(asset, conditionId, `BTC macro reversed against ${pending.signal}`);
+          continue;
+        }
+      }
+
+      // Dry-run orders fill immediately at placement time (see placeTrendSweepBid),
+      // so they should never be in pendingLimitOrders. Skip defensively.
+      if (pending.dryRun) {
+        state[asset].pendingLimitOrders.delete(conditionId);
+        continue;
+      }
+
+      // Live: poll the order status from CLOB
+      try {
+        const resp = await fetch("/order_status", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            order_id:       pending.orderId,
+            private_key:    c.polyPrivateKey,
+            api_key:        c.polyApiKey,
+            api_secret:     c.polyApiSecret,
+            api_passphrase: c.polyPassphrase,
+          }),
+        });
+        const status = await resp.json();
+        const sizeMatched = parseFloat(status.size_matched ?? status.sizeMatched ?? 0);
+        const orderState  = String(status.status ?? status.state ?? "").toUpperCase();
+
+        if (sizeMatched > 0 || orderState === "MATCHED" || orderState === "FILLED") {
+          const filledShares = sizeMatched > 0 ? sizeMatched : pending.shares;
+          const filledUsdc   = filledShares * pending.price;
+          const filledPending = { ...pending, shares: filledShares, sizeUsd: filledUsdc };
+          state[asset].pendingLimitOrders.delete(conditionId);
+          convertFilledSweepToTrade(asset, filledPending, pending.price);
+        } else if (orderState === "CANCELED" || orderState === "CANCELLED" || orderState === "EXPIRED") {
+          state[asset].pendingLimitOrders.delete(conditionId);
+          logEntry("dim", `  ◈ SWEEP order ${orderState.toLowerCase()} (CLOB-side)`);
+        }
+      } catch (err) {
+        // Network blip — try again next poll cycle
+      }
+    }
+  }
+}
 
 // ── Countdown timer ───────────────────────────────────────────────
 
