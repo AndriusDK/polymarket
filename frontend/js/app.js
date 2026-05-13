@@ -197,7 +197,7 @@ function initSetup() {
       takeProfitPct:    parseFloat($("#take-profit-pct")?.value) || 50,
       stopLossPct:      parseFloat($("#stop-loss-pct")?.value)   || 25,
       stopGraceSec:     parseFloat($("#stop-grace-sec")?.value)  ?? 10,
-      minMarketVolume:  parseFloat($("#min-market-volume")?.value) || 1000,
+      minMarketVolume:  (() => { const v = parseFloat($("#min-market-volume")?.value); return isNaN(v) ? 1000 : v; })(),
       minGapBtc:        parseFloat($("#min-gap-btc")?.value ?? ""),   // 0 = disabled
       minGapEth:        parseFloat($("#min-gap-eth")?.value ?? ""),   // 0 = disabled
       minEntryOdds:     parseFloat($("#min-entry-odds")?.value)    || 10,
