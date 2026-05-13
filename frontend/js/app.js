@@ -1828,12 +1828,12 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
     // Late-window gate: skip AI call entirely when the entry window hasn't opened yet.
     // Checked BEFORE the header log so gated markets produce no per-cycle noise — only
     // the once-per-60s throttled gate-closed message.
+    // windowSecs is parsed from the market title (exact 300/900s), so the 5m vs 15m
+    // classification is reliable even if firstSeenAt is stale or pre-window.
     {
-      const wAge         = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
-      const totWinSecs   = wAge / 1000 + timeRemaining;
-      const is15m        = totWinSecs > 400;
+      const is15m        = windowSecs > 400;
       const maxEntryPct  = is15m ? (c.entryWindowPct15m ?? 0.30) : (c.entryWindowPct5m ?? 0.45);
-      const pctRemaining = totWinSecs > 0 ? timeRemaining / totWinSecs : 0;
+      const pctRemaining = windowSecs > 0 ? Math.min(1, timeRemaining / windowSecs) : 0;
       if (pctRemaining > maxEntryPct) {
         // Keep market in gapWatch so it stays in `fresh` next cycle.
         state[asset].gapWatch.set(market.conditionId, true);
@@ -1841,8 +1841,8 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
         const now = Date.now();
         if (!storedData?.gateClosedLoggedAt || now - storedData.gateClosedLoggedAt > 60_000) {
           if (storedData) storedData.gateClosedLoggedAt = now;
-          const gateOpenSecs = Math.round(totWinSecs * (1 - maxEntryPct));
-          logEntry("dim", `  → <span class="amber">gate closed</span> — ${Math.round(pctRemaining * 100)}% of window left (>${Math.round(maxEntryPct * 100)}%); entry opens at ~${gateOpenSecs}s into window`);
+          const gateOpenSecs = Math.round(windowSecs * (1 - maxEntryPct));
+          logEntry("dim", `  → <span class="amber">gate closed</span> — ${Math.round(pctRemaining * 100)}% of window left (>${Math.round(maxEntryPct * 100)}%); ${is15m ? "15m" : "5m"} entry opens at ~${gateOpenSecs}s into window`);
         }
         continue;
       }
