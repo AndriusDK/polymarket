@@ -1872,8 +1872,13 @@ async function _runCryptoCycleInner(asset, { fastOnly = false } = {}) {
 
     // High-certainty skip: one side ≥90% means the market is essentially resolved —
     // max gain is ≤10¢/$, CLOB books at these levels are always empty, and the AI
-    // would either SKIP or return a BUY that can't fill. Skip the API call entirely.
+    // would either SKIP or return a BUY that can't fill. Mark analyzed so the market
+    // is permanently removed from the cycle — avoids log spam on repeated cycles.
     if (Math.max(market.upPrice, market.downPrice) >= 0.90) {
+      const snap = storedData ?? { endDateMs: new Date(market.endDate).getTime() };
+      state[asset].analyzed.set(market.conditionId, snap);
+      state[asset].gapPending.delete(market.conditionId);
+      state[asset].gapWatch.delete(market.conditionId);
       logEntry("dim", `  → <span class="dim">skip — ${(Math.max(market.upPrice, market.downPrice)*100).toFixed(1)}% certainty, no edge</span>`);
       continue;
     }
