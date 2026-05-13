@@ -484,6 +484,13 @@ const CRYPTO_PROMPT = [
   "   If effective gap is positive → UP is likely to win → evaluate BUY_UP.",
   "   If effective gap is negative → DOWN is likely to win → evaluate BUY_DOWN.",
   "   If effective gap is near zero (|effectiveGap| < 0.03% of price) → too uncertain → SKIP.",
+  "3a. BINANCE DIRECTION OVERRIDE: The Binance gap (Binance vs priceToBeat) shown above is more predictive of the",
+  "    final oracle resolution than the current oracle gap, because the oracle heartbeats toward Binance every ~25s.",
+  "    When Binance gap CONTRADICTS oracle gap direction, USE THE BINANCE GAP as your primary direction signal.",
+  "    The 'Implied winner' line above already shows this — trust it. Ignoring the Binance-implied direction when",
+  "    it contradicts the oracle is the leading cause of wrong-direction trades.",
+  "3b. TINY ORACLE GAP: When |oracle gap| < 1× avg volatility, the oracle gap is within noise — the Binance gap",
+  "    and momentum are your only real signals. Hard cap confidence at MEDIUM in this case (oracle timing is uncertain).",
   "4. Near-resolution arb: |gap| > 2× volatility AND timeRemaining < 90s AND market odds ≥ 50% in gap direction → HIGH confidence",
   "   (upPrice ≥ 0.50 for BUY_UP, downPrice ≥ 0.50 for BUY_DOWN. Otherwise market already priced reversal — SKIP.)",
   "5. Aligned: gap direction = momentum direction AND timeRemaining < 300s → MEDIUM/HIGH",
@@ -499,7 +506,7 @@ const CRYPTO_PROMPT = [
   "    The Polymarket token price tracks the underlying asset live — even before resolution, if {ticker} moves strongly in one direction, that token will rise 20-30%, hitting take-profit before the market closes.",
   "    You are NOT predicting the final resolution. You are predicting that the TOKEN PRICE will swing enough to take profit.",
   "    Rules: signal in momentum direction (BUY_UP if momentum > 0, BUY_DOWN if momentum < 0). Set \"momentum_trade\": true.",
-  "    Confidence: HIGH only if 5/5 candles aligned AND volume spike ratio > 1.5. MEDIUM if 4/5 candles aligned.",
+  "    Confidence: HIGH only if 5/5 candles aligned AND volume spike ratio > 1.5 AND |Binance gap| > 1× avg volatility. MEDIUM if 4/5 candles aligned OR volume is normal OR Binance gap is small.",
   "    SKIP if timeRemaining < 150s (not enough drift time) or if candle trend contradicts momentum direction.",
   "    This is independent of gap direction — you're trading the MOVE, not the final score.",
   "",
@@ -652,15 +659,12 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     const leadSign    = binanceLead >= 0 ? "+" : "";
     const gapConf     = Math.sign(binanceGap) === Math.sign(oracleGap)
       ? "confirms" : "CONTRADICTS";
-    const tickPred    = binanceLead > 0
-      ? "next oracle tick likely to push price UP (Binance already there)"
-      : binanceLead < 0
-        ? "next oracle tick likely to push price DOWN (Binance already there)"
-        : "no lead — oracle is current";
+    const impliedWinner = binanceGap > 0 ? "UP" : binanceGap < 0 ? "DOWN" : "TIED";
+    const oracleWinner  = oracleGap  > 0 ? "UP" : oracleGap  < 0 ? "DOWN" : "TIED";
     binanceLeadBlock = [
       `Binance live  : ${binanceSpotVal.toFixed(pd)} | Oracle/Chainlink: ${spot.toFixed(pd)} | Lead: ${leadSign}${binanceLead.toFixed(pd)} (Binance is ${Math.abs(binanceLead).toFixed(pd)} ${leadDir} oracle)`,
       `Binance gap   : ${binanceGap >= 0 ? "+" : ""}${binanceGap.toFixed(pd)} vs priceToBeat | Oracle gap: ${oracleGap >= 0 ? "+" : ""}${oracleGap.toFixed(pd)} — Binance ${gapConf} oracle direction`,
-      `Oracle lag    : ${tickPred}`,
+      `Implied winner: ${impliedWinner} (Binance-based) vs ${oracleWinner} (oracle-based)${gapConf === "CONTRADICTS" ? " ← CONFLICT: use Binance as primary direction, oracle is lagging" : " ← both agree"}`,
     ].join("\n");
   }
 
