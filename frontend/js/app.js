@@ -843,7 +843,7 @@ function closePosition(trade, reason) {
             logEntry("warn", `  [LIVE] SELL failed${label}: ${result.error}`);
             if (attempt < 2) {
               const delay = (attempt + 1) * 2000;
-              const lowerFloor = priceFloor - 0.10;
+              const lowerFloor = priceFloor - 0.15;
               logEntry("warn", `  [LIVE] SELL retry in ${delay / 1000}s @ ${(lowerFloor * 100).toFixed(0)}¢…`);
               setTimeout(() => attemptGtcSell(lowerFloor, attempt + 1), delay);
             } else {
@@ -860,8 +860,11 @@ function closePosition(trade, reason) {
           logEntry("warn", `  [LIVE] SELL error${label}: ${err.message}`);
         });
     };
-    // Post GTC SELL 5¢ below current price — immediately crosses any bids at or above that level.
-    attemptGtcSell(trade.currentPrice - 0.05, 0);
+    // Post GTC SELL 15¢ below current bid — ensures crossing even if the market
+    // dips during transit. In CLOB mechanics our taker SELL fills at the maker's
+    // bid price (price improvement), so a 15¢ buffer just guarantees fill — we
+    // still get the actual bid price.
+    attemptGtcSell(trade.currentPrice - 0.15, 0);
   }
 
   // Post-close direction tracking: keep subscription alive until market resolves
