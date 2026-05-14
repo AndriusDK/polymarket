@@ -379,14 +379,32 @@ class PolymarketClient:
             size=round(size, 4),
             side=side_const,
         )
-        signed_order = client.create_order(
-            order_args,
-            PartialCreateOrderOptions(neg_risk=True),
-        )
-        response = client.post_order(signed_order, OrderType.GTC)
-        logger.info("GTC limit order placed: %s @ %.4f x %.4f → %s",
-                    side, price, size, response)
-        return response
+
+        # order_version_mismatch from the CLOB means the order was signed for
+        # the wrong exchange contract (regular CTF vs Neg-Risk CTF). Try both
+        # neg_risk values until one is accepted — we can't tell from the
+        # token_id which contract the market lives on, and auto-detection in
+        # older py-clob-client versions can be unreliable.
+        last_err = None
+        for nr in (True, False):
+            try:
+                signed_order = client.create_order(
+                    order_args,
+                    PartialCreateOrderOptions(neg_risk=nr),
+                )
+                response = client.post_order(signed_order, OrderType.GTC)
+                logger.info(
+                    "GTC limit order placed (neg_risk=%s): %s @ %.4f x %.4f → %s",
+                    nr, side, price, size, response,
+                )
+                return response
+            except Exception as e:
+                if "version_mismatch" in str(e).lower():
+                    logger.warning("GTC neg_risk=%s rejected (version_mismatch), retrying...", nr)
+                    last_err = e
+                    continue
+                raise
+        raise last_err
 
     def cancel_order(self, order_id: str) -> dict:
         """Cancel a single open order by ID."""
