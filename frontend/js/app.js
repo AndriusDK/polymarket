@@ -2572,7 +2572,11 @@ async function placeAiMakerBid(asset, analysis, { market, tokenId, amount, price
   if (state.trades.some(t => t.conditionId === market.conditionId)) return;
   if (state.stats.spent >= c.maxDaily) return;
 
-  const shares  = amount / price;
+  // Polymarket minimum: 5 shares per order. Bump amount to satisfy minimum.
+  const MIN_SHARES = 5;
+  const rawShares = amount / price;
+  const shares    = Math.max(rawShares, MIN_SHARES);
+  amount          = shares * price;   // may be higher than original maxBet — ok for maker bids
   const priceCt = Math.round(price * 100);
   const tag     = c.dryRun ? "[SIM-MKR]" : "[LIVE-MKR]";
   const sigClass = analysis.signal === "BUY_UP" ? "green" : "red";

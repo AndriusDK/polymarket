@@ -373,6 +373,7 @@ class PolymarketClient:
             raise ValueError(f"price must be between 0 and 1, got {price}")
         if size <= 0:
             raise ValueError(f"size must be positive, got {size}")
+        size = max(size, 5.0)  # Polymarket minimum: 5 shares per limit order
 
         client = self._get_clob_client()
         side_enum = Side.BUY if side.upper() == "BUY" else Side.SELL
