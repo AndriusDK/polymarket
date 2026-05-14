@@ -91,6 +91,7 @@ const PERSIST_FIELDS = [
   ["trend-sweep-price",   "value"],
   ["trend-sweep-size",    "value"],
   ["ai-maker-toggle",     "checked"],
+  ["emergency-fill-exit-toggle", "checked"],
   ["btc-maker-price",     "value"],
   ["eth-maker-price",     "value"],
   ["sol-maker-price",     "value"],
@@ -121,6 +122,7 @@ function loadSettings() {
   syncToggleLabel("sol-mode-toggle",    "sol-mode-label",     ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("trend-sweep-toggle", "trend-sweep-label",  ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("ai-maker-toggle",    "ai-maker-label",     ["ON","green"], ["OFF","dim"]);
+  syncToggleLabel("emergency-fill-exit-toggle", "emergency-fill-exit-label", ["ON","amber"], ["OFF","dim"]);
 }
 
 function syncToggleLabel(toggleId, labelId, onState, offState) {
@@ -149,6 +151,8 @@ function initSetup() {
     syncToggleLabel("trend-sweep-toggle", "trend-sweep-label", ["ON","green"], ["OFF","dim"]));
   $("#ai-maker-toggle")?.addEventListener("change", () =>
     syncToggleLabel("ai-maker-toggle", "ai-maker-label", ["ON","green"], ["OFF","dim"]));
+  $("#emergency-fill-exit-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("emergency-fill-exit-toggle", "emergency-fill-exit-label", ["ON","amber"], ["OFF","dim"]));
 
   $("#btn-launch").addEventListener("click", () => {
     $("#setup-error").textContent = "";
@@ -189,6 +193,7 @@ function initSetup() {
       trendSweepPrice: parseFloat($("#trend-sweep-price")?.value) || 50,  // cents
       trendSweepSize:  parseFloat($("#trend-sweep-size")?.value)  || 2,   // USDC
       aiMaker:       $("#ai-maker-toggle")?.checked ?? false,
+      emergencyFillExit: $("#emergency-fill-exit-toggle")?.checked ?? false,
       btcMakerPrice: parseFloat($("#btc-maker-price")?.value) || 50,
       ethMakerPrice: parseFloat($("#eth-maker-price")?.value) || 50,
       solMakerPrice: parseFloat($("#sol-maker-price")?.value) || 50,
@@ -2900,6 +2905,32 @@ async function pollPendingLimitOrders() {
                                   aiMakerFill: true };
           state[asset].pendingLimitOrders.delete(conditionId);
           convertFilledSweepToTrade(asset, filledPending, actualFillPrice);
+
+          // Emergency fill-slip exit: a fill ≥15% below our bid means the orderbook
+          // walked through us — entering into a hostile move. Bail before the −25%
+          // stop bleeds further. Wait 5s to let the orderbook settle, then check
+          // if the bid has recovered above the fill price; if not, close.
+          const slipFraction = pending.price > 0 ? (pending.price - actualFillPrice) / pending.price : 0;
+          if (state.config?.emergencyFillExit && slipFraction >= 0.15) {
+            logEntry("red",
+              `  ◈ FILL SLIP ${(slipFraction*100).toFixed(1)}% — arming emergency exit ` +
+              `(bid ${(pending.price*100).toFixed(1)}¢ → fill ${(actualFillPrice*100).toFixed(1)}¢)`
+            );
+            const tokenIdForCheck = pending.tokenId;
+            const fillPriceForCheck = actualFillPrice;
+            setTimeout(() => {
+              const tr = [...state.trades].reverse()
+                .find(x => x.tokenId === tokenIdForCheck && x.aiMakerFill && !x.exitPrice);
+              if (!tr) return;
+              if (tr.currentPrice <= fillPriceForCheck * 0.98) {
+                closePosition(tr, "FILL SLIP EXIT");
+              } else {
+                logEntry("green",
+                  `  ◈ FILL SLIP EXIT skipped — price recovered to ${(tr.currentPrice*100).toFixed(1)}¢`
+                );
+              }
+            }, 5_000);
+          }
         } else if (orderState === "CANCELED" || orderState === "CANCELLED" || orderState === "EXPIRED") {
           state[asset].pendingLimitOrders.delete(conditionId);
           const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";

@@ -98,6 +98,14 @@
           <input type="number" id="min-market-volume" class="neon-input" value="500" min="0" step="50" title="Skip markets with total volume below this threshold (OR velocity ≥ $10/min passes regardless)" />
         </div>
       </div>
+      <div class="switch-row">
+        <span class="field-label">Emergency Fill Exit (close immediately if filled ≥15% below bid)</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="emergency-fill-exit-toggle" />
+          <span class="toggle-slider"></span>
+        </label>
+        <span id="emergency-fill-exit-label" class="toggle-status dim">OFF</span>
+      </div>
       <div class="row-2">
         <div>
           <label class="field-label">Min Gap % (0 = off)</label>
