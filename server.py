@@ -186,17 +186,19 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             )
             result = client.get_order(body["order_id"])
 
-            # If the frontend passed token_id + placed_at_sec, compute the actual
-            # avg fill price by querying trades. The order status's `price` is the
-            # bid limit — useless for entry tracking when fills get price improvement.
+            # Use associate_trades from the order status for accurate fill price.
+            # The order's own `price` field is just the bid limit — actual fills
+            # get price improvement, so we look up each associated trade UUID.
             token_id    = body.get("token_id")
             placed_at_s = body.get("placed_at_sec", 0)
             if token_id and isinstance(result, dict):
+                associate_ids = result.get("associate_trades") or []
                 try:
                     fp = client.get_avg_fill_price(
                         order_id=body["order_id"],
                         token_id=token_id,
                         after_sec=int(placed_at_s) if placed_at_s else 0,
+                        associate_trade_ids=associate_ids,
                     )
                     if fp is not None:
                         result["computed_fill_price"] = fp

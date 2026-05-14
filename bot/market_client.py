@@ -438,15 +438,15 @@ class PolymarketClient:
         order_id: str,
         token_id: str,
         after_sec: int = 0,
+        associate_trade_ids: list | None = None,
     ) -> Optional[float]:
         """
-        Query trades for the asset after a given timestamp and compute the
-        size-weighted avg fill price for our order. Used to record correct
-        entry price for GTC maker bids that get price improvement.
+        Compute the size-weighted avg fill price for our order.
 
-        Matches by order_id (maker or taker side) — never falls back to
-        unrelated trades, since that produced bogus "fill prices" equal to
-        the recent market average instead of our actual fill.
+        Primary strategy: match by the `associate_trades` UUIDs from the order
+        status response — the CLOB embeds them directly so this is exact.
+        Fallback: match by our order_id across maker/taker fields in the trades.
+        Never averages unrelated trades (that produced fake "bid-price" fills).
         """
         try:
             from py_clob_client_v2 import TradeParams
@@ -454,17 +454,6 @@ class PolymarketClient:
             return None
 
         client = self._get_clob_client()
-
-        # Derive our wallet address — needed to filter trades reliably and to
-        # tell which side of each trade is ours. Don't rely on the client's
-        # get_address() (may not exist on this lib version).
-        my_addr = None
-        try:
-            from eth_account import Account
-            if self.private_key:
-                my_addr = Account.from_key(self.private_key).address.lower()
-        except Exception as e:
-            logger.warning("could not derive wallet address: %s", e)
 
         params = TradeParams(
             asset_id=token_id,
@@ -476,57 +465,56 @@ class PolymarketClient:
             logger.warning("get_trades failed: %s", e)
             return None
         if not trades:
-            logger.info("no trades returned for order %s", order_id[:12])
             return None
 
-        # Log a sample so we can verify field names in the wild.
-        try:
-            sample = trades[0] if isinstance(trades, list) and trades else trades
-            logger.info("get_trades returned %d trades for order %s; sample keys: %s",
-                        len(trades) if isinstance(trades, list) else 1,
-                        order_id[:12],
-                        list(sample.keys())[:30] if isinstance(sample, dict) else type(sample).__name__)
-        except Exception:
-            pass
-
         def _norm(v):
-            return str(v).lower() if v else ""
+            return str(v).strip().lower() if v else ""
 
-        order_id_l = _norm(order_id)
         matched = []
-        for t in trades:
-            if not isinstance(t, dict):
-                continue
-            ids = [
-                _norm(t.get("maker_order_id")),  _norm(t.get("makerOrderId")),
-                _norm(t.get("taker_order_id")),  _norm(t.get("takerOrderId")),
-                _norm(t.get("order_id")),        _norm(t.get("orderId")),
-            ]
-            # Also check nested maker_orders list (some APIs return per-maker fills)
-            for sub in (t.get("maker_orders") or t.get("makerOrders") or []):
-                if isinstance(sub, dict):
-                    ids.append(_norm(sub.get("order_id") or sub.get("orderId") or sub.get("maker_order_id")))
-            if order_id_l in ids:
-                matched.append(t)
 
-        # If still nothing, fall back to address-matched trades.
-        if not matched and my_addr:
+        # Strategy 1: match by associate_trades UUIDs (most reliable — directly
+        # from the order status `associate_trades` list).
+        if associate_trade_ids:
+            wanted = {_norm(x) for x in associate_trade_ids if x}
             for t in trades:
                 if not isinstance(t, dict):
                     continue
-                addrs = [
-                    _norm(t.get("maker_address")), _norm(t.get("makerAddress")),
-                    _norm(t.get("taker_address")), _norm(t.get("takerAddress")),
-                    _norm(t.get("owner")),
+                tid = _norm(t.get("id") or t.get("tradeId") or t.get("trade_id"))
+                if tid in wanted:
+                    matched.append(t)
+            if matched:
+                logger.info("matched %d trades by associate_trade_ids for order %s",
+                            len(matched), order_id[:12])
+
+        # Strategy 2: match by our order_id in maker/taker fields.
+        if not matched:
+            order_id_l = _norm(order_id)
+            for t in trades:
+                if not isinstance(t, dict):
+                    continue
+                ids = [
+                    _norm(t.get("maker_order_id")), _norm(t.get("makerOrderId")),
+                    _norm(t.get("taker_order_id")), _norm(t.get("takerOrderId")),
+                    _norm(t.get("order_id")),       _norm(t.get("orderId")),
                 ]
                 for sub in (t.get("maker_orders") or t.get("makerOrders") or []):
                     if isinstance(sub, dict):
-                        addrs.append(_norm(sub.get("maker_address") or sub.get("owner")))
-                if my_addr in addrs:
+                        ids.append(_norm(sub.get("order_id") or sub.get("maker_order_id")))
+                if order_id_l in ids:
                     matched.append(t)
+            if matched:
+                logger.info("matched %d trades by order_id for order %s",
+                            len(matched), order_id[:12])
 
         if not matched:
-            logger.warning("no trades matched order %s or our address — fill price unknown", order_id[:12])
+            # Log what we got so we can refine the matching strategy next round.
+            try:
+                sample = trades[0] if trades else {}
+                logger.warning("no trades matched for order %s; sample trade keys: %s; "
+                               "associate_trade_ids: %s; total trades returned: %d",
+                               order_id[:12], list(sample.keys()), associate_trade_ids, len(trades))
+            except Exception:
+                pass
             return None
 
         total_usdc = 0.0

@@ -850,9 +850,50 @@ function closePosition(trade, reason) {
               logEntry("warn", `  [LIVE] SELL gave up — position may still be open on Polymarket`);
             }
           } else {
-            const orderId = result.orderID ?? result.orderId ?? result.id ?? "";
-            console.log(`[LIVE] GTC SELL posted${label}`, result);
-            logEntry("info", `  [LIVE] SELL GTC posted${label}: ${String(orderId).slice(0, 16)}…`);
+            const orderId   = result.orderID ?? result.orderId ?? result.id ?? "";
+            const fillPrice = parseFillPrice(result, "SELL");
+            console.log(`[LIVE] GTC SELL confirmed${label}`, result,
+                        fillPrice ? `fill: ${(fillPrice*100).toFixed(1)}¢` : "");
+            logEntry("info", `  [LIVE] SELL confirmed${label}: ${String(orderId).slice(0, 16)}…` +
+                             (fillPrice ? ` @ ${(fillPrice*100).toFixed(1)}¢` : ""));
+
+            // Reconcile realized PnL from actual SELL fill price.
+            // The snapshot at close time uses bid (stale/thin), but GTC SELL
+            // response carries exact takingAmount/makingAmount.
+            if (fillPrice && fillPrice > 0.01 && trade.shares > 0) {
+              const prevRealized   = trade.realizedPnl;
+              const actualRealized = trade.shares * fillPrice - trade.amount;
+              const delta = actualRealized - prevRealized;
+              if (Math.abs(delta) > 0.01) {
+                state.realizedPnl = (state.realizedPnl || 0) + delta;
+                trade.realizedPnl = actualRealized;
+                const wasWin = prevRealized  > 0;
+                const nowWin = actualRealized > 0;
+                if (wasWin && !nowWin)  { state.wins--;   state.losses++; }
+                else if (!wasWin && nowWin) { state.losses--; state.wins++; }
+                const cardEl = $(`#card-${trade.id}`);
+                if (cardEl) {
+                  const pnlEl = cardEl.querySelector(".btc-closed-pnl");
+                  if (pnlEl) {
+                    const sign = actualRealized >= 0 ? "+" : "";
+                    pnlEl.textContent = `${sign}$${actualRealized.toFixed(2)} REALIZED`;
+                    pnlEl.className = `btc-closed-pnl ${actualRealized >= 0 ? "green" : "red"}`;
+                  }
+                  if (wasWin !== nowWin) {
+                    const stripEl = cardEl.querySelector(".btc-closed-strip");
+                    const labelEl = cardEl.querySelector(".btc-closed-label");
+                    if (stripEl) stripEl.className = `btc-closed-strip ${nowWin ? "win" : "loss"}`;
+                    if (labelEl) {
+                      const txt = labelEl.textContent.replace(/^(▲ WIN|▼ LOSS) — /, "");
+                      labelEl.textContent = `${nowWin ? "▲ WIN" : "▼ LOSS"} — ${txt}`;
+                    }
+                  }
+                }
+                updatePnlStat();
+                logEntry("info", `  [LIVE] PnL reconciled: $${actualRealized.toFixed(2)} ` +
+                                 `(was $${prevRealized.toFixed(2)})`);
+              }
+            }
           }
         })
         .catch(err => {
