@@ -2647,6 +2647,38 @@ async function placeAiMakerBid(asset, analysis, { market, tokenId, amount, price
       state[asset].sweptWindows.delete(market.conditionId);
       return;
     }
+
+    // If our bid was way above the market (e.g. 60¢ bid vs 15¢ ask), the GTC
+    // order crosses immediately and the response carries makingAmount/takingAmount.
+    // Use those to record the actual price-improved fill and skip the poll.
+    const immediateFill = parseFillPrice(result, "BUY");
+    const isMatched     = String(result.status || "").toLowerCase() === "matched";
+    if (isMatched && immediateFill && immediateFill > 0.01 && immediateFill < 1) {
+      const filledShares = parseFloat(result.takingAmount ?? shares);
+      const filledUsdc   = filledShares * immediateFill;
+      if (Math.abs(immediateFill - price) > 0.001) {
+        logEntry("amber",
+          `  ◈ AI MAKER filled at ${(immediateFill*100).toFixed(1)}¢ ` +
+          `(bid was ${(price*100).toFixed(1)}¢ — price improvement)`
+        );
+      }
+      const filledPending = {
+        orderId, market, signal: analysis.signal, tokenId,
+        price:   immediateFill,
+        shares:  filledShares,
+        sizeUsd: filledUsdc,
+        placedAt:   Date.now(),
+        endDateMs:  new Date(market.endDate).getTime(),
+        dryRun:     false,
+        aiMaker:    true,
+        aiMakerFill: true,
+        analysis, spot, priceToBeat,
+      };
+      logEntry("info", `  ◈ AI MAKER placed: order ${String(orderId).slice(0, 12)}…`);
+      convertFilledSweepToTrade(asset, filledPending, immediateFill);
+      return;
+    }
+
     state[asset].pendingLimitOrders.set(market.conditionId, {
       orderId, market, signal: analysis.signal, tokenId, price, shares, sizeUsd: amount,
       placedAt:   Date.now(),
