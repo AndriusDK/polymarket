@@ -365,6 +365,33 @@
   box-shadow: 0 0 10px var(--red), 0 0 2px #fff4;
 }
 
+/* fill-slip countdown bar */
+.slip-bar-wrap {
+  position: relative;
+  height: 4px;
+  background: rgba(255, 45, 45, 0.08);
+}
+.slip-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, rgba(255,45,45,0.5), var(--red), #ff6666);
+  box-shadow: 0 0 6px var(--red);
+}
+.slip-bar-fill.slip-exit {
+  background: linear-gradient(90deg, rgba(255,45,45,0.8), #ff2222, #ff8888);
+  box-shadow: 0 0 14px var(--red), 0 0 4px #fff4;
+  animation: slip-flash 0.5s ease-out;
+}
+.slip-bar-fill.slip-ok {
+  background: linear-gradient(90deg, rgba(0,200,100,0.6), #00e676, #88ffcc);
+  box-shadow: 0 0 10px #00e676;
+  animation: slip-flash 0.6s ease-out;
+}
+@keyframes slip-flash {
+  0%   { opacity: 1; }
+  60%  { opacity: 0.9; }
+  100% { opacity: 0; }
+}
+
 /* card body */
 .btc-card-body {
   display: flex;

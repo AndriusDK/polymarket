@@ -401,6 +401,9 @@ function addCryptoCard(trade) {
       <div class="btc-timer-track"></div>
       <div class="btc-timer-fill ${secsLeft < 60 ? "urgent" : ""}" id="cdbar-${trade.id}" style="width:${pct}%"></div>
     </div>
+    <div class="slip-bar-wrap" id="slipwrap-${trade.id}" style="display:none">
+      <div class="slip-bar-fill" id="slipbar-${trade.id}" style="width:100%"></div>
+    </div>
     <div class="btc-card-body">
       <div class="btc-card-signal ${sigClass}">${sigLabel}</div>
       <div class="btc-card-stats">
@@ -2918,13 +2921,39 @@ async function pollPendingLimitOrders() {
             );
             const tokenIdForCheck = pending.tokenId;
             const fillPriceForCheck = actualFillPrice;
+
+            // Show the slip countdown bar on the card
+            const trNow = [...state.trades].reverse()
+              .find(x => x.tokenId === tokenIdForCheck && x.aiMakerFill && !x.exitPrice);
+            if (trNow) {
+              const wrap = $(`#slipwrap-${trNow.id}`);
+              const fill = $(`#slipbar-${trNow.id}`);
+              if (wrap && fill) {
+                wrap.style.display = "block";
+                // Trigger transition: start at 100%, drain to 0 over 5s
+                requestAnimationFrame(() => {
+                  fill.style.transition = "width 5s linear";
+                  fill.style.width = "0%";
+                });
+              }
+            }
+
             setTimeout(() => {
               const tr = [...state.trades].reverse()
                 .find(x => x.tokenId === tokenIdForCheck && x.aiMakerFill && !x.exitPrice);
+              const wrap = tr ? $(`#slipwrap-${tr.id}`) : null;
+              const fill = tr ? $(`#slipbar-${tr.id}`) : null;
+
               if (!tr) return;
               if (tr.currentPrice <= fillPriceForCheck * 0.98) {
+                // Flash red, then close
+                if (fill) { fill.style.transition = "none"; fill.style.width = "100%"; fill.classList.add("slip-exit"); }
+                setTimeout(() => { if (wrap) wrap.style.display = "none"; }, 600);
                 closePosition(tr, "FILL SLIP EXIT");
               } else {
+                // Flash green, then hide
+                if (fill) { fill.style.transition = "none"; fill.style.width = "100%"; fill.classList.add("slip-ok"); }
+                setTimeout(() => { if (wrap) wrap.style.display = "none"; }, 800);
                 logEntry("green",
                   `  ◈ FILL SLIP EXIT skipped — price recovered to ${(tr.currentPrice*100).toFixed(1)}¢`
                 );
