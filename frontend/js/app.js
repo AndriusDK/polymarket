@@ -1927,29 +1927,36 @@ async function _runCryptoCycleInner(asset) {
                                 analysis.confidence === "HIGH" &&
                                 analysis.signal !== "SKIP";
 
-    const qualifies =
-      analysis.signal !== "SKIP" &&
-      oddsOk &&
-      crossable &&
-      !longWindowLowConv &&
-      !btcMidWindowLowOdds &&
-      !btcCoinFlipBlocked &&
-      !shortWindowMedium &&
-      !solMediumLongWindow &&
-      !btcMediumGapBlocked &&
-      !gapFlipMidWindowBlocked &&
-      !nearResGapFlipMomOpposed &&
-      !nearResGapFlipLowOdds &&
-      !btcMacroVeto &&
-      !pumpSkeptic &&
-      !stalled &&
-      !nearResLowOdds &&
-      !nearResSmallGap &&
-      (!midWindowSmallGap || momentumTradeBypass) &&
-      !solLargeGapUp &&
-      !assetPositionOpen &&
-      (analysis.confidence === "HIGH" || analysis.absEdge >= minEdge) &&
-      state.stats.spent < c.maxDaily;
+    const qualifies = c.aiMaker
+      ? (
+          analysis.signal !== "SKIP" &&
+          !assetPositionOpen &&
+          state.stats.spent < c.maxDaily
+        )
+      : (
+          analysis.signal !== "SKIP" &&
+          oddsOk &&
+          crossable &&
+          !longWindowLowConv &&
+          !btcMidWindowLowOdds &&
+          !btcCoinFlipBlocked &&
+          !shortWindowMedium &&
+          !solMediumLongWindow &&
+          !btcMediumGapBlocked &&
+          !gapFlipMidWindowBlocked &&
+          !nearResGapFlipMomOpposed &&
+          !nearResGapFlipLowOdds &&
+          !btcMacroVeto &&
+          !pumpSkeptic &&
+          !stalled &&
+          !nearResLowOdds &&
+          !nearResSmallGap &&
+          (!midWindowSmallGap || momentumTradeBypass) &&
+          !solLargeGapUp &&
+          !assetPositionOpen &&
+          (analysis.confidence === "HIGH" || analysis.absEdge >= minEdge) &&
+          state.stats.spent < c.maxDaily
+        );
 
     if (autoMomentumTrade && !analysis.momentumTrade) {
       logEntry("dim", `  ↳ <span class="amber">⚡MOM auto</span> — gap ${(stallGapPct * 100).toFixed(3)}% but effective gap ${(effectiveGapPct * 100).toFixed(3)}% (drift ${expectedDriftPts >= 0 ? "+" : ""}${expectedDriftPts.toFixed(2)}) — momentum trade bypass active`);
@@ -1958,9 +1965,9 @@ async function _runCryptoCycleInner(asset) {
     if (qualifies) {
       // Fresh-window gate: CLOB book is thin/empty for the first ~30s after a window opens.
       // Entering immediately sends a FOK into an empty book and causes catastrophic fills.
-      // Wait 30s for makers to post asks before firing — the signal stays valid next cycle.
+      // AI Maker mode posts a resting GTC bid, so book depth doesn't matter — skip the wait.
       const windowAge = storedData?.firstSeenAt ? Date.now() - storedData.firstSeenAt : Infinity;
-      if (windowAge < 30_000) {
+      if (!c.aiMaker && windowAge < 30_000) {
         logEntry("dim", `  ↳ <span class="amber">fresh window</span> — ${Math.round(windowAge/1000)}s since open, holding 30s for book depth (next cycle will trade)`);
       } else {
         state[asset].gapWatch.delete(market.conditionId);
