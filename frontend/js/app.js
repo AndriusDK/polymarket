@@ -2114,18 +2114,28 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   // get max exposure (e.g. the -$27.45 ETH loss at 51% MEDIUM with full $50 stake).
   const confidenceFraction = analysis.confidence === "HIGH" ? 1.0 : 0.5;
   const maxBet = c[`${asset}MaxBet`] ?? c.btcMaxBet ?? 5;
-  const rawAmount = Math.min(maxBet * timeFraction * oddsFraction * confidenceFraction, c.maxDaily - state.stats.spent);
+  // AI Maker mode: post the full UI bet size as a resting GTC bid.  None of the FAK
+  // sizing scalers apply — there's no slippage on a maker fill, and the bid only fills
+  // if the market crashes to our price (so a bigger bet here is bigger gain on fill).
+  const rawAmount = c.aiMaker
+    ? Math.min(maxBet, c.maxDaily - state.stats.spent)
+    : Math.min(maxBet * timeFraction * oddsFraction * confidenceFraction, c.maxDaily - state.stats.spent);
   // Near-resolution size cap: prediction markets become illiquid in the final 120s and a stop
   // can fire on a single bad tick even with a large underlying gap intact.  Cap exposure at $25
   // to bound catastrophic stop losses that outweigh the edge (e.g. SOL -$33.53 at 156s).
-  const nearResCap = secsForSizing <= 150 ? 5 : secsForSizing <= 300 ? 15 : Infinity;
+  // AI Maker bids are exempt — the bid auto-cancels at <60s pre-resolution anyway.
+  const nearResCap = c.aiMaker ? Infinity
+                   : secsForSizing <= 150 ? 5
+                   : secsForSizing <= 300 ? 15
+                   : Infinity;
   // Gap-flip size cap: gap-flip trades bet against the current price direction — the token crashes
   // hard to ~$0.03 when wrong, with no partial recovery.  Cap at $50 to limit worst-case losses
   // while still allowing meaningful upside on the higher-frequency correct-direction wins.
   // Session data: -$85.57 and -$85.32 on full-size gap-flip entries; winning gap-flips avg ~$40.
+  // AI Maker bids are exempt — the maker bid only fills at our chosen price.
   const signalAgainstGapSizing = (analysis.signal === "BUY_UP"   && (analysis.gap ?? 0) < 0) ||
                                   (analysis.signal === "BUY_DOWN" && (analysis.gap ?? 0) > 0);
-  const gapFlipCap = signalAgainstGapSizing ? 50 : Infinity;
+  const gapFlipCap = c.aiMaker ? Infinity : (signalAgainstGapSizing ? 50 : Infinity);
   let amount = Math.min(rawAmount, nearResCap, gapFlipCap);
   // Sub-$1 rescue: HIGH-conf qualified signals were silently lost to $0.75-0.95 sizes;
   // bump to the $1 minimum so we actually take the position (budget permitting).
