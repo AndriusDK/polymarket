@@ -616,12 +616,9 @@ const priceStream = (() => {
             // Use a wider 60% base stop for gap-flip entries to survive the pre-crossing dip.
             // Exception: low-odds gap-flip entries (<40%) are momentum-only bets with no real gap
             // cushion — capping at 35% limits the max loss instead of allowing a 60-70% drawdown.
-            const baseStop = t.signalAgainstGap
+            const effectiveStop = t.signalAgainstGap
               ? (t.entryPrice < 0.40 ? Math.max(stopLossPct, 0.35) : Math.max(stopLossPct, 0.60))
               : stopLossPct;
-            const effectiveStop = t.totalSecs < 90  ? Math.max(baseStop, 0.40)  // near-res
-                                : t.totalSecs < 200 ? Math.max(baseStop, 0.32)  // short window
-                                : baseStop;
             return t.unrealizedPnl <= -t.amount * effectiveStop;
           });
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
@@ -2936,12 +2933,8 @@ function startCryptoCountdown() {
       if (t.totalSecs < 45) continue;
       const grace = t.aiMakerFill ? Math.max(stopGraceMs, 20_000) : stopGraceMs;
       if (Date.now() - t.entryTime < grace) continue;
-      // Same widened thresholds as the WS handler for thin-book noise protection.
       // Gap-flip trades use a wider 60% base stop — token oscillates before price crosses target.
-      const baseStop = t.signalAgainstGap ? Math.max(stopLossPct, 0.60) : stopLossPct;
-      const effectiveStop = t.totalSecs < 90  ? Math.max(baseStop, 0.40)
-                          : t.totalSecs < 200 ? Math.max(baseStop, 0.32)
-                          : baseStop;
+      const effectiveStop = t.signalAgainstGap ? Math.max(stopLossPct, 0.60) : stopLossPct;
       if (t.unrealizedPnl <= -t.amount * effectiveStop) { closePosition(t, "STOP LOSS"); refreshBtcCards(); updatePnlStat(); }
     }
     for (const t of cryptoTrades) {
