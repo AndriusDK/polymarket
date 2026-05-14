@@ -599,7 +599,10 @@ const priceStream = (() => {
           const toStopLoss = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             if (t.totalSecs < 45) return false;
-            if (Date.now() - t.entryTime < stopGraceMs) return false;
+            // AI Maker fills need 90s grace — they may have gotten price improvement
+            // (filled at 19¢ on a 50¢ bid) and the entry price might still be updating.
+            const grace = t.aiMakerFill ? Math.max(stopGraceMs, 90_000) : stopGraceMs;
+            if (Date.now() - t.entryTime < grace) return false;
             // HIGH confidence + high entry odds = near-certain binary outcome.
             // e.g., entering DOWN at 83% — a 25% stop fires at 65%, but position resolves 99%.
             // Price oscillates on correct-direction trades; only exit on true collapse (<35%).
@@ -2711,6 +2714,7 @@ function convertFilledSweepToTrade(asset, pending, fillPrice) {
     type:          asset,
     endDate:       market.endDate,
     confirmed:     true,
+    aiMakerFill:   pending.aiMakerFill ?? false,
     spot:          pending.spot ?? null,
     priceToBeat:   pending.priceToBeat ?? null,
     gap:           pending.analysis?.gap ?? null,
@@ -2818,18 +2822,50 @@ async function pollPendingLimitOrders() {
         const orderState  = String(status.status ?? status.state ?? "").toUpperCase();
 
         if (sizeMatched > 0 || orderState === "MATCHED" || orderState === "FILLED") {
-          console.log(`[AI MAKER fill] full status response:`, status);
+          console.log(`[AI MAKER fill] full status response:`, JSON.stringify(status, null, 2));
           const filledShares = sizeMatched > 0 ? sizeMatched : pending.shares;
-          // GTC bids may fill BELOW our posted price if a seller crosses our bid
-          // (price improvement). Parse the actual fill price from the CLOB response
-          // — using the bid price would record a wrong entry and mis-trigger stops.
-          const parsed = parseFillPrice(status, "BUY");
-          const avgFromFields = parseFloat(
-            status.price_avg ?? status.priceAvg ?? status.avg_price ?? status.averagePrice ?? NaN
-          );
-          const actualFillPrice = (parsed && parsed > 0 && parsed < 1) ? parsed
-                                : (avgFromFields > 0 && avgFromFields < 1) ? avgFromFields
-                                : pending.price;
+
+          // GTC bids may fill BELOW our posted price (price improvement). Try every
+          // known field shape the Polymarket CLOB returns for actual fill price.
+          let actualFillPrice = null;
+
+          // 1. associated_trades array — each trade has {price, size}
+          const tradelist = status.associatedTrades ?? status.associated_trades ?? status.trades ?? [];
+          if (tradelist.length > 0) {
+            let wUsdc = 0, wShares = 0;
+            for (const tr of tradelist) {
+              const tp = parseFloat(tr.price ?? 0);
+              const ts = parseFloat(tr.size ?? tr.matchedSize ?? 0);
+              if (tp > 0 && ts > 0) { wUsdc += tp * ts; wShares += ts; }
+            }
+            if (wShares > 0) actualFillPrice = wUsdc / wShares;
+          }
+
+          // 2. price_matched / avg fill price fields
+          if (!actualFillPrice) {
+            const f = parseFloat(
+              status.price_matched ?? status.priceMatched ??
+              status.price_avg    ?? status.priceAvg     ??
+              status.avg_price    ?? status.averagePrice ?? NaN
+            );
+            if (f > 0 && f < 1) actualFillPrice = f;
+          }
+
+          // 3. maker_amount (actual USDC paid) / shares → avg fill price
+          if (!actualFillPrice) {
+            const paid = parseFloat(status.maker_amount ?? status.makerAmountFilled ?? NaN);
+            if (paid > 0 && paid < filledShares) actualFillPrice = paid / filledShares;
+          }
+
+          // 4. makingAmount/takingAmount — but only trust if below bid (means it's a fill, not order size)
+          if (!actualFillPrice) {
+            const fp = parseFillPrice(status, "BUY");
+            if (fp && fp > 0 && fp < pending.price - 0.001) actualFillPrice = fp;
+          }
+
+          actualFillPrice = actualFillPrice ?? pending.price;
+          console.log(`[AI MAKER fill] bid=${(pending.price*100).toFixed(1)}¢ → fill=${(actualFillPrice*100).toFixed(1)}¢`);
+
           if (Math.abs(actualFillPrice - pending.price) > 0.001) {
             const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";
             logEntry("amber",
@@ -2837,8 +2873,9 @@ async function pollPendingLimitOrders() {
               `(bid was ${(pending.price*100).toFixed(1)}¢ — price improvement)`
             );
           }
-          const filledUsdc   = filledShares * actualFillPrice;
-          const filledPending = { ...pending, shares: filledShares, sizeUsd: filledUsdc, price: actualFillPrice };
+          const filledUsdc    = filledShares * actualFillPrice;
+          const filledPending = { ...pending, shares: filledShares, sizeUsd: filledUsdc, price: actualFillPrice,
+                                  aiMakerFill: true };
           state[asset].pendingLimitOrders.delete(conditionId);
           convertFilledSweepToTrade(asset, filledPending, actualFillPrice);
         } else if (orderState === "CANCELED" || orderState === "CANCELLED" || orderState === "EXPIRED") {
@@ -2872,7 +2909,8 @@ function startCryptoCountdown() {
     const stopGraceMs = (parseFloat($("#stop-grace-sec")?.value) ?? state.config?.stopGraceSec ?? 10) * 1_000;
     for (const t of [...cryptoTrades]) {
       if (t.totalSecs < 45) continue;
-      if (Date.now() - t.entryTime < stopGraceMs) continue;
+      const grace = t.aiMakerFill ? Math.max(stopGraceMs, 90_000) : stopGraceMs;
+      if (Date.now() - t.entryTime < grace) continue;
       // Same widened thresholds as the WS handler for thin-book noise protection.
       // Gap-flip trades use a wider 60% base stop — token oscillates before price crosses target.
       const baseStop = t.signalAgainstGap ? Math.max(stopLossPct, 0.60) : stopLossPct;
