@@ -84,11 +84,10 @@ class PolymarketClient:
             )
 
         try:
-            from py_clob_client.client import ClobClient
-            from py_clob_client.clob_types import ApiCreds
+            from py_clob_client_v2 import ClobClient, ApiCreds
         except ImportError:
             raise RuntimeError(
-                "py-clob-client is not installed. Run: pip install py-clob-client"
+                "py-clob-client-v2 is not installed. Run: pip install py-clob-client-v2"
             )
 
         creds = ApiCreds(
@@ -254,10 +253,12 @@ class PolymarketClient:
             }
 
         try:
-            from py_clob_client.clob_types import MarketOrderArgs, OrderType, BalanceAllowanceParams, AssetType
-            from py_clob_client.order_builder.constants import BUY, SELL
+            from py_clob_client_v2 import (
+                MarketOrderArgs, OrderType, PartialCreateOrderOptions,
+                BalanceAllowanceParams, AssetType, Side,
+            )
         except ImportError:
-            raise RuntimeError("py-clob-client is not installed.")
+            raise RuntimeError("py-clob-client-v2 is not installed. Run: pip install py-clob-client-v2")
 
         client = self._get_clob_client()
 
@@ -294,7 +295,7 @@ class PolymarketClient:
         # FOK retry strategy: if the full order can't be filled at the price limit,
         # progressively widen the limit — never drop it entirely to avoid fills at
         # catastrophically bad prices (e.g. BUY at 81% quote → fills at 98% on retry).
-        side_const = BUY if side.upper() == "BUY" else SELL
+        side_enum = Side.BUY if side.upper() == "BUY" else Side.SELL
         if side.upper() == "BUY":
             # Hard cap: never pay more than entry + 10%, absolute max 90%.
             # At 90%+ the risk/reward collapses — 10% left to make vs 90% to lose.
@@ -330,11 +331,15 @@ class PolymarketClient:
                 order_args = MarketOrderArgs(
                     token_id=token_id,
                     amount=attempt_amount,
-                    side=side_const,
-                    **({"price": attempt_limit} if attempt_limit is not None else {}),
+                    side=side_enum,
+                    price=attempt_limit if attempt_limit is not None else 0,
+                    order_type=OrderType.FOK,
                 )
-                signed_order = client.create_market_order(order_args)
-                response = client.post_order(signed_order, OrderType.FOK)
+                response = client.create_and_post_market_order(
+                    order_args=order_args,
+                    options=PartialCreateOrderOptions(tick_size="0.01"),
+                    order_type=OrderType.FOK,
+                )
                 logger.info("Order placed: %s", response)
                 return response
             except Exception as e:
@@ -360,10 +365,9 @@ class PolymarketClient:
         bids at fair value before the market reprices.
         """
         try:
-            from py_clob_client.clob_types import OrderArgs, OrderType, PartialCreateOrderOptions
-            from py_clob_client.order_builder.constants import BUY, SELL
+            from py_clob_client_v2 import OrderArgs, OrderType, PartialCreateOrderOptions, Side
         except ImportError:
-            raise RuntimeError("py-clob-client is not installed.")
+            raise RuntimeError("py-clob-client-v2 is not installed. Run: pip install py-clob-client-v2")
 
         if not (0 < price < 1):
             raise ValueError(f"price must be between 0 and 1, got {price}")
@@ -371,40 +375,20 @@ class PolymarketClient:
             raise ValueError(f"size must be positive, got {size}")
 
         client = self._get_clob_client()
-        side_const = BUY if side.upper() == "BUY" else SELL
+        side_enum = Side.BUY if side.upper() == "BUY" else Side.SELL
 
-        order_args = OrderArgs(
-            token_id=token_id,
-            price=round(price, 4),
-            size=round(size, 4),
-            side=side_const,
+        response = client.create_and_post_order(
+            order_args=OrderArgs(
+                token_id=token_id,
+                price=round(price, 4),
+                size=round(size, 4),
+                side=side_enum,
+            ),
+            options=PartialCreateOrderOptions(tick_size="0.01"),
+            order_type=OrderType.GTC,
         )
-
-        # order_version_mismatch from the CLOB means the order was signed for
-        # the wrong exchange contract (regular CTF vs Neg-Risk CTF). Try both
-        # neg_risk values until one is accepted — we can't tell from the
-        # token_id which contract the market lives on, and auto-detection in
-        # older py-clob-client versions can be unreliable.
-        last_err = None
-        for nr in (True, False):
-            try:
-                signed_order = client.create_order(
-                    order_args,
-                    PartialCreateOrderOptions(neg_risk=nr),
-                )
-                response = client.post_order(signed_order, OrderType.GTC)
-                logger.info(
-                    "GTC limit order placed (neg_risk=%s): %s @ %.4f x %.4f → %s",
-                    nr, side, price, size, response,
-                )
-                return response
-            except Exception as e:
-                if "version_mismatch" in str(e).lower():
-                    logger.warning("GTC neg_risk=%s rejected (version_mismatch), retrying...", nr)
-                    last_err = e
-                    continue
-                raise
-        raise last_err
+        logger.info("GTC limit order placed: %s @ %.4f x %.4f → %s", side, price, size, response)
+        return response
 
     def cancel_order(self, order_id: str) -> dict:
         """Cancel a single open order by ID."""
