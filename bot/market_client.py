@@ -378,6 +378,7 @@ class PolymarketClient:
             price=round(price, 4),
             size=round(size, 4),
             side=side_const,
+            neg_risk=True,
         )
         signed_order = client.create_order(order_args)
         response = client.post_order(signed_order, OrderType.GTC)
