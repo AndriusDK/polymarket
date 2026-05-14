@@ -440,10 +440,13 @@ class PolymarketClient:
         after_sec: int = 0,
     ) -> Optional[float]:
         """
-        Query trades for the asset after a given timestamp, filter to our maker
-        wallet, and compute the size-weighted avg fill price for this order.
-        Used to record correct entry price for GTC maker bids that get price
-        improvement (filled below our posted bid).
+        Query trades for the asset after a given timestamp and compute the
+        size-weighted avg fill price for our order. Used to record correct
+        entry price for GTC maker bids that get price improvement.
+
+        Matches by order_id (maker or taker side) — never falls back to
+        unrelated trades, since that produced bogus "fill prices" equal to
+        the recent market average instead of our actual fill.
         """
         try:
             from py_clob_client_v2 import TradeParams
@@ -451,14 +454,20 @@ class PolymarketClient:
             return None
 
         client = self._get_clob_client()
+
+        # Derive our wallet address — needed to filter trades reliably and to
+        # tell which side of each trade is ours. Don't rely on the client's
+        # get_address() (may not exist on this lib version).
+        my_addr = None
         try:
-            maker_addr = client.get_address()
-        except Exception:
-            maker_addr = None
+            from eth_account import Account
+            if self.private_key:
+                my_addr = Account.from_key(self.private_key).address.lower()
+        except Exception as e:
+            logger.warning("could not derive wallet address: %s", e)
 
         params = TradeParams(
             asset_id=token_id,
-            maker_address=maker_addr,
             after=int(after_sec) if after_sec else None,
         )
         try:
@@ -467,31 +476,88 @@ class PolymarketClient:
             logger.warning("get_trades failed: %s", e)
             return None
         if not trades:
+            logger.info("no trades returned for order %s", order_id[:12])
             return None
 
-        # Prefer trades that match our order_id; if none, use all returned trades
-        # (filtered by asset + after time + our address — should be ours).
-        def _trade_oid(t):
-            return (t.get("maker_order_id") or t.get("makerOrderId")
-                    or t.get("order_id")       or t.get("orderId") or "")
-        matched = [t for t in trades if _trade_oid(t) == order_id]
-        relevant = matched if matched else trades
+        # Log a sample so we can verify field names in the wild.
+        try:
+            sample = trades[0] if isinstance(trades, list) and trades else trades
+            logger.info("get_trades returned %d trades for order %s; sample keys: %s",
+                        len(trades) if isinstance(trades, list) else 1,
+                        order_id[:12],
+                        list(sample.keys())[:30] if isinstance(sample, dict) else type(sample).__name__)
+        except Exception:
+            pass
+
+        def _norm(v):
+            return str(v).lower() if v else ""
+
+        order_id_l = _norm(order_id)
+        matched = []
+        for t in trades:
+            if not isinstance(t, dict):
+                continue
+            ids = [
+                _norm(t.get("maker_order_id")),  _norm(t.get("makerOrderId")),
+                _norm(t.get("taker_order_id")),  _norm(t.get("takerOrderId")),
+                _norm(t.get("order_id")),        _norm(t.get("orderId")),
+            ]
+            # Also check nested maker_orders list (some APIs return per-maker fills)
+            for sub in (t.get("maker_orders") or t.get("makerOrders") or []):
+                if isinstance(sub, dict):
+                    ids.append(_norm(sub.get("order_id") or sub.get("orderId") or sub.get("maker_order_id")))
+            if order_id_l in ids:
+                matched.append(t)
+
+        # If still nothing, fall back to address-matched trades.
+        if not matched and my_addr:
+            for t in trades:
+                if not isinstance(t, dict):
+                    continue
+                addrs = [
+                    _norm(t.get("maker_address")), _norm(t.get("makerAddress")),
+                    _norm(t.get("taker_address")), _norm(t.get("takerAddress")),
+                    _norm(t.get("owner")),
+                ]
+                for sub in (t.get("maker_orders") or t.get("makerOrders") or []):
+                    if isinstance(sub, dict):
+                        addrs.append(_norm(sub.get("maker_address") or sub.get("owner")))
+                if my_addr in addrs:
+                    matched.append(t)
+
+        if not matched:
+            logger.warning("no trades matched order %s or our address — fill price unknown", order_id[:12])
+            return None
 
         total_usdc = 0.0
         total_shares = 0.0
-        for t in relevant:
+        for t in matched:
             try:
                 p = float(t.get("price", 0) or 0)
                 s = float(t.get("size", 0) or t.get("matched_size", 0) or t.get("matchedSize", 0) or 0)
             except (TypeError, ValueError):
                 continue
-            if 0 < p < 1 and s > 0:
+            # Also support per-maker fills (each sub-fill has its own price/size)
+            sub_used = False
+            for sub in (t.get("maker_orders") or t.get("makerOrders") or []):
+                if not isinstance(sub, dict):
+                    continue
+                try:
+                    sp = float(sub.get("price", 0) or 0)
+                    ss = float(sub.get("matched_amount", 0) or sub.get("size", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if 0 < sp < 1 and ss > 0:
+                    total_usdc += sp * ss
+                    total_shares += ss
+                    sub_used = True
+            if not sub_used and 0 < p < 1 and s > 0:
                 total_usdc += p * s
                 total_shares += s
 
         if total_shares > 0:
             avg = total_usdc / total_shares
-            logger.info("avg fill price for order %s: %.4f over %.4f shares",
-                        order_id[:12], avg, total_shares)
+            logger.info("avg fill price for order %s: %.4f over %.4f shares (matched %d trades)",
+                        order_id[:12], avg, total_shares, len(matched))
             return avg
         return None
