@@ -473,7 +473,7 @@ function addCryptoCard(trade) {
       <span>${ticker} $${priceFmt}&nbsp; vs &nbsp;target $${targetFmt}
       &nbsp;|&nbsp; Gap: <span class="${gapClass}">${gapSign}$${gapFmt}</span></span>
       <div style="display:flex;gap:10px;align-items:center">
-        ${trade.mode === "LIVE" ? `<button class="manual-sell-btn" data-id="${trade.id}" title="Sell now at market price">⬛ SELL NOW</button>` : ""}
+        ${trade.mode.startsWith("LIVE") ? `<button class="manual-sell-btn" data-id="${trade.id}" title="Sell now at market price">⬛ SELL NOW</button>` : ""}
         <a href="${trade.marketUrl}" target="_blank" rel="noopener" class="btc-market-link">↗ POLYMARKET</a>
       </div>
     </div>
@@ -794,7 +794,7 @@ function parseFillPrice(result, side) {
 function closePosition(trade, reason) {
   // Don't exit a live position before the BUY has confirmed on-chain —
   // tokens don't exist yet so the SELL will fail with balance: 0.
-  if (trade.mode === "LIVE" && !trade.confirmed) {
+  if (trade.mode.startsWith("LIVE") && !trade.confirmed) {
     console.warn(`[LIVE] closePosition blocked — BUY not yet confirmed (reason: ${reason})`);
     return;
   }
@@ -806,7 +806,7 @@ function closePosition(trade, reason) {
   // GTC is used instead of FOK because FOK requires all shares to fill at a single
   // price level — unreliable in thin prediction market books. A GTC SELL just below
   // the current bid immediately crosses existing bids and rests for any remainder.
-  if (trade.mode === "LIVE" && trade.tokenId && (trade.shares ?? 0) > 0) {
+  if (trade.mode.startsWith("LIVE") && trade.tokenId && (trade.shares ?? 0) > 0) {
     const c = state.config;
     console.log(`[LIVE] Placing GTC SELL`, {
       reason,
