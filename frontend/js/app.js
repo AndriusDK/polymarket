@@ -2618,15 +2618,23 @@ async function placeAiMakerBid(asset, analysis, { market, tokenId, amount, price
         api_passphrase: c.polyPassphrase,
       }),
     });
-    const result = await resp.json();
+    const rawText = await resp.text();
+    let result;
+    try {
+      result = JSON.parse(rawText);
+    } catch (parseErr) {
+      logEntry("warn", `  ◈ AI MAKER non-JSON response (HTTP ${resp.status}): ${rawText.slice(0, 200)}`);
+      state[asset].sweptWindows.delete(market.conditionId);
+      return;
+    }
     if (result.error) {
-      logEntry("warn", `  ◈ AI MAKER failed — ${result.error}`);
+      logEntry("warn", `  ◈ AI MAKER failed (HTTP ${resp.status}) — ${result.error}`);
       state[asset].sweptWindows.delete(market.conditionId);
       return;
     }
     const orderId = result.orderID ?? result.orderId ?? result.id;
     if (!orderId) {
-      logEntry("warn", `  ◈ AI MAKER no orderID — ${JSON.stringify(result).slice(0, 100)}`);
+      logEntry("warn", `  ◈ AI MAKER no orderID — ${JSON.stringify(result).slice(0, 200)}`);
       state[asset].sweptWindows.delete(market.conditionId);
       return;
     }
