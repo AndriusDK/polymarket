@@ -601,7 +601,7 @@ const priceStream = (() => {
             if (t.totalSecs < 45) return false;
             // AI Maker fills need 90s grace — they may have gotten price improvement
             // (filled at 19¢ on a 50¢ bid) and the entry price might still be updating.
-            const grace = t.aiMakerFill ? Math.max(stopGraceMs, 90_000) : stopGraceMs;
+            const grace = t.aiMakerFill ? Math.max(stopGraceMs, 20_000) : stopGraceMs;
             if (Date.now() - t.entryTime < grace) return false;
             // HIGH confidence + high entry odds = near-certain binary outcome.
             // e.g., entering DOWN at 83% — a 25% stop fires at 65%, but position resolves 99%.
@@ -2811,6 +2811,8 @@ async function pollPendingLimitOrders() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             order_id:       pending.orderId,
+            token_id:       pending.tokenId,
+            placed_at_sec:  Math.floor(pending.placedAt / 1000),
             private_key:    c.polyPrivateKey,
             api_key:        c.polyApiKey,
             api_secret:     c.polyApiSecret,
@@ -2825,23 +2827,25 @@ async function pollPendingLimitOrders() {
           console.log(`[AI MAKER fill] full status response:`, JSON.stringify(status, null, 2));
           const filledShares = sizeMatched > 0 ? sizeMatched : pending.shares;
 
-          // GTC bids may fill BELOW our posted price (price improvement). Try every
-          // known field shape the Polymarket CLOB returns for actual fill price.
+          // Server queries /trades to compute the size-weighted avg fill price.
+          // This is the authoritative source — the order's `price` field is just the bid.
           let actualFillPrice = null;
+          const serverComputed = parseFloat(status.computed_fill_price ?? NaN);
+          if (serverComputed > 0 && serverComputed < 1) actualFillPrice = serverComputed;
 
-          // 1. associated_trades array — each trade has {price, size}
-          const tradelist = status.associatedTrades ?? status.associated_trades ?? status.trades ?? [];
-          if (tradelist.length > 0) {
-            let wUsdc = 0, wShares = 0;
-            for (const tr of tradelist) {
-              const tp = parseFloat(tr.price ?? 0);
-              const ts = parseFloat(tr.size ?? tr.matchedSize ?? 0);
-              if (tp > 0 && ts > 0) { wUsdc += tp * ts; wShares += ts; }
+          // Fallback paths if the server couldn't query /trades for some reason:
+          if (!actualFillPrice) {
+            const tradelist = status.associatedTrades ?? status.associated_trades ?? status.trades ?? [];
+            if (tradelist.length > 0) {
+              let wUsdc = 0, wShares = 0;
+              for (const tr of tradelist) {
+                const tp = parseFloat(tr.price ?? 0);
+                const ts = parseFloat(tr.size ?? tr.matchedSize ?? 0);
+                if (tp > 0 && ts > 0) { wUsdc += tp * ts; wShares += ts; }
+              }
+              if (wShares > 0) actualFillPrice = wUsdc / wShares;
             }
-            if (wShares > 0) actualFillPrice = wUsdc / wShares;
           }
-
-          // 2. price_matched / avg fill price fields
           if (!actualFillPrice) {
             const f = parseFloat(
               status.price_matched ?? status.priceMatched ??
@@ -2850,21 +2854,8 @@ async function pollPendingLimitOrders() {
             );
             if (f > 0 && f < 1) actualFillPrice = f;
           }
-
-          // 3. maker_amount (actual USDC paid) / shares → avg fill price
-          if (!actualFillPrice) {
-            const paid = parseFloat(status.maker_amount ?? status.makerAmountFilled ?? NaN);
-            if (paid > 0 && paid < filledShares) actualFillPrice = paid / filledShares;
-          }
-
-          // 4. makingAmount/takingAmount — but only trust if below bid (means it's a fill, not order size)
-          if (!actualFillPrice) {
-            const fp = parseFillPrice(status, "BUY");
-            if (fp && fp > 0 && fp < pending.price - 0.001) actualFillPrice = fp;
-          }
-
           actualFillPrice = actualFillPrice ?? pending.price;
-          console.log(`[AI MAKER fill] bid=${(pending.price*100).toFixed(1)}¢ → fill=${(actualFillPrice*100).toFixed(1)}¢`);
+          console.log(`[AI MAKER fill] bid=${(pending.price*100).toFixed(1)}¢ → fill=${(actualFillPrice*100).toFixed(1)}¢ (serverFP=${serverComputed})`);
 
           if (Math.abs(actualFillPrice - pending.price) > 0.001) {
             const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";
@@ -2909,7 +2900,7 @@ function startCryptoCountdown() {
     const stopGraceMs = (parseFloat($("#stop-grace-sec")?.value) ?? state.config?.stopGraceSec ?? 10) * 1_000;
     for (const t of [...cryptoTrades]) {
       if (t.totalSecs < 45) continue;
-      const grace = t.aiMakerFill ? Math.max(stopGraceMs, 90_000) : stopGraceMs;
+      const grace = t.aiMakerFill ? Math.max(stopGraceMs, 20_000) : stopGraceMs;
       if (Date.now() - t.entryTime < grace) continue;
       // Same widened thresholds as the WS handler for thin-book noise protection.
       // Gap-flip trades use a wider 60% base stop — token oscillates before price crosses target.

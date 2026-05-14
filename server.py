@@ -185,6 +185,24 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 private_key=body["private_key"],
             )
             result = client.get_order(body["order_id"])
+
+            # If the frontend passed token_id + placed_at_sec, compute the actual
+            # avg fill price by querying trades. The order status's `price` is the
+            # bid limit — useless for entry tracking when fills get price improvement.
+            token_id    = body.get("token_id")
+            placed_at_s = body.get("placed_at_sec", 0)
+            if token_id and isinstance(result, dict):
+                try:
+                    fp = client.get_avg_fill_price(
+                        order_id=body["order_id"],
+                        token_id=token_id,
+                        after_sec=int(placed_at_s) if placed_at_s else 0,
+                    )
+                    if fp is not None:
+                        result["computed_fill_price"] = fp
+                except Exception as ex:
+                    print(f"get_avg_fill_price error: {ex}")
+
             resp = json.dumps(result, default=str).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

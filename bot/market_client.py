@@ -410,3 +410,66 @@ class PolymarketClient:
         except Exception as e:
             logger.warning("get_order failed for %s: %s", order_id[:12], e)
             raise
+
+    def get_avg_fill_price(
+        self,
+        order_id: str,
+        token_id: str,
+        after_sec: int = 0,
+    ) -> Optional[float]:
+        """
+        Query trades for the asset after a given timestamp, filter to our maker
+        wallet, and compute the size-weighted avg fill price for this order.
+        Used to record correct entry price for GTC maker bids that get price
+        improvement (filled below our posted bid).
+        """
+        try:
+            from py_clob_client_v2 import TradeParams
+        except ImportError:
+            return None
+
+        client = self._get_clob_client()
+        try:
+            maker_addr = client.get_address()
+        except Exception:
+            maker_addr = None
+
+        params = TradeParams(
+            asset_id=token_id,
+            maker_address=maker_addr,
+            after=int(after_sec) if after_sec else None,
+        )
+        try:
+            trades = client.get_trades(params=params)
+        except Exception as e:
+            logger.warning("get_trades failed: %s", e)
+            return None
+        if not trades:
+            return None
+
+        # Prefer trades that match our order_id; if none, use all returned trades
+        # (filtered by asset + after time + our address — should be ours).
+        def _trade_oid(t):
+            return (t.get("maker_order_id") or t.get("makerOrderId")
+                    or t.get("order_id")       or t.get("orderId") or "")
+        matched = [t for t in trades if _trade_oid(t) == order_id]
+        relevant = matched if matched else trades
+
+        total_usdc = 0.0
+        total_shares = 0.0
+        for t in relevant:
+            try:
+                p = float(t.get("price", 0) or 0)
+                s = float(t.get("size", 0) or t.get("matched_size", 0) or t.get("matchedSize", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if 0 < p < 1 and s > 0:
+                total_usdc += p * s
+                total_shares += s
+
+        if total_shares > 0:
+            avg = total_usdc / total_shares
+            logger.info("avg fill price for order %s: %.4f over %.4f shares",
+                        order_id[:12], avg, total_shares)
+            return avg
+        return None
