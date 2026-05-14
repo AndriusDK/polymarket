@@ -802,20 +802,13 @@ function closePosition(trade, reason) {
   if (idx === -1) return;
   state.trades.splice(idx, 1);
 
-  // LIVE MODE: place a SELL order on-chain to exit the position.
+  // LIVE MODE: post a GTC SELL limit order to exit the position.
+  // GTC is used instead of FOK because FOK requires all shares to fill at a single
+  // price level — unreliable in thin prediction market books. A GTC SELL just below
+  // the current bid immediately crosses existing bids and rests for any remainder.
   if (trade.mode === "LIVE" && trade.tokenId && (trade.shares ?? 0) > 0) {
     const c = state.config;
-    const sellPayload = {
-      token_id:       trade.tokenId,
-      side:           "SELL",
-      amount_usdc:    trade.shares,  // for SELL, amount = shares (tokens), not USDC
-      entry_price:    trade.currentPrice,  // sell limit: don't accept more than 8% below current
-      private_key:    c.polyPrivateKey,
-      api_key:        c.polyApiKey,
-      api_secret:     c.polyApiSecret,
-      api_passphrase: c.polyPassphrase,
-    };
-    console.log(`[LIVE] Placing SELL order`, {
+    console.log(`[LIVE] Placing GTC SELL`, {
       reason,
       asset:         trade.type,
       token_id:      trade.tokenId,
@@ -826,11 +819,19 @@ function closePosition(trade, reason) {
       secsLeft:      Math.max(0, Math.round((new Date(trade.endDate) - Date.now()) / 1000)),
       market:        trade.question?.slice(0, 60),
     });
-    // SELL retry: server does FOK retries internally; if ALL server retries fail,
-    // retry from the frontend after a short delay, dropping price limit on 2nd+ attempt.
-    const attemptSell = (payload, attempt) => {
+    const attemptGtcSell = (priceFloor, attempt) => {
       const label = attempt === 0 ? "" : ` (retry #${attempt})`;
-      fetch("/trade", {
+      const payload = {
+        token_id:       trade.tokenId,
+        side:           "SELL",
+        price:          Math.max(0.03, Math.round(priceFloor * 100) / 100),
+        size:           trade.shares,
+        private_key:    c.polyPrivateKey,
+        api_key:        c.polyApiKey,
+        api_secret:     c.polyApiSecret,
+        api_passphrase: c.polyPassphrase,
+      };
+      fetch("/limit", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify(payload),
@@ -842,60 +843,16 @@ function closePosition(trade, reason) {
             logEntry("warn", `  [LIVE] SELL failed${label}: ${result.error}`);
             if (attempt < 2) {
               const delay = (attempt + 1) * 2000;
-              logEntry("warn", `  [LIVE] SELL retry in ${delay / 1000}s (no price limit)…`);
-              setTimeout(() => {
-                // Drop price limit on retry — must exit at any price
-                const retryPayload = { ...payload, entry_price: undefined };
-                attemptSell(retryPayload, attempt + 1);
-              }, delay);
+              const lowerFloor = priceFloor - 0.10;
+              logEntry("warn", `  [LIVE] SELL retry in ${delay / 1000}s @ ${(lowerFloor * 100).toFixed(0)}¢…`);
+              setTimeout(() => attemptGtcSell(lowerFloor, attempt + 1), delay);
             } else {
-              logEntry("warn", `  [LIVE] SELL gave up after ${attempt + 1} attempts — position may still be open`);
+              logEntry("warn", `  [LIVE] SELL gave up — position may still be open on Polymarket`);
             }
           } else {
-            const fillPrice = parseFillPrice(result, "SELL");
-            console.log(`[LIVE] SELL CONFIRMED${label}`, result, fillPrice ? `fill: ${(fillPrice*100).toFixed(1)}%` : "");
-            logEntry("info", `  [LIVE] SELL confirmed${label}: ${result.orderID ?? result.status ?? JSON.stringify(result)}`);
-            // Reconcile realized PnL from actual fill price — the snapshot at stop-trigger
-            // time can be based on a stale/thin bid (e.g. bid=1¢ → shows -$4.92 when
-            // actual fill was 58¢ → real loss -$0.66). Update card and session totals.
-            if (fillPrice && fillPrice > 0.05 && trade.shares > 0) {
-              const prevRealized  = trade.realizedPnl;
-              const actualRealized = trade.shares * fillPrice - trade.amount;
-              const delta = actualRealized - prevRealized;
-              if (Math.abs(delta) > 0.01) {
-                state.realizedPnl = (state.realizedPnl || 0) + delta;
-                trade.realizedPnl = actualRealized;
-
-                // Fix win/loss counts if the sign flipped
-                const wasWin  = prevRealized  > 0;
-                const nowWin  = actualRealized > 0;
-                if (wasWin && !nowWin) { state.wins--; state.losses++; }
-                else if (!wasWin && nowWin) { state.losses--; state.wins++; }
-
-                const cardEl = $(`#card-${trade.id}`);
-                if (cardEl) {
-                  // Update PnL amount + color
-                  const pnlEl = cardEl.querySelector(".btc-closed-pnl");
-                  if (pnlEl) {
-                    const sign = actualRealized >= 0 ? "+" : "";
-                    pnlEl.textContent = `${sign}$${actualRealized.toFixed(2)} REALIZED`;
-                    pnlEl.className = `btc-closed-pnl ${actualRealized >= 0 ? "green" : "red"}`;
-                  }
-                  // Update WIN/LOSS strip label + color if sign changed
-                  if (wasWin !== nowWin) {
-                    const stripEl = cardEl.querySelector(".btc-closed-strip");
-                    const labelEl = cardEl.querySelector(".btc-closed-label");
-                    if (stripEl) stripEl.className = `btc-closed-strip ${nowWin ? "win" : "loss"}`;
-                    if (labelEl) {
-                      const reason = labelEl.textContent.replace(/^(▲ WIN|▼ LOSS) — /, "");
-                      labelEl.textContent = `${nowWin ? "▲ WIN" : "▼ LOSS"} — ${reason}`;
-                    }
-                  }
-                }
-                updatePnlStat();
-                logEntry("info", `  [LIVE] PnL reconciled from fill: $${actualRealized.toFixed(2)} (was $${prevRealized.toFixed(2)})`);
-              }
-            }
+            const orderId = result.orderID ?? result.orderId ?? result.id ?? "";
+            console.log(`[LIVE] GTC SELL posted${label}`, result);
+            logEntry("info", `  [LIVE] SELL GTC posted${label}: ${String(orderId).slice(0, 16)}…`);
           }
         })
         .catch(err => {
@@ -903,7 +860,8 @@ function closePosition(trade, reason) {
           logEntry("warn", `  [LIVE] SELL error${label}: ${err.message}`);
         });
     };
-    attemptSell(sellPayload, 0);
+    // Post GTC SELL 5¢ below current price — immediately crosses any bids at or above that level.
+    attemptGtcSell(trade.currentPrice - 0.05, 0);
   }
 
   // Post-close direction tracking: keep subscription alive until market resolves

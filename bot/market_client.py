@@ -362,10 +362,13 @@ class PolymarketClient:
         """
         Post a GTC (Good-Till-Cancelled) maker limit order. Sits in the book
         until filled or cancelled. Used by trend-sweep mode to pre-position
-        bids at fair value before the market reprices.
+        bids at fair value before the market reprices. Also used for SELL exits.
         """
         try:
-            from py_clob_client_v2 import OrderArgs, OrderType, PartialCreateOrderOptions, Side
+            from py_clob_client_v2 import (
+                OrderArgs, OrderType, PartialCreateOrderOptions, Side,
+                BalanceAllowanceParams, AssetType,
+            )
         except ImportError:
             raise RuntimeError("py-clob-client-v2 is not installed. Run: pip install py-clob-client-v2")
 
@@ -373,9 +376,28 @@ class PolymarketClient:
             raise ValueError(f"price must be between 0 and 1, got {price}")
         if size <= 0:
             raise ValueError(f"size must be positive, got {size}")
-        size = max(size, 5.0)  # Polymarket minimum: 5 shares per limit order
 
         client = self._get_clob_client()
+
+        if side.upper() == "SELL":
+            # Cap sell size to actual on-chain token balance to avoid "insufficient balance" errors.
+            try:
+                bal = client.get_balance_allowance(params=BalanceAllowanceParams(
+                    asset_type=AssetType.CONDITIONAL,
+                    token_id=token_id,
+                    signature_type=0,
+                ))
+                actual_shares = float(bal.get("balance", 0)) / 1e6
+                if actual_shares > 0:
+                    logger.info("SELL GTC: on-chain balance %.6f, requested %.6f", actual_shares, size)
+                    size = min(size, round(actual_shares, 4))
+                else:
+                    logger.warning("SELL GTC: on-chain balance is 0, using requested size %.4f", size)
+            except Exception as e:
+                logger.warning("SELL GTC: balance lookup failed (%s), using requested size", e)
+        else:
+            size = max(size, 5.0)  # Polymarket minimum: 5 shares per limit order
+
         side_enum = Side.BUY if side.upper() == "BUY" else Side.SELL
 
         response = client.create_and_post_order(
