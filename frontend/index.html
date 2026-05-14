@@ -149,6 +149,35 @@
         </div>
       </div>
 
+      <div class="switch-row">
+        <span class="field-label">AI Maker Mode (GTC bid after AI signal, no FAK)</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="ai-maker-toggle" />
+          <span class="toggle-slider"></span>
+        </label>
+        <span id="ai-maker-label" class="toggle-status dim">OFF</span>
+      </div>
+      <div class="row-2">
+        <div>
+          <label class="field-label">BTC Bid (¢)</label>
+          <input type="number" id="btc-maker-price" class="neon-input" value="50" min="20" max="80" step="1" title="GTC limit bid price in cents for BTC. Only fills when an MM crosses your price — no fill = no loss." />
+        </div>
+        <div>
+          <label class="field-label">ETH Bid (¢)</label>
+          <input type="number" id="eth-maker-price" class="neon-input" value="50" min="20" max="80" step="1" title="GTC limit bid price in cents for ETH." />
+        </div>
+      </div>
+      <div class="row-2">
+        <div>
+          <label class="field-label">SOL Bid (¢)</label>
+          <input type="number" id="sol-maker-price" class="neon-input" value="50" min="20" max="80" step="1" title="GTC limit bid price in cents for SOL." />
+        </div>
+        <div>
+          <label class="field-label">XRP Bid (¢)</label>
+          <input type="number" id="xrp-maker-price" class="neon-input" value="50" min="20" max="80" step="1" title="GTC limit bid price in cents for XRP." />
+        </div>
+      </div>
+
       <!-- Crypto Modes -->
       <div class="section-title"><span class="diamond">◈</span> CRYPTO MODES <span class="hint">(AI-analyzed 5-min &amp; 15-min markets)</span></div>
 

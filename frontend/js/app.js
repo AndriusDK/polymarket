@@ -90,6 +90,11 @@ const PERSIST_FIELDS = [
   ["trend-sweep-toggle",  "checked"],
   ["trend-sweep-price",   "value"],
   ["trend-sweep-size",    "value"],
+  ["ai-maker-toggle",     "checked"],
+  ["btc-maker-price",     "value"],
+  ["eth-maker-price",     "value"],
+  ["sol-maker-price",     "value"],
+  ["xrp-maker-price",     "value"],
 ];
 
 function saveSettings() {
@@ -115,6 +120,7 @@ function loadSettings() {
   syncToggleLabel("eth-mode-toggle",    "eth-mode-label",     ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("sol-mode-toggle",    "sol-mode-label",     ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("trend-sweep-toggle", "trend-sweep-label",  ["ON","green"], ["OFF","dim"]);
+  syncToggleLabel("ai-maker-toggle",    "ai-maker-label",     ["ON","green"], ["OFF","dim"]);
 }
 
 function syncToggleLabel(toggleId, labelId, onState, offState) {
@@ -141,6 +147,8 @@ function initSetup() {
     syncToggleLabel("sol-mode-toggle", "sol-mode-label", ["ON","green"], ["OFF","dim"]));
   $("#trend-sweep-toggle")?.addEventListener("change", () =>
     syncToggleLabel("trend-sweep-toggle", "trend-sweep-label", ["ON","green"], ["OFF","dim"]));
+  $("#ai-maker-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("ai-maker-toggle", "ai-maker-label", ["ON","green"], ["OFF","dim"]));
 
   $("#btn-launch").addEventListener("click", () => {
     $("#setup-error").textContent = "";
@@ -180,6 +188,11 @@ function initSetup() {
       trendSweep:      $("#trend-sweep-toggle")?.checked ?? false,
       trendSweepPrice: parseFloat($("#trend-sweep-price")?.value) || 50,  // cents
       trendSweepSize:  parseFloat($("#trend-sweep-size")?.value)  || 2,   // USDC
+      aiMaker:       $("#ai-maker-toggle")?.checked ?? false,
+      btcMakerPrice: parseFloat($("#btc-maker-price")?.value) || 50,
+      ethMakerPrice: parseFloat($("#eth-maker-price")?.value) || 50,
+      solMakerPrice: parseFloat($("#sol-maker-price")?.value) || 50,
+      xrpMakerPrice: parseFloat($("#xrp-maker-price")?.value) || 50,
     };
 
     initDashboard();
@@ -1338,8 +1351,8 @@ function startCryptoMode(asset) {
   runCryptoCycle(asset);
   state[asset].timer = setInterval(() => runCryptoCycle(asset), 30_000);
 
-  // Start polling pending GTC sweep orders (no-op if sweep mode is off / no orders queued)
-  if (state.config?.trendSweep) startPendingLimitPoll();
+  // Start polling pending GTC limit orders (trend sweep and/or AI maker)
+  if (state.config?.trendSweep || state.config?.aiMaker) startPendingLimitPoll();
 }
 
 function stopCryptoMode(asset) {
@@ -2118,6 +2131,15 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     return;
   }
 
+  // ─── AI Maker Mode: post GTC limit bid instead of FAK ─────────────────
+  if (c.aiMaker) {
+    const priceCt = Math.max(20, Math.min(80, c[`${asset}MakerPrice`] ?? 50));
+    await placeAiMakerBid(asset, analysis, {
+      market, tokenId, amount, price: priceCt / 100, spot, priceToBeat,
+    });
+    return;
+  }
+
   const tag      = c.dryRun ? "[SIM]" : "[LIVE]";
   const sigClass = isUp ? "green" : "red";
   const pd       = spot >= 1000 ? 0 : spot >= 10 ? 2 : 3;
@@ -2524,14 +2546,97 @@ async function placeTrendSweepBid(asset, market, signal, spot) {
   }
 }
 
+async function placeAiMakerBid(asset, analysis, { market, tokenId, amount, price, spot, priceToBeat }) {
+  const c   = state.config;
+  const cfg = CRYPTO_CONFIG[asset];
+
+  if (state[asset].sweptWindows.has(market.conditionId)) return;
+  if (state[asset].pendingLimitOrders.has(market.conditionId)) return;
+  if (state.trades.some(t => t.conditionId === market.conditionId)) return;
+  if (state.stats.spent >= c.maxDaily) return;
+
+  const shares  = amount / price;
+  const priceCt = Math.round(price * 100);
+  const tag     = c.dryRun ? "[SIM-MKR]" : "[LIVE-MKR]";
+  const sigClass = analysis.signal === "BUY_UP" ? "green" : "red";
+  const mktPricePct = ((analysis.signal === "BUY_UP" ? market.upPrice : market.downPrice) * 100).toFixed(1);
+
+  logEntry("trade",
+    `${tag} ${cfg.ticker} <span class="${sigClass}">${analysis.signal}</span>` +
+    `  $${amount.toFixed(2)} — ${market.question.slice(0, 50)}`
+  );
+  logEntry("amber",
+    `  ◈ <span class="amber">AI MAKER</span> posting GTC @ ${priceCt}¢ (market ${mktPricePct}¢)` +
+    ` — waiting for fill, no fill = no loss`
+  );
+
+  state[asset].sweptWindows.add(market.conditionId);
+
+  if (c.dryRun) {
+    const pending = {
+      orderId:    `dry-${Date.now()}`,
+      market, signal: analysis.signal, tokenId, price, shares, sizeUsd: amount,
+      placedAt:   Date.now(),
+      endDateMs:  new Date(market.endDate).getTime(),
+      dryRun:     true,
+      aiMaker:    true,
+      analysis, spot, priceToBeat,
+    };
+    convertFilledSweepToTrade(asset, pending, price);
+    return;
+  }
+
+  try {
+    const resp = await fetch("/limit", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token_id:       tokenId,
+        side:           "BUY",
+        price,
+        size:           shares,
+        private_key:    c.polyPrivateKey,
+        api_key:        c.polyApiKey,
+        api_secret:     c.polyApiSecret,
+        api_passphrase: c.polyPassphrase,
+      }),
+    });
+    const result = await resp.json();
+    if (result.error) {
+      logEntry("warn", `  ◈ AI MAKER failed — ${result.error}`);
+      state[asset].sweptWindows.delete(market.conditionId);
+      return;
+    }
+    const orderId = result.orderID ?? result.orderId ?? result.id;
+    if (!orderId) {
+      logEntry("warn", `  ◈ AI MAKER no orderID — ${JSON.stringify(result).slice(0, 100)}`);
+      state[asset].sweptWindows.delete(market.conditionId);
+      return;
+    }
+    state[asset].pendingLimitOrders.set(market.conditionId, {
+      orderId, market, signal: analysis.signal, tokenId, price, shares, sizeUsd: amount,
+      placedAt:   Date.now(),
+      endDateMs:  new Date(market.endDate).getTime(),
+      dryRun:     false,
+      aiMaker:    true,
+      analysis, spot, priceToBeat,
+    });
+    logEntry("info", `  ◈ AI MAKER placed: order ${String(orderId).slice(0, 12)}…`);
+  } catch (err) {
+    logEntry("warn", `  ◈ AI MAKER error: ${err.message}`);
+    state[asset].sweptWindows.delete(market.conditionId);
+  }
+}
+
 async function cancelTrendSweepOrder(asset, conditionId, reason) {
   const pending = state[asset].pendingLimitOrders.get(conditionId);
   if (!pending) return;
   state[asset].pendingLimitOrders.delete(conditionId);
 
   const c = state.config;
+  const tag = pending.aiMaker ? "AI MAKER" : "SWEEP";
   if (pending.dryRun) {
-    logEntry("dim", `  ◈ SWEEP cancelled (sim) — ${reason}`);
+    logEntry("dim", `  ◈ ${tag} cancelled (sim) — ${reason}`);
     return;
   }
   try {
@@ -2546,9 +2651,9 @@ async function cancelTrendSweepOrder(asset, conditionId, reason) {
         api_passphrase: c.polyPassphrase,
       }),
     });
-    logEntry("dim", `  ◈ SWEEP cancelled — ${reason}`);
+    logEntry("dim", `  ◈ ${tag} cancelled — ${reason}`);
   } catch (err) {
-    logEntry("warn", `  ◈ SWEEP cancel failed (${err.message}) — ${reason}`);
+    logEntry("warn", `  ◈ ${tag} cancel failed (${err.message}) — ${reason}`);
   }
 }
 
@@ -2571,21 +2676,26 @@ function convertFilledSweepToTrade(asset, pending, fillPrice) {
     shares:        pending.shares,
     currentPrice:  fillPrice,
     peakPrice:     fillPrice,
-    confidence:    "SWEEP",   // tag so card shows source; closePosition uses .mode for SELL gate
+    confidence:    pending.aiMaker ? (pending.analysis?.confidence ?? "MEDIUM") : "SWEEP",
     unrealizedPnl: 0,
-    mode:          c.dryRun ? "SIM" : "LIVE",
+    mode:          c.dryRun ? (pending.aiMaker ? "SIM-MKR" : "SIM-SWP") : (pending.aiMaker ? "LIVE-MKR" : "LIVE-SWP"),
     type:          asset,
     endDate:       market.endDate,
     confirmed:     true,
-    spot:          null,
-    priceToBeat:   null,
-    gap:           null,
-    edge:          null,
-    reasoning:     `Trend-sweep maker bid filled at ${(fillPrice*100).toFixed(1)}¢`,
-    momentum:      null,
-    volatility:    null,
-    volSpikeRatio: null,
-    signalAgainstGap: false,
+    spot:          pending.spot ?? null,
+    priceToBeat:   pending.priceToBeat ?? null,
+    gap:           pending.analysis?.gap ?? null,
+    edge:          pending.analysis?.edge ?? null,
+    reasoning:     pending.aiMaker
+                     ? (pending.analysis?.reasoning ?? `AI maker bid filled at ${(fillPrice*100).toFixed(1)}¢`)
+                     : `Trend-sweep maker bid filled at ${(fillPrice*100).toFixed(1)}¢`,
+    momentum:      pending.analysis?.momentum ?? null,
+    volatility:    pending.analysis?.volatility ?? null,
+    volSpikeRatio: pending.analysis?.volSpikeRatio ?? null,
+    signalAgainstGap: pending.aiMaker
+                     ? ((pending.signal === "BUY_UP"   && (pending.analysis?.gap ?? 0) < 0) ||
+                        (pending.signal === "BUY_DOWN" && (pending.analysis?.gap ?? 0) > 0))
+                     : false,
     priceHistory:  [],
     totalSecs:     secsLeft,
     entryTime:     Date.now(),
@@ -2609,8 +2719,9 @@ function convertFilledSweepToTrade(asset, pending, fillPrice) {
   addCryptoCard(trade);
   startCryptoCountdown();
 
+  const fillLabel = pending.aiMaker ? "AI FILL" : "SWEEP FILL";
   logEntry("trade",
-    `  ◈ <span class="green">SWEEP FILL</span> ${cfg.ticker} ${pending.signal} ` +
+    `  ◈ <span class="green">${fillLabel}</span> ${cfg.ticker} ${pending.signal} ` +
     `$${pending.sizeUsd.toFixed(2)} @ ${(fillPrice*100).toFixed(1)}¢ — ${market.question.slice(0, 50)}`
   );
 }
@@ -2685,7 +2796,8 @@ async function pollPendingLimitOrders() {
           convertFilledSweepToTrade(asset, filledPending, pending.price);
         } else if (orderState === "CANCELED" || orderState === "CANCELLED" || orderState === "EXPIRED") {
           state[asset].pendingLimitOrders.delete(conditionId);
-          logEntry("dim", `  ◈ SWEEP order ${orderState.toLowerCase()} (CLOB-side)`);
+          const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";
+          logEntry("dim", `  ◈ ${pTag} order ${orderState.toLowerCase()} (CLOB-side)`);
         }
       } catch (err) {
         // Network blip — try again next poll cycle
