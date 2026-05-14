@@ -2818,11 +2818,29 @@ async function pollPendingLimitOrders() {
         const orderState  = String(status.status ?? status.state ?? "").toUpperCase();
 
         if (sizeMatched > 0 || orderState === "MATCHED" || orderState === "FILLED") {
+          console.log(`[AI MAKER fill] full status response:`, status);
           const filledShares = sizeMatched > 0 ? sizeMatched : pending.shares;
-          const filledUsdc   = filledShares * pending.price;
-          const filledPending = { ...pending, shares: filledShares, sizeUsd: filledUsdc };
+          // GTC bids may fill BELOW our posted price if a seller crosses our bid
+          // (price improvement). Parse the actual fill price from the CLOB response
+          // — using the bid price would record a wrong entry and mis-trigger stops.
+          const parsed = parseFillPrice(status, "BUY");
+          const avgFromFields = parseFloat(
+            status.price_avg ?? status.priceAvg ?? status.avg_price ?? status.averagePrice ?? NaN
+          );
+          const actualFillPrice = (parsed && parsed > 0 && parsed < 1) ? parsed
+                                : (avgFromFields > 0 && avgFromFields < 1) ? avgFromFields
+                                : pending.price;
+          if (Math.abs(actualFillPrice - pending.price) > 0.001) {
+            const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";
+            logEntry("amber",
+              `  ◈ ${pTag} filled at ${(actualFillPrice*100).toFixed(1)}¢ ` +
+              `(bid was ${(pending.price*100).toFixed(1)}¢ — price improvement)`
+            );
+          }
+          const filledUsdc   = filledShares * actualFillPrice;
+          const filledPending = { ...pending, shares: filledShares, sizeUsd: filledUsdc, price: actualFillPrice };
           state[asset].pendingLimitOrders.delete(conditionId);
-          convertFilledSweepToTrade(asset, filledPending, pending.price);
+          convertFilledSweepToTrade(asset, filledPending, actualFillPrice);
         } else if (orderState === "CANCELED" || orderState === "CANCELLED" || orderState === "EXPIRED") {
           state[asset].pendingLimitOrders.delete(conditionId);
           const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";
