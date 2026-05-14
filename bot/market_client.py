@@ -360,7 +360,7 @@ class PolymarketClient:
         bids at fair value before the market reprices.
         """
         try:
-            from py_clob_client.clob_types import OrderArgs, OrderType
+            from py_clob_client.clob_types import OrderArgs, OrderType, PartialCreateOrderOptions
             from py_clob_client.order_builder.constants import BUY, SELL
         except ImportError:
             raise RuntimeError("py-clob-client is not installed.")
@@ -378,9 +378,11 @@ class PolymarketClient:
             price=round(price, 4),
             size=round(size, 4),
             side=side_const,
-            neg_risk=True,
         )
-        signed_order = client.create_order(order_args)
+        signed_order = client.create_order(
+            order_args,
+            PartialCreateOrderOptions(neg_risk=True),
+        )
         response = client.post_order(signed_order, OrderType.GTC)
         logger.info("GTC limit order placed: %s @ %.4f x %.4f → %s",
                     side, price, size, response)
