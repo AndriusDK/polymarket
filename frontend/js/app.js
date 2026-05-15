@@ -94,6 +94,7 @@ const PERSIST_FIELDS = [
   ["trend-sweep-size",    "value"],
   ["ai-maker-toggle",     "checked"],
   ["emergency-fill-exit-toggle", "checked"],
+  ["selective-mode-toggle", "checked"],
   ["btc-maker-price",     "value"],
   ["eth-maker-price",     "value"],
   ["sol-maker-price",     "value"],
@@ -125,6 +126,7 @@ function loadSettings() {
   syncToggleLabel("trend-sweep-toggle", "trend-sweep-label",  ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("ai-maker-toggle",    "ai-maker-label",     ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("emergency-fill-exit-toggle", "emergency-fill-exit-label", ["ON","amber"], ["OFF","dim"]);
+  syncToggleLabel("selective-mode-toggle", "selective-mode-label", ["ON","green"], ["OFF","dim"]);
 }
 
 function syncToggleLabel(toggleId, labelId, onState, offState) {
@@ -155,6 +157,8 @@ function initSetup() {
     syncToggleLabel("ai-maker-toggle", "ai-maker-label", ["ON","green"], ["OFF","dim"]));
   $("#emergency-fill-exit-toggle")?.addEventListener("change", () =>
     syncToggleLabel("emergency-fill-exit-toggle", "emergency-fill-exit-label", ["ON","amber"], ["OFF","dim"]));
+  $("#selective-mode-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("selective-mode-toggle", "selective-mode-label", ["ON","green"], ["OFF","dim"]));
 
   $("#btn-launch").addEventListener("click", () => {
     $("#setup-error").textContent = "";
@@ -198,6 +202,7 @@ function initSetup() {
       trendSweepSize:  parseFloat($("#trend-sweep-size")?.value)  || 2,   // USDC
       aiMaker:       $("#ai-maker-toggle")?.checked ?? false,
       emergencyFillExit: $("#emergency-fill-exit-toggle")?.checked ?? false,
+      selectiveMode:     $("#selective-mode-toggle")?.checked ?? false,
       btcMakerPrice: parseFloat($("#btc-maker-price")?.value) || 50,
       ethMakerPrice: parseFloat($("#eth-maker-price")?.value) || 50,
       solMakerPrice: parseFloat($("#sol-maker-price")?.value) || 50,
@@ -2168,6 +2173,33 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   // ─── AI Maker Mode: post GTC limit bid instead of FAK ─────────────────
   if (c.aiMaker) {
     const priceCt = Math.max(20, Math.min(80, c[`${asset}MakerPrice`] ?? 50));
+
+    // Selective Mode: skip the two patterns most strongly correlated with losses.
+    // (1) Expensive bid + long window + weak edge → asymmetric loss (≥18¢ down, ≤10¢ up)
+    // (2) Signal against current gap + long window + weak edge → relies on reversal
+    if (c.selectiveMode) {
+      const absEdge = analysis.absEdge ?? Math.abs(analysis.edge ?? 0);
+      const gap = analysis.gap ?? 0;
+      const signalAgainstGap = (analysis.signal === "BUY_UP"   && gap < 0) ||
+                                (analysis.signal === "BUY_DOWN" && gap > 0);
+      const longWindow = secsForSizing > 300;
+
+      if (priceCt >= 65 && longWindow && absEdge < 0.12) {
+        logEntry("dim",
+          `  ↳ <span class="dim">selective skip</span> — bid ${priceCt}¢ on ${Math.floor(secsForSizing/60)}m window, ` +
+          `edge ${(absEdge*100).toFixed(1)}% < 12% required`
+        );
+        return;
+      }
+      if (signalAgainstGap && longWindow && absEdge < 0.10) {
+        logEntry("dim",
+          `  ↳ <span class="dim">selective skip</span> — gap-flip on ${Math.floor(secsForSizing/60)}m window, ` +
+          `edge ${(absEdge*100).toFixed(1)}% < 10% required`
+        );
+        return;
+      }
+    }
+
     await placeAiMakerBid(asset, analysis, {
       market, tokenId, amount, price: priceCt / 100, spot, priceToBeat,
     });
