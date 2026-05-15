@@ -46,6 +46,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             self.wfile.write(b'{"status":"ok"}')
         elif self.path.startswith("/price"):
             self._handle_price()
+        elif self.path.startswith("/positions"):
+            self._handle_positions()
         elif self.path.startswith(PROXY_PREFIX):
             self._proxy_gamma()
         else:
@@ -250,6 +252,36 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 "asks": ask_levels,
                 "bids": bid_levels,
             }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as e:
+            err = json.dumps({"error": str(e)}).encode()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(err)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(err)
+
+    def _handle_positions(self):
+        """Proxy wallet positions from data-api.polymarket.com."""
+        try:
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            address = params.get("address", [None])[0]
+            if not address:
+                raise ValueError("missing address")
+
+            url = (f"https://data-api.polymarket.com/positions"
+                   f"?user={urllib.parse.quote(address)}&sizeThreshold=0.01")
+            req = urllib.request.Request(url, headers={"User-Agent": "polymarket-ai-bot/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = resp.read()
+
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

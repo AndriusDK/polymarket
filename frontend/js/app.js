@@ -216,6 +216,132 @@ function initSetup() {
 
 // ── Dashboard ────────────────────────────────────────────────────
 
+// Fetches open positions from the Polymarket data API and creates trade cards
+// for any active positions the bot didn't place itself this session.
+async function syncExistingPositions() {
+  const c = state.config;
+  if (!c.polyPrivateKey) return;
+
+  let address;
+  try {
+    const wallet = new ethers.Wallet(c.polyPrivateKey);
+    address = wallet.address;
+  } catch { return; }
+
+  let positions;
+  try {
+    const resp = await fetch(`/positions?address=${encodeURIComponent(address)}`);
+    if (!resp.ok) return;
+    positions = await resp.json();
+  } catch { return; }
+
+  if (!Array.isArray(positions) || !positions.length) return;
+
+  let recovered = 0;
+  for (const pos of positions) {
+    const tokenId = pos.asset || pos.asset_id || pos.token_id;
+    const size    = parseFloat(pos.size ?? pos.currentSize ?? "0");
+    if (!tokenId || size < 0.01) continue;
+
+    // Skip if this token is already tracked in the current session
+    if (state.trades.some(t => t.tokenId === tokenId)) continue;
+
+    // Identify asset from market title
+    const title = (pos.title || pos.market || "").toLowerCase();
+    let asset;
+    if      (title.includes("bitcoin") || title.includes("btc")) asset = "btc";
+    else if (title.includes("ethereum") || title.includes("eth")) asset = "eth";
+    else if (title.includes("solana")  || title.includes("sol")) asset = "sol";
+    else if (title.includes("xrp")) asset = "xrp";
+    else continue;
+
+    // Fetch live market details so we have endDate, question, conditionId
+    let raw;
+    try {
+      const mResp = await fetch(
+        `/api/gamma/markets?clob_token_ids=${encodeURIComponent(JSON.stringify([tokenId]))}`
+      );
+      if (!mResp.ok) continue;
+      const mArr = await mResp.json();
+      if (!Array.isArray(mArr) || !mArr.length) continue;
+      raw = mArr[0];
+    } catch { continue; }
+
+    const endDate = raw.endDate;
+    if (!endDate || new Date(endDate) <= new Date()) continue; // already resolved
+
+    const outcome   = (pos.outcome || "").toLowerCase();
+    const signal    = outcome === "up" ? "BUY_UP" : "BUY_DOWN";
+    const avgPrice  = parseFloat(pos.avgPrice ?? pos.averagePrice ?? "0") || 0;
+    const amount    = avgPrice * size;
+    const secsLeft  = Math.max(0, Math.round((new Date(endDate) - Date.now()) / 1000));
+
+    // Resolve conditionId and Up/Down token IDs from the raw market object
+    let tokenIds = [];
+    try { tokenIds = JSON.parse(raw.clobTokenIds || "[]"); } catch {}
+    let outcomes = [];
+    try { outcomes = JSON.parse(raw.outcomes || "[]"); } catch {}
+    const upIdx   = outcomes.findIndex(o => o.toLowerCase() === "up");
+    const downIdx = outcomes.findIndex(o => o.toLowerCase() === "down");
+    const upTokenId   = tokenIds[upIdx]   || "";
+    const downTokenId = tokenIds[downIdx] || "";
+    const resolvedTokenId = signal === "BUY_UP" ? (upTokenId || tokenId) : (downTokenId || tokenId);
+
+    const trade = {
+      id:            Date.now() + (state.stats?.trades ?? 0) + recovered,
+      time:          new Date().toUTCString().slice(-12, -4),
+      question:      raw.question || pos.title || pos.market || "",
+      conditionId:   raw.conditionId || raw.id || pos.conditionId || pos.condition_id || "",
+      tokenId:       resolvedTokenId,
+      signal,
+      entryPrice:    avgPrice,
+      amount,
+      shares:        size,
+      currentPrice:  avgPrice,
+      peakPrice:     avgPrice,
+      confidence:    "LIVE",
+      unrealizedPnl: 0,
+      mode:          "LIVE",
+      type:          asset,
+      endDate,
+      confirmed:     true,
+      spot:          null,
+      priceToBeat:   null,
+      gap:           null,
+      edge:          null,
+      reasoning:     "recovered from wallet",
+      momentum:      null,
+      volatility:    null,
+      volSpikeRatio: null,
+      signalAgainstGap: false,
+      priceHistory:  [],
+      totalSecs:     secsLeft,
+      entryTime:     Date.now(),
+      entryVolume:   raw.volume ?? null,
+      marketUrl:     raw.slug ? `https://polymarket.com/event/${raw.slug}` : "",
+      exitPrice:     null,
+      secsAtClose:   null,
+    };
+
+    state.trades.push(trade);
+    if (state.stats) state.stats.trades++;
+    priceStream.subscribe(resolvedTokenId);
+    addCryptoCard(trade);
+    startCryptoCountdown();
+    recovered++;
+
+    logEntry("amber",
+      `↩ RECOVERED — ${signal} ${asset.toUpperCase()} @ ${(avgPrice * 100).toFixed(1)}¢ ` +
+      `× ${size.toFixed(2)} shares — ${(trade.question).slice(0, 55)}`
+    );
+  }
+
+  if (recovered > 0) {
+    setStat("positions", String(state.trades.length));
+    updatePnlStat();
+  }
+}
+
 function initDashboard() {
   const c = state.config;
 
@@ -284,6 +410,9 @@ function initDashboard() {
           "nohup /var/www/html/polymarket/venv/bin/python3 server.py &"
         ), 500);
       });
+
+    // Recover any open positions placed outside this session (e.g. manual Polymarket trades).
+    syncExistingPositions();
   }
 
   for (const asset of ["btc", "eth", "sol", "xrp"]) {
