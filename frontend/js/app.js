@@ -660,6 +660,7 @@ const priceStream = (() => {
         for (const s of (state.shadowTrades || [])) {
           if (s.tokenId !== tokenId || s.resolved) continue;
           if (bid < s.minPriceAfterClose) s.minPriceAfterClose = bid;
+          if (bid > s.maxPriceAfterClose) s.maxPriceAfterClose = bid;
           s.lastKnownPrice = bid;
           // Resolution: token converges to ~0 (wrong direction) or ~1 (correct direction)
           if (bid >= 0.97 || bid <= 0.03) {
@@ -934,6 +935,9 @@ function closePosition(trade, reason) {
       tradeId: trade.id,
       tokenId: trade.tokenId,
       minPriceAfterClose: trade.currentPrice,
+      maxPriceAfterClose: trade.currentPrice,
+      exitPrice:          trade.currentPrice,
+      shares:             trade.shares ?? 0,
       lastKnownPrice: trade.currentPrice,
       finalResolutionPrice: null,
       resolved: false,
@@ -1009,7 +1013,9 @@ function closePosition(trade, reason) {
         <span id="resolution-badge-${trade.id}" class="resolution-badge pending">⏳ TRACKING DIRECTION</span>
         <div class="resolution-data">
           <span class="res-item">MIN AFTER CLOSE: <span id="res-min-${trade.id}" class="btc-v">$${trade.currentPrice.toFixed(3)}</span></span>
+          <span class="res-item">MAX AFTER CLOSE: <span id="res-max-${trade.id}" class="btc-v">$${trade.currentPrice.toFixed(3)}</span></span>
           <span class="res-item">RESOLUTION: <span id="res-final-${trade.id}" class="btc-v dim">—</span></span>
+          <span class="res-item" id="res-delta-wrap-${trade.id}" style="display:none">LEFT / SAVED: <span id="res-delta-${trade.id}" class="btc-v dim">—</span></span>
         </div>
       `;
     } else {
@@ -1078,12 +1084,34 @@ function updateResolutionBadge(shadow) {
   const correct = shadow.directionCorrect;
   badge.className = `resolution-badge ${correct ? "correct" : "wrong"}`;
   badge.textContent = correct ? "✓ CORRECT DIR" : "✗ WRONG DIR";
+
   const minEl = $(`#res-min-${shadow.tradeId}`);
   if (minEl) minEl.textContent = `$${shadow.minPriceAfterClose.toFixed(3)}`;
+
+  const maxEl = $(`#res-max-${shadow.tradeId}`);
+  if (maxEl) maxEl.textContent = `$${shadow.maxPriceAfterClose.toFixed(3)}`;
+
   const finalEl = $(`#res-final-${shadow.tradeId}`);
   if (finalEl) {
     finalEl.textContent = `$${shadow.finalResolutionPrice.toFixed(3)}`;
     finalEl.className = "btc-v";
+  }
+
+  // LEFT ON TABLE (wins exited early) or SAVED BY STOP (losses)
+  const wrapEl = $(`#res-delta-wrap-${shadow.tradeId}`);
+  const deltaEl = $(`#res-delta-${shadow.tradeId}`);
+  if (wrapEl && deltaEl && shadow.shares > 0) {
+    const delta = (shadow.finalResolutionPrice - shadow.exitPrice) * shadow.shares;
+    if (delta >= 0) {
+      // Positive: holding longer would have earned more (or stop was premature on a loss)
+      deltaEl.textContent = `+$${delta.toFixed(2)}`;
+      deltaEl.className = delta > 0.05 ? "btc-v amber" : "btc-v dim";
+    } else {
+      // Negative: stop correctly avoided further loss
+      deltaEl.textContent = `$${Math.abs(delta).toFixed(2)} avoided`;
+      deltaEl.className = "btc-v green";
+    }
+    wrapEl.style.display = "";
   }
 }
 
