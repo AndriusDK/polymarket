@@ -1139,10 +1139,23 @@ function closePosition(trade, reason) {
     // Resolution tracking section
     const resDiv = document.createElement("div");
     resDiv.className = "resolution-tracking";
+
+    // Stop-depth: how far price fell from entry before the stop fired
+    const isStopReason = /stop|cascade|slip/i.test(reason);
+    const stopDepthPct = isStopReason
+      ? ((trade.entryPrice - trade.exitPrice) / trade.entryPrice * 100).toFixed(1)
+      : null;
+    // Peak scenario: PnL if trade had been exited at the in-trade price peak
+    const peakPnl     = (trade.peakPrice - trade.entryPrice) * (trade.shares ?? 0);
+    const peakSign    = peakPnl >= 0 ? "+" : "";
+    const peakClass   = peakPnl >= 0 ? "green" : "red";
+
     if (willShadow) {
       resDiv.innerHTML = `
         <span id="resolution-badge-${trade.id}" class="resolution-badge pending">⏳ TRACKING DIRECTION</span>
         <div class="resolution-data">
+          ${stopDepthPct !== null ? `<span class="res-item">STOP DEPTH: <span class="btc-v red">${stopDepthPct}% from entry</span></span>` : ""}
+          <span class="res-item">PEAK PnL: <span class="btc-v ${peakClass}">${peakSign}$${peakPnl.toFixed(2)} at ${(trade.peakPrice * 100).toFixed(1)}¢</span></span>
           <span class="res-item">MIN AFTER CLOSE: <span id="res-min-${trade.id}" class="btc-v">$${trade.currentPrice.toFixed(3)}</span></span>
           <span class="res-item">MAX AFTER CLOSE: <span id="res-max-${trade.id}" class="btc-v">$${trade.currentPrice.toFixed(3)}</span></span>
           <span class="res-item">RESOLUTION: <span id="res-final-${trade.id}" class="btc-v dim">—</span></span>
