@@ -3187,8 +3187,60 @@ async function pollPendingLimitOrders() {
         // Order is still live — now apply cancellation policies.
 
         // Cancel near resolution: at <60s a fill leaves no time to manage the position.
+        // IMPORTANT: the CLOB order-status API can lag 30-50s after an actual fill, so
+        // we cannot trust "not filled" from the status poll alone.  After sending the
+        // cancel we wait 6s and cross-check the wallet positions API, which reflects
+        // on-chain state faster than the CLOB order-book API.
         if (secsToEnd < 60) {
-          cancelTrendSweepOrder(asset, conditionId, `${secsToEnd}s before resolution`);
+          state[asset].pendingLimitOrders.delete(conditionId);
+          const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";
+
+          if (!pending.dryRun) {
+            try {
+              await fetch("/cancel", {
+                method:  "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  order_id:       pending.orderId,
+                  private_key:    c.polyPrivateKey,
+                  api_key:        c.polyApiKey,
+                  api_secret:     c.polyApiSecret,
+                  api_passphrase: c.polyPassphrase,
+                }),
+              });
+            } catch {}
+
+            // Wait for on-chain state to settle, then verify via wallet positions —
+            // more reliable than CLOB order-status which can lag 30-50s on fast fills.
+            await new Promise(r => setTimeout(r, 6_000));
+            try {
+              const wallet   = new ethers.Wallet(c.polyPrivateKey);
+              const posResp  = await fetch(`/positions?address=${encodeURIComponent(wallet.address)}`);
+              const positions = posResp.ok ? await posResp.json() : [];
+              const match = Array.isArray(positions)
+                ? positions.find(p =>
+                    (p.asset || p.asset_id || p.token_id) === pending.tokenId &&
+                    parseFloat(p.size ?? p.currentSize ?? "0") > 0.01
+                  )
+                : null;
+              if (match) {
+                const avgPrice  = parseFloat(match.avgPrice ?? match.averagePrice ?? "0") || pending.price;
+                const fillShares = parseFloat(match.size ?? "0") || pending.shares;
+                logEntry("amber",
+                  `  ◈ ${pTag} cancel-race recovered — filled at ${(avgPrice*100).toFixed(1)}¢ ` +
+                  `(CLOB lag masked the fill during poll window)`
+                );
+                const filledPending = {
+                  ...pending, shares: fillShares,
+                  sizeUsd: fillShares * avgPrice, price: avgPrice, aiMakerFill: true,
+                };
+                convertFilledSweepToTrade(asset, filledPending, avgPrice);
+                continue;
+              }
+            } catch {}
+          }
+
+          logEntry("dim", `  ◈ ${pTag} cancelled — ${secsToEnd}s before resolution`);
           continue;
         }
 
