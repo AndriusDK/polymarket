@@ -949,6 +949,15 @@ function closePosition(trade, reason) {
   if (idx === -1) return;
   state.trades.splice(idx, 1);
 
+  // Freeze the PEAK DOM element to the true final peak — refreshBtcCards won't touch
+  // this trade anymore (it's removed from state.trades), so we write it once here so
+  // the card display and the PEAK PnL calculation in the resolution section always agree.
+  const peakFreezeEl = $(`#peak-${trade.id}`);
+  if (peakFreezeEl) {
+    peakFreezeEl.textContent = (trade.peakPrice * 100).toFixed(1) + "%";
+    peakFreezeEl.className = trade.peakPrice > trade.entryPrice + 0.005 ? "btc-v green" : "btc-v dim";
+  }
+
   // LIVE MODE: post a GTC SELL limit order to exit the position.
   // GTC is used instead of FOK because FOK requires all shares to fill at a single
   // price level — unreliable in thin prediction market books. A GTC SELL just below
