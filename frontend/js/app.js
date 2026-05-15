@@ -69,6 +69,8 @@ const PERSIST_FIELDS = [
   ["max-daily",           "value"],
   ["markets-count",       "value"],
   ["take-profit-pct",     "value"],
+  ["trail-arm-pct",       "value"],
+  ["trail-lock-pct",      "value"],
   ["stop-grace-sec",      "value"],
   ["min-market-volume",   "value"],
   ["min-gap-pct",         "value"],
@@ -171,6 +173,8 @@ function initSetup() {
       dryRun:        $("#dry-run-toggle").checked,
       takeProfitPct:    parseFloat($("#take-profit-pct")?.value) || 50,
       stopLossPct:      parseFloat($("#stop-loss-pct")?.value)   || 25,
+      trailArmPct:      parseFloat($("#trail-arm-pct")?.value)   || 15,
+      trailLockPct:     parseFloat($("#trail-lock-pct")?.value)  || 40,
       stopGraceSec:     parseFloat($("#stop-grace-sec")?.value)  ?? 10,
       minMarketVolume:  parseFloat($("#min-market-volume")?.value) || 1000,
       minGapPct:        parseFloat($("#min-gap-pct")?.value ?? ""),   // 0 = disabled
@@ -603,6 +607,8 @@ const priceStream = (() => {
           // Read live from DOM so changes take effect instantly without restart
           const stopLossPct   = (parseFloat($("#stop-loss-pct")?.value)   || state.config?.stopLossPct   || 25) / 100;
           const takeProfitPct = (parseFloat($("#take-profit-pct")?.value) || state.config?.takeProfitPct || 50) / 100;
+          const trailArmPct   = (parseFloat($("#trail-arm-pct")?.value)   || state.config?.trailArmPct   || 15) / 100;
+          const trailLockPct  = (parseFloat($("#trail-lock-pct")?.value)  || state.config?.trailLockPct  || 40) / 100;
           const stopGraceMs = (parseFloat($("#stop-grace-sec")?.value) ?? state.config?.stopGraceSec ?? 10) * 1_000;
           const toStopLoss = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
@@ -632,15 +638,16 @@ const priceStream = (() => {
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
           const toTakeProfit = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
-            if (t.unrealizedPnl >= t.amount * takeProfitPct) return true;
-            // Trailing stop: arms at 15% gain, lock-in % scales with absolute peak gain
-            // Small gains: loose trail (40%) — let it run; large gains: tight trail (65%) — protect profit
-            const peakGain = t.peakPrice * t.shares - t.amount;
-            const lockIn = peakGain >= 12 ? 0.65 : peakGain >= 6 ? 0.55 : 0.40;
-            if (peakGain >= t.amount * 0.15 && t.unrealizedPnl < peakGain * lockIn) return true;
-            return false;
+            return t.unrealizedPnl >= t.amount * takeProfitPct;
           });
           for (const t of toTakeProfit) closePosition(t, "TAKE PROFIT");
+          const toTrailStop = state.trades.filter(t => {
+            if (t.tokenId !== tokenId) return false;
+            if (!trailArmPct) return false;
+            const peakGain = t.peakPrice * t.shares - t.amount;
+            return peakGain >= t.amount * trailArmPct && t.unrealizedPnl < peakGain * trailLockPct;
+          });
+          for (const t of toTrailStop) closePosition(t, "TRAIL STOP");
           refreshBtcCards();
           updatePnlStat();
         }
@@ -2987,15 +2994,24 @@ function startCryptoCountdown() {
     }
     // Periodic stop-loss safety net: catches positions where the price stream
     // stopped updating (token frozen at near-zero), so onMessage never fires.
-    const stopLossPct = (parseFloat($("#stop-loss-pct")?.value) || state.config?.stopLossPct || 25) / 100;
-    const stopGraceMs = (parseFloat($("#stop-grace-sec")?.value) ?? state.config?.stopGraceSec ?? 10) * 1_000;
+    const stopLossPct  = (parseFloat($("#stop-loss-pct")?.value)  || state.config?.stopLossPct  || 25) / 100;
+    const trailArmPct  = (parseFloat($("#trail-arm-pct")?.value)  || state.config?.trailArmPct  || 15) / 100;
+    const trailLockPct = (parseFloat($("#trail-lock-pct")?.value) || state.config?.trailLockPct || 40) / 100;
+    const stopGraceMs  = (parseFloat($("#stop-grace-sec")?.value) ?? state.config?.stopGraceSec ?? 10) * 1_000;
     for (const t of [...cryptoTrades]) {
       if (t.totalSecs < 45) continue;
       const grace = t.aiMakerFill ? Math.max(stopGraceMs, 20_000) : stopGraceMs;
       if (Date.now() - t.entryTime < grace) continue;
       // Gap-flip trades use a wider 60% base stop — token oscillates before price crosses target.
       const effectiveStop = t.signalAgainstGap ? Math.max(stopLossPct, 0.60) : stopLossPct;
-      if (t.unrealizedPnl <= -t.amount * effectiveStop) { closePosition(t, "STOP LOSS"); refreshBtcCards(); updatePnlStat(); }
+      if (t.unrealizedPnl <= -t.amount * effectiveStop) { closePosition(t, "STOP LOSS"); refreshBtcCards(); updatePnlStat(); continue; }
+      // Trailing stop safety net (same logic as WS handler, covers frozen price streams)
+      if (trailArmPct > 0) {
+        const peakGain = t.peakPrice * t.shares - t.amount;
+        if (peakGain >= t.amount * trailArmPct && t.unrealizedPnl < peakGain * trailLockPct) {
+          closePosition(t, "TRAIL STOP"); refreshBtcCards(); updatePnlStat();
+        }
+      }
     }
     for (const t of cryptoTrades) {
       const cdEl  = $(`#cd-${t.id}`);
