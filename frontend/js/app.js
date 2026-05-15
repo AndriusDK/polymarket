@@ -1058,6 +1058,18 @@ function closePosition(trade, reason) {
   // Post-close direction tracking: keep subscription alive until market resolves
   const msToEnd = new Date(trade.endDate) - Date.now();
   const willShadow = msToEnd > 5_000 && reason !== "RESOLVED";
+
+  trade.exitTime   = Date.now();
+  trade.duration   = trade.exitTime - trade.entryTime;
+  trade.exitPrice  = trade.currentPrice;
+  trade.secsAtClose = Math.max(0, Math.round((new Date(trade.endDate) - Date.now()) / 1000));
+
+  const realized = trade.unrealizedPnl;
+  trade.realizedPnl = realized;  // stored so SELL fill reconciliation can update it
+  state.realizedPnl = (state.realizedPnl || 0) + realized;
+  if (realized > 0) state.wins++; else if (realized < 0) state.losses++;
+  state.tradeHistory.push({ ts: Date.now(), pnl: realized, asset: trade.type, reason });
+
   if (willShadow) {
     state.shadowTrades = state.shadowTrades || [];
     const shadow = {
@@ -1087,17 +1099,6 @@ function closePosition(trade, reason) {
   }
   const stillNeeded = state.trades.some(t => t.tokenId === trade.tokenId) || willShadow;
   if (!stillNeeded) priceStream.unsubscribe(trade.tokenId);
-
-  trade.exitTime   = Date.now();
-  trade.duration   = trade.exitTime - trade.entryTime;
-  trade.exitPrice  = trade.currentPrice;
-  trade.secsAtClose = Math.max(0, Math.round((new Date(trade.endDate) - Date.now()) / 1000));
-
-  const realized = trade.unrealizedPnl;
-  trade.realizedPnl = realized;  // stored so SELL fill reconciliation can update it
-  state.realizedPnl = (state.realizedPnl || 0) + realized;
-  if (realized > 0) state.wins++; else if (realized < 0) state.losses++;
-  state.tradeHistory.push({ ts: Date.now(), pnl: realized, asset: trade.type, reason });
 
   const card = $(`#card-${trade.id}`);
   if (card) {
