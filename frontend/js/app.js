@@ -3024,25 +3024,6 @@ async function pollPendingLimitOrders() {
     for (const [conditionId, pending] of [...state[asset].pendingLimitOrders]) {
       const secsToEnd = Math.round((pending.endDateMs - Date.now()) / 1000);
 
-      // Cancel near resolution: at <60s left a fill creates a position with no time to manage.
-      if (secsToEnd < 60) {
-        cancelTrendSweepOrder(asset, conditionId, `${secsToEnd}s before resolution`);
-        continue;
-      }
-
-      // Cancel if signal flipped: BTC trend reversed, no longer want to be long this direction.
-      // Re-detect from latest BTC macro state (refreshed every cycle).
-      const macro = state.btcMacro;
-      if (macro && (Date.now() - macro.updatedAt) < 180_000) {
-        const macroFlip =
-          (pending.signal === "BUY_UP"   && macro.bearCount >= 4 && macro.momentum <= -20) ||
-          (pending.signal === "BUY_DOWN" && macro.bullCount >= 4 && macro.momentum >=  20);
-        if (macroFlip) {
-          cancelTrendSweepOrder(asset, conditionId, `BTC macro reversed against ${pending.signal}`);
-          continue;
-        }
-      }
-
       // Dry-run orders fill immediately at placement time (see placeTrendSweepBid),
       // so they should never be in pendingLimitOrders. Skip defensively.
       if (pending.dryRun) {
@@ -3050,7 +3031,9 @@ async function pollPendingLimitOrders() {
         continue;
       }
 
-      // Live: poll the order status from CLOB
+      // Always check order status FIRST — an order may have already filled even if we're
+      // about to cancel for time/macro reasons.  Cancelling without checking loses fills.
+      let sizeMatched = 0, orderState = "", status = null;
       try {
         const resp = await fetch("/order_status", {
           method:  "POST",
@@ -3065,11 +3048,14 @@ async function pollPendingLimitOrders() {
             api_passphrase: c.polyPassphrase,
           }),
         });
-        const status = await resp.json();
-        const sizeMatched = parseFloat(status.size_matched ?? status.sizeMatched ?? 0);
-        const orderState  = String(status.status ?? status.state ?? "").toUpperCase();
+        status     = await resp.json();
+        sizeMatched = parseFloat(status.size_matched ?? status.sizeMatched ?? 0);
+        orderState  = String(status.status ?? status.state ?? "").toUpperCase();
+      } catch {
+        // Network blip — still apply time/macro cancels below; skip fill logic
+      }
 
-        if (sizeMatched > 0 || orderState === "MATCHED" || orderState === "FILLED") {
+      if (status && (sizeMatched > 0 || orderState === "MATCHED" || orderState === "FILLED")) {
           console.log(`[AI MAKER fill] full status response:`, JSON.stringify(status, null, 2));
           const filledShares = sizeMatched > 0 ? sizeMatched : pending.shares;
 
@@ -3167,13 +3153,29 @@ async function pollPendingLimitOrders() {
               }
             }, 5_000);
           }
-        } else if (orderState === "CANCELED" || orderState === "CANCELLED" || orderState === "EXPIRED") {
-          state[asset].pendingLimitOrders.delete(conditionId);
-          const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";
-          logEntry("dim", `  ◈ ${pTag} order ${orderState.toLowerCase()} (CLOB-side)`);
+      } else if (orderState === "CANCELED" || orderState === "CANCELLED" || orderState === "EXPIRED") {
+        state[asset].pendingLimitOrders.delete(conditionId);
+        const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";
+        logEntry("dim", `  ◈ ${pTag} order ${orderState.toLowerCase()} (CLOB-side)`);
+      } else {
+        // Order is still live — now apply cancellation policies.
+
+        // Cancel near resolution: at <60s a fill leaves no time to manage the position.
+        if (secsToEnd < 60) {
+          cancelTrendSweepOrder(asset, conditionId, `${secsToEnd}s before resolution`);
+          continue;
         }
-      } catch (err) {
-        // Network blip — try again next poll cycle
+
+        // Cancel if signal flipped: BTC trend reversed, no longer want this direction.
+        const macro = state.btcMacro;
+        if (macro && (Date.now() - macro.updatedAt) < 180_000) {
+          const macroFlip =
+            (pending.signal === "BUY_UP"   && macro.bearCount >= 4 && macro.momentum <= -20) ||
+            (pending.signal === "BUY_DOWN" && macro.bullCount >= 4 && macro.momentum >=  20);
+          if (macroFlip) {
+            cancelTrendSweepOrder(asset, conditionId, `BTC macro reversed against ${pending.signal}`);
+          }
+        }
       }
     }
   }
