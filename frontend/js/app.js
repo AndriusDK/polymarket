@@ -1228,26 +1228,29 @@ function updateResolutionBadge(shadow) {
     finalEl.className = "btc-v";
   }
 
-  // Contextual exit-quality label: three distinct scenarios
+  // Contextual exit-quality label: four distinct scenarios
   const wrapEl   = $(`#res-delta-wrap-${shadow.tradeId}`);
   const deltaEl  = $(`#res-delta-${shadow.tradeId}`);
   const labelEl  = $(`#res-delta-label-${shadow.tradeId}`);
   if (wrapEl && deltaEl && shadow.shares > 0) {
     const delta = (shadow.finalResolutionPrice - shadow.exitPrice) * shadow.shares;
-    if (shadow.isWin) {
-      // WIN — exited before full resolution; delta shows money left on table
+    if (shadow.isWin && shadow.directionCorrect) {
+      // WIN + correct dir: exited early, missed upside
       if (labelEl) labelEl.textContent = "LEFT ON TABLE";
-      deltaEl.textContent = delta > 0.005
-        ? `+$${delta.toFixed(2)}`
-        : `$${Math.abs(delta).toFixed(2)} (full exit)`;
+      deltaEl.textContent = delta > 0.005 ? `+$${delta.toFixed(2)}` : `$0.00`;
       deltaEl.className = delta > 0.05 ? "btc-v amber" : "btc-v dim";
-    } else if (shadow.directionCorrect) {
-      // LOSS + correct direction — stop fired before price recovered; delta is the stop's cost
+    } else if (shadow.isWin && !shadow.directionCorrect) {
+      // WIN + wrong dir: lucky TP exit before market crashed — delta is negative (exit > resolution)
+      if (labelEl) labelEl.textContent = "TP DODGE";
+      deltaEl.textContent = `$${Math.abs(delta).toFixed(2)} saved`;
+      deltaEl.className = "btc-v green";
+    } else if (!shadow.isWin && shadow.directionCorrect) {
+      // LOSS + correct dir: stop fired before price recovered; delta is positive (cost of stop)
       if (labelEl) labelEl.textContent = "STOP COST";
       deltaEl.textContent = `+$${Math.abs(delta).toFixed(2)}`;
       deltaEl.className = delta > 0.05 ? "btc-v red" : "btc-v dim";
     } else {
-      // LOSS + wrong direction — stop avoided further loss; show savings
+      // LOSS + wrong dir: stop correctly limited damage; delta is negative (savings)
       if (labelEl) labelEl.textContent = "STOP SAVED";
       deltaEl.textContent = `$${Math.abs(delta).toFixed(2)} avoided`;
       deltaEl.className = "btc-v green";
