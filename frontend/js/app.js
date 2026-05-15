@@ -938,6 +938,7 @@ function closePosition(trade, reason) {
       maxPriceAfterClose: trade.currentPrice,
       exitPrice:          trade.currentPrice,
       shares:             trade.shares ?? 0,
+      isWin:              realized > 0,
       lastKnownPrice: trade.currentPrice,
       finalResolutionPrice: null,
       resolved: false,
@@ -1015,7 +1016,7 @@ function closePosition(trade, reason) {
           <span class="res-item">MIN AFTER CLOSE: <span id="res-min-${trade.id}" class="btc-v">$${trade.currentPrice.toFixed(3)}</span></span>
           <span class="res-item">MAX AFTER CLOSE: <span id="res-max-${trade.id}" class="btc-v">$${trade.currentPrice.toFixed(3)}</span></span>
           <span class="res-item">RESOLUTION: <span id="res-final-${trade.id}" class="btc-v dim">—</span></span>
-          <span class="res-item" id="res-delta-wrap-${trade.id}" style="display:none">LEFT / SAVED: <span id="res-delta-${trade.id}" class="btc-v dim">—</span></span>
+          <span class="res-item" id="res-delta-wrap-${trade.id}" style="display:none"><span id="res-delta-label-${trade.id}">LEFT / SAVED</span>: <span id="res-delta-${trade.id}" class="btc-v dim">—</span></span>
         </div>
       `;
     } else {
@@ -1097,17 +1098,27 @@ function updateResolutionBadge(shadow) {
     finalEl.className = "btc-v";
   }
 
-  // LEFT ON TABLE (wins exited early) or SAVED BY STOP (losses)
-  const wrapEl = $(`#res-delta-wrap-${shadow.tradeId}`);
-  const deltaEl = $(`#res-delta-${shadow.tradeId}`);
+  // Contextual exit-quality label: three distinct scenarios
+  const wrapEl   = $(`#res-delta-wrap-${shadow.tradeId}`);
+  const deltaEl  = $(`#res-delta-${shadow.tradeId}`);
+  const labelEl  = $(`#res-delta-label-${shadow.tradeId}`);
   if (wrapEl && deltaEl && shadow.shares > 0) {
     const delta = (shadow.finalResolutionPrice - shadow.exitPrice) * shadow.shares;
-    if (delta >= 0) {
-      // Positive: holding longer would have earned more (or stop was premature on a loss)
-      deltaEl.textContent = `+$${delta.toFixed(2)}`;
+    if (shadow.isWin) {
+      // WIN — exited before full resolution; delta shows money left on table
+      if (labelEl) labelEl.textContent = "LEFT ON TABLE";
+      deltaEl.textContent = delta > 0.005
+        ? `+$${delta.toFixed(2)}`
+        : `$${Math.abs(delta).toFixed(2)} (full exit)`;
       deltaEl.className = delta > 0.05 ? "btc-v amber" : "btc-v dim";
+    } else if (shadow.directionCorrect) {
+      // LOSS + correct direction — stop fired before price recovered; delta is the stop's cost
+      if (labelEl) labelEl.textContent = "STOP COST";
+      deltaEl.textContent = `+$${Math.abs(delta).toFixed(2)}`;
+      deltaEl.className = delta > 0.05 ? "btc-v red" : "btc-v dim";
     } else {
-      // Negative: stop correctly avoided further loss
+      // LOSS + wrong direction — stop avoided further loss; show savings
+      if (labelEl) labelEl.textContent = "STOP SAVED";
       deltaEl.textContent = `$${Math.abs(delta).toFixed(2)} avoided`;
       deltaEl.className = "btc-v green";
     }
