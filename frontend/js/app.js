@@ -806,7 +806,10 @@ const priceStream = (() => {
             const effectiveTp = (t.aiMakerFill && t.entryPrice < 0.40) ? 0.03 : takeProfitPct;
             return t.unrealizedPnl >= t.amount * effectiveTp;
           });
-          for (const t of toTakeProfit) closePosition(t, "TAKE PROFIT");
+          for (const t of toTakeProfit) {
+            const reason = (t.aiMakerFill && t.entryPrice < 0.40) ? "SCALP EXIT" : "TAKE PROFIT";
+            closePosition(t, reason);
+          }
           const toTrailStop = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             if (!trailArmPct) return false;
