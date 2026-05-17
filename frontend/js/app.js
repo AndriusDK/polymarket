@@ -327,6 +327,7 @@ async function syncExistingPositions() {
       shares:        size,
       currentPrice:  avgPrice,
       peakPrice:     avgPrice,
+      troughPrice:   avgPrice,
       confidence:    "LIVE",
       unrealizedPnl: 0,
       mode:          "LIVE",
@@ -586,6 +587,10 @@ function addCryptoCard(trade) {
           <span class="btc-v dim" id="peak-${trade.id}">${(trade.peakPrice * 100).toFixed(1)}%</span>
         </div>
         <div class="btc-kv">
+          <span class="btc-k">LOW</span>
+          <span class="btc-v dim" id="trough-${trade.id}">${(trade.troughPrice * 100).toFixed(1)}%</span>
+        </div>
+        <div class="btc-kv">
           <span class="btc-k">UNREAL. PnL</span>
           <span class="btc-v dim" id="pnl-${trade.id}">+$0.00</span>
         </div>
@@ -718,8 +723,12 @@ function refreshBtcCards() {
     if (tpEl)   tpEl.textContent = (t.currentPrice * 100).toFixed(1) + "%";
     if (peakEl) {
       peakEl.textContent = (t.peakPrice * 100).toFixed(1) + "%";
-      // Color peak green if it meaningfully exceeded entry, dim if flat
       peakEl.className = t.peakPrice > t.entryPrice + 0.005 ? "btc-v green" : "btc-v dim";
+    }
+    const troughEl = $(`#trough-${t.id}`);
+    if (troughEl) {
+      troughEl.textContent = (t.troughPrice * 100).toFixed(1) + "%";
+      troughEl.className = t.troughPrice < t.entryPrice - 0.005 ? "btc-v red" : "btc-v dim";
     }
     if (pnlEl) {
       const isPos = t.unrealizedPnl >= 0;
@@ -761,6 +770,7 @@ const priceStream = (() => {
           t.currentPrice  = bid;
           t.unrealizedPnl = t.shares * bid - t.amount;
           if (bid > t.peakPrice) t.peakPrice = bid;
+          if (bid < t.troughPrice) t.troughPrice = bid;
           t.priceHistory.push(bid);
           if (t.priceHistory.length > 120) t.priceHistory.shift();
           changed = true;
@@ -2490,6 +2500,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     shares:        amount / entryPrice,
     currentPrice:  entryPrice,
     peakPrice:     entryPrice,
+    troughPrice:   entryPrice,
     confidence:    analysis.confidence,
     unrealizedPnl: 0,
     mode:          c.dryRun ? "SIM" : "LIVE",
@@ -3038,6 +3049,7 @@ function convertFilledSweepToTrade(asset, pending, fillPrice) {
     shares:        pending.shares,
     currentPrice:  fillPrice,
     peakPrice:     fillPrice,
+    troughPrice:   fillPrice,
     confidence:    pending.aiMaker ? (pending.analysis?.confidence ?? "MEDIUM") : "SWEEP",
     unrealizedPnl: 0,
     mode:          c.dryRun ? (pending.aiMaker ? "SIM-MKR" : "SIM-SWP") : (pending.aiMaker ? "LIVE-MKR" : "LIVE-SWP"),
