@@ -2197,6 +2197,7 @@ async function _runCryptoCycleInner(asset) {
       ? (
           analysis.signal !== "SKIP" &&
           !assetPositionOpen &&
+          !nearResGapFlipLowOdds &&
           state.stats.spent < c.maxDaily
         )
       : (
@@ -2245,7 +2246,8 @@ async function _runCryptoCycleInner(asset) {
       // Re-examined market whose gap grew but was blocked by a different filter — clean up watch.
       if (isGapWatched && !nearResSmallGap) state[asset].gapWatch.delete(market.conditionId);
       if (c.aiMaker) {
-        // GTC maker: only position limit and budget block trades — all market-order filters are irrelevant.
+        // GTC maker: only physical-impossibility filters + position limit + budget apply.
+        if (nearResGapFlipLowOdds) reasons.push(`near-res gap-flip low-odds — ${(entryOdds * 100).toFixed(1)}% with ${timeRemaining}s left, gap $${Math.abs(analysis.gap ?? 0).toFixed(0)} unlikely to close in time`);
         if (assetPositionOpen) reasons.push(`${asset.toUpperCase()} position already open — max 1 per asset (correlated stop risk)`);
         if (state.stats.spent >= c.maxDaily) reasons.push("daily budget exhausted");
         if (reasons.length === 0)
