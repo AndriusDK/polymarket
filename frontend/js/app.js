@@ -583,12 +583,20 @@ function addCryptoCard(trade) {
           <span class="btc-v" id="tp-${trade.id}">${(trade.currentPrice * 100).toFixed(1)}%</span>
         </div>
         <div class="btc-kv">
+          <span class="btc-k">CROWD MOVE</span>
+          <span class="btc-v dim" id="crowd-${trade.id}">+0.0pp</span>
+        </div>
+        <div class="btc-kv">
           <span class="btc-k">PEAK</span>
           <span class="btc-v dim" id="peak-${trade.id}">${(trade.peakPrice * 100).toFixed(1)}%</span>
         </div>
         <div class="btc-kv">
           <span class="btc-k">LOW</span>
           <span class="btc-v dim" id="trough-${trade.id}">${(trade.troughPrice * 100).toFixed(1)}%</span>
+        </div>
+        <div class="btc-kv">
+          <span class="btc-k">STOP DEPTH</span>
+          <span class="btc-v dim" id="stopdepth-${trade.id}">—</span>
         </div>
         <div class="btc-kv">
           <span class="btc-k">UNREAL. PnL</span>
@@ -729,6 +737,22 @@ function refreshBtcCards() {
     if (troughEl) {
       troughEl.textContent = (t.troughPrice * 100).toFixed(1) + "%";
       troughEl.className = t.troughPrice < t.entryPrice - 0.005 ? "btc-v red" : "btc-v dim";
+    }
+    const crowdEl = $(`#crowd-${t.id}`);
+    if (crowdEl) {
+      const crowdMove = (t.currentPrice - t.entryPrice) * 100;
+      const sign = crowdMove >= 0 ? "+" : "";
+      crowdEl.textContent = `${sign}${crowdMove.toFixed(1)}pp`;
+      crowdEl.className = crowdMove > 1 ? "btc-v green" : crowdMove < -1 ? "btc-v red" : "btc-v dim";
+    }
+    const stopDepthEl = $(`#stopdepth-${t.id}`);
+    if (stopDepthEl && t.entryPrice > 0) {
+      const slPct = (parseFloat($("#stop-loss-pct")?.value) || state.config?.stopLossPct || 25) / 100;
+      const stopPrice = t.entryPrice * (1 - slPct);
+      const depthPp = (t.troughPrice - stopPrice) * 100;
+      const sign = depthPp >= 0 ? "+" : "";
+      stopDepthEl.textContent = `${sign}${depthPp.toFixed(1)}pp from stop`;
+      stopDepthEl.className = depthPp < 5 ? "btc-v red" : depthPp < 15 ? "btc-v amber" : "btc-v dim";
     }
     if (pnlEl) {
       const isPos = t.unrealizedPnl >= 0;
