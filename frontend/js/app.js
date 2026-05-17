@@ -1857,6 +1857,13 @@ async function _runCryptoCycleInner(asset) {
       if (isGapPending) logEntry("dim", `  → gap confirmed ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} — running analysis`);
     }
 
+    // Configurable max entry window: user can restrict entries to the final X seconds only.
+    const maxEntrySecs = parseFloat($("#max-entry-secs")?.value) || 0;
+    if (maxEntrySecs > 0 && timeRemaining > maxEntrySecs) {
+      logEntry("dim", `  → ${timeRemaining}s left > max entry window ${maxEntrySecs}s — waiting`);
+      continue;
+    }
+
     // Hard block: < 90s remaining — book is empty, FOK always fails, stop-loss can't
     // protect.  At 60–90s the DOWN/UP token with losing probability has essentially no
     // liquidity so a market BUY fills at catastrophically low prices (e.g. 72.5% → 7.9%).
