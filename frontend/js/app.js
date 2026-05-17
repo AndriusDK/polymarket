@@ -2237,6 +2237,13 @@ async function _runCryptoCycleInner(asset) {
       try {
       // Re-examined market whose gap grew but was blocked by a different filter — clean up watch.
       if (isGapWatched && !nearResSmallGap) state[asset].gapWatch.delete(market.conditionId);
+      if (c.aiMaker) {
+        // GTC maker: only position limit and budget block trades — all market-order filters are irrelevant.
+        if (assetPositionOpen) reasons.push(`${asset.toUpperCase()} position already open — max 1 per asset (correlated stop risk)`);
+        if (state.stats.spent >= c.maxDaily) reasons.push("daily budget exhausted");
+        if (reasons.length === 0)
+          reasons.push(`qualifies=false [assetPositionOpen=${assetPositionOpen} spent=${state.stats.spent} maxDaily=${c.maxDaily}]`);
+      } else {
       if (!oddsOk) {
         if (entryOdds > maxOdds)
           reasons.push(`entry odds ${(entryOdds * 100).toFixed(1)}% > max ${(maxOdds * 100).toFixed(0)}% (bad risk/reward)`);
@@ -2300,6 +2307,7 @@ async function _runCryptoCycleInner(asset) {
         reasons.push("daily budget exhausted");
       if (reasons.length === 0)
         reasons.push(`all filters ok but qualifies=false [oddsOk=${oddsOk} nearResSmallGap=${nearResSmallGap} midWindowSmallGap=${midWindowSmallGap} momentumBypass=${momentumTradeBypass} absEdge=${(analysis.absEdge??'?')} minEdge=${minEdge}]`);
+      }
       logEntry("info", `  ↳ <span class="amber">no trade</span> — ${reasons.join(", ")}`);
       } catch (err) {
         logEntry("dim", `  ↳ <span class="amber">no trade</span> — [reason build error: ${err.message}]`);
