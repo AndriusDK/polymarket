@@ -1884,7 +1884,7 @@ async function _runCryptoCycleInner(asset) {
     let analysis;
     try {
       analysis = await analyzeCryptoMarket(
-        market, { spot, candles, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds }, c.anthropicKey, { model: c.model }, asset
+        market, { spot, candles, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds, momentumFilterThreshold: c.momentumFilterThreshold ?? 7 }, c.anthropicKey, { model: c.model }, asset
       );
     } catch (err) {
       logEntry("error", `  ${cfg.ticker} analysis failed: ${err.message}`);

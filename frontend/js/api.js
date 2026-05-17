@@ -472,6 +472,10 @@ const CRYPTO_PROMPT = [
   "10. FUNDING RATE: Rate > +0.05%/8h = overcrowded longs → bearish pressure on price (supports DOWN). Rate < -0.02%/8h = overcrowded shorts → bullish squeeze pressure (supports UP). Near zero = neutral.",
   "11. GAP TREND: If gap at candle close is narrowing toward zero across candles, the leader is losing ground and a flip becomes more likely. If gap is widening or stable, the current leader is in control.",
   "12. UP TOKEN TREND: If the UP token price is falling across cycles, market participants are selling UP (bearish signal). If rising, they are buying UP (bullish). Token trend confirms or contradicts the price gap.",
+  "    ⚠ HARD DUMP / ⚡ HARD PUMP alerts: when present, the crowd is moving aggressively and this overrides weak gap signals.",
+  "    Hard dump (UP fell sharply): strong contra-signal for BUY_UP — if candles/momentum are ambiguous or also bearish, prefer BUY_DOWN over SKIP.",
+  "    Hard pump (UP rose sharply): strong contra-signal for BUY_DOWN — if ambiguous, prefer BUY_UP.",
+  "    Do NOT blindly follow gap direction when the token is moving violently against it — the crowd is seeing something the spot gap hasn't priced yet.",
   "13. MOMENTUM TRADE (zero/tiny gap): When |gap| < 0.05% of price BUT |expectedDrift| > 0.15% of price AND 4+ of the last 5 candles align with the momentum direction, this is a valid MOMENTUM TRADE.",
   "    The Polymarket token price tracks the underlying asset live — even before resolution, if {ticker} moves strongly in one direction, that token will rise 20-30%, hitting take-profit before the market closes.",
   "    You are NOT predicting the final resolution. You are predicting that the TOKEN PRICE will swing enough to take profit.",
@@ -494,7 +498,7 @@ const CRYPTO_PROMPT = [
 
 async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "claude-haiku-4-5-20251001", signal } = {}, asset = "btc") {
   const cfg = CRYPTO_CONFIG[asset];
-  const { candles, spot, priceToBeat, oddsHistory } = cryptoData;
+  const { candles, spot, priceToBeat, oddsHistory, momentumFilterThreshold = 7 } = cryptoData;
   const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
   const gap       = spot - priceToBeat;
   const gapPct    = ((gap / priceToBeat) * 100);
@@ -557,10 +561,18 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
   if (oddsHistory && oddsHistory.length >= 2) {
     const trendPcts = oddsHistory.map(o => (o.up * 100).toFixed(1) + "%");
     const delta = oddsHistory[0].up - oddsHistory[oddsHistory.length - 1].up;
+    const elapsedSecs = Math.max((oddsHistory[0].ts - oddsHistory[oddsHistory.length - 1].ts) / 1000, 1);
     const trendDir = Math.abs(delta) < 0.01 ? "stable"
                    : delta > 0 ? `rising +${(delta * 100).toFixed(1)}% (market buying UP)`
                    : `falling ${(delta * 100).toFixed(1)}% (market selling UP)`;
     oddsTrendBlock = `${trendPcts.join(" → ")}  (${trendDir})`;
+    // Hard dump/pump alert: append when the move exceeds the configured threshold
+    const dumpThreshold = momentumFilterThreshold / 100;
+    if (delta <= -dumpThreshold) {
+      oddsTrendBlock += `\n⚠ HARD DUMP: UP token fell ${(delta * 100).toFixed(1)}pp in ${elapsedSecs.toFixed(0)}s — crowd aggressively pricing DOWN`;
+    } else if (delta >= dumpThreshold) {
+      oddsTrendBlock += `\n⚡ HARD PUMP: UP token rose +${(delta * 100).toFixed(1)}pp in ${elapsedSecs.toFixed(0)}s — crowd aggressively pricing UP`;
+    }
   }
 
   // Order book block
