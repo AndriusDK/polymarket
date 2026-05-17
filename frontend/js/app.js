@@ -800,7 +800,11 @@ const priceStream = (() => {
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
           const toTakeProfit = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
-            return t.unrealizedPnl >= t.amount * takeProfitPct;
+            // Low-fill trades (GTC maker filled below 40¢ via price improvement) got in cheap
+            // precisely because the crowd disagrees — take a quick 3% gain and exit rather than
+            // waiting for the normal 50% TP that may never arrive.
+            const effectiveTp = (t.aiMakerFill && t.entryPrice < 0.40) ? 0.03 : takeProfitPct;
+            return t.unrealizedPnl >= t.amount * effectiveTp;
           });
           for (const t of toTakeProfit) closePosition(t, "TAKE PROFIT");
           const toTrailStop = state.trades.filter(t => {
