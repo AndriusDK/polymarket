@@ -99,6 +99,7 @@ const PERSIST_FIELDS = [
   ["eth-maker-price",     "value"],
   ["sol-maker-price",     "value"],
   ["xrp-maker-price",     "value"],
+  ["momentum-filter-toggle", "checked"],
 ];
 
 function saveSettings() {
@@ -127,6 +128,7 @@ function loadSettings() {
   syncToggleLabel("ai-maker-toggle",    "ai-maker-label",     ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("emergency-fill-exit-toggle", "emergency-fill-exit-label", ["ON","amber"], ["OFF","dim"]);
   syncToggleLabel("selective-mode-toggle", "selective-mode-label", ["ON","green"], ["OFF","dim"]);
+  syncToggleLabel("momentum-filter-toggle", "momentum-filter-label", ["ON","green"], ["OFF","dim"]);
 }
 
 function syncToggleLabel(toggleId, labelId, onState, offState) {
@@ -159,6 +161,8 @@ function initSetup() {
     syncToggleLabel("emergency-fill-exit-toggle", "emergency-fill-exit-label", ["ON","amber"], ["OFF","dim"]));
   $("#selective-mode-toggle")?.addEventListener("change", () =>
     syncToggleLabel("selective-mode-toggle", "selective-mode-label", ["ON","green"], ["OFF","dim"]));
+  $("#momentum-filter-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("momentum-filter-toggle", "momentum-filter-label", ["ON","green"], ["OFF","dim"]));
 
   $("#btn-launch").addEventListener("click", () => {
     $("#setup-error").textContent = "";
@@ -203,6 +207,7 @@ function initSetup() {
       aiMaker:       $("#ai-maker-toggle")?.checked ?? false,
       emergencyFillExit: $("#emergency-fill-exit-toggle")?.checked ?? false,
       selectiveMode:     $("#selective-mode-toggle")?.checked ?? false,
+      momentumFilter:    $("#momentum-filter-toggle")?.checked ?? false,
       btcMakerPrice: parseFloat($("#btc-maker-price")?.value) || 50,
       ethMakerPrice: parseFloat($("#eth-maker-price")?.value) || 50,
       solMakerPrice: parseFloat($("#sol-maker-price")?.value) || 50,
@@ -212,6 +217,26 @@ function initSetup() {
     initDashboard();
     showScreen("dashboard-screen");
   });
+}
+
+// ── Momentum filter ──────────────────────────────────────────────
+// Returns { ok: false, delta, elapsedSecs } when the token we're about to buy
+// has dropped more than 7pp in the last oddsHistory window — indicating the
+// market is actively pricing the outcome down. ok: true means clear to enter.
+function checkEntryMomentum(asset, conditionId, signal) {
+  const history = state[asset].oddsHistory.get(conditionId) || [];
+  if (history.length < 2) return { ok: true };
+  const newest = history[0];
+  const oldest = history[history.length - 1];
+  const elapsedSecs = Math.max((newest.ts - oldest.ts) / 1000, 1);
+  // upDelta > 0 = UP token rising; < 0 = UP token falling
+  const upDelta = newest.up - oldest.up;
+  // entryTokenDelta: the direction we'd be buying — positive is good, negative is a dump
+  const entryTokenDelta = signal === "BUY_UP" ? upDelta : -upDelta;
+  if (entryTokenDelta < -0.07) {
+    return { ok: false, delta: entryTokenDelta, elapsedSecs };
+  }
+  return { ok: true, delta: entryTokenDelta };
 }
 
 // ── Dashboard ────────────────────────────────────────────────────
@@ -1911,6 +1936,21 @@ async function _runCryptoCycleInner(asset) {
       const secsLeft = Math.ceil((state.stressHoldUntil - Date.now()) / 1000);
       logEntry("info", `  ↳ <span class="amber">no trade</span> — market-stress hold ${secsLeft}s remaining`);
       continue;
+    }
+
+    // Momentum filter (A/B toggle): skip entry when the token we'd buy dropped >7pp since
+    // the previous analysis cycle — the market is actively pricing the outcome away from us.
+    // Uses oddsHistory which is updated each cycle (~30s apart), so the window is ~30-60s.
+    if (c.momentumFilter && analysis.signal !== "SKIP") {
+      const mCheck = checkEntryMomentum(asset, market.conditionId, analysis.signal);
+      if (!mCheck.ok) {
+        logEntry("info",
+          `  ↳ <span class="amber">no trade</span> — momentum filter: token dumped ` +
+          `${(mCheck.delta * 100).toFixed(1)}pp in ${mCheck.elapsedSecs.toFixed(0)}s — ` +
+          `waiting for stabilization [A/B]`
+        );
+        continue;
+      }
     }
 
     // Long-window low-conviction guard: near-50% odds with lots of time remaining means
