@@ -3244,12 +3244,12 @@ async function pollPendingLimitOrders() {
       } else {
         // Order is still live — now apply cancellation policies.
 
-        // Cancel near resolution: at <60s a fill leaves no time to manage the position.
+        // Cancel near resolution: at <90s a fill leaves little time to manage the position.
         // IMPORTANT: the CLOB order-status API can lag 30-50s after an actual fill, so
         // we cannot trust "not filled" from the status poll alone.  After sending the
-        // cancel we wait 6s and cross-check the wallet positions API, which reflects
+        // cancel we wait 12s and cross-check the wallet positions API, which reflects
         // on-chain state faster than the CLOB order-book API.
-        if (secsToEnd < 60) {
+        if (secsToEnd < 90) {
           state[asset].pendingLimitOrders.delete(conditionId);
           const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";
 
@@ -3270,7 +3270,7 @@ async function pollPendingLimitOrders() {
 
             // Wait for on-chain state to settle, then verify via wallet positions —
             // more reliable than CLOB order-status which can lag 30-50s on fast fills.
-            await new Promise(r => setTimeout(r, 6_000));
+            await new Promise(r => setTimeout(r, 12_000));
             try {
               const wallet   = new ethers.Wallet(c.polyPrivateKey);
               const posResp  = await fetch(`/positions?address=${encodeURIComponent(wallet.address)}`);
@@ -3296,6 +3296,8 @@ async function pollPendingLimitOrders() {
                 continue;
               }
             } catch {}
+            // Positions check came up empty — warn so the user can manually verify on Polymarket.
+            logEntry("warn", `  ◈ ${pTag} cancel-race: no fill detected — check Polymarket manually, may need redeem_all.py`);
           }
 
           logEntry("dim", `  ◈ ${pTag} cancelled — ${secsToEnd}s before resolution`);
