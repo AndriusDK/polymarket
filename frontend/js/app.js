@@ -1279,7 +1279,6 @@ function _handleNewMarketEvent(msg) {
   for (const [asset, kws] of Object.entries(WS_KEYWORDS)) {
     if (!state[asset].timer) continue;
     if (!kws.some(kw => kw.test(question))) continue;
-    logEntry("cyan", `⚡ WS new_market → <span class="amber">${question.slice(0, 60)}</span> — running ${asset.toUpperCase()} cycle`);
     // Small delay so Gamma API has time to index the new market
     setTimeout(() => runCryptoCycle(asset), 800);
   }
@@ -1556,7 +1555,7 @@ async function _runCryptoCycleInner(asset) {
         } else {
           pendSnap.checkCount = (pendSnap.checkCount ?? 0) + 1;
           const elapsed = Math.round((Date.now() - (pendSnap.firstSeenAt ?? Date.now())) / 1000);
-          logEntry("dim", `  → gap ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} < ±$${minGap.toFixed(pd)} (re-check #${pendSnap.checkCount} at ${elapsed}s) — still watching, next check ~30s`);
+          // re-check gap-too-small — no log (too noisy)
         }
       }
       continue;
