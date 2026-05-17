@@ -125,12 +125,14 @@
         <span id="selective-mode-label" class="toggle-status dim">OFF</span>
       </div>
       <div class="switch-row">
-        <span class="field-label">Momentum Filter — A/B (block entries when token dumped &gt;7pp in last cycle)</span>
+        <span class="field-label">Momentum Filter — A/B (block entries when token dumped in last cycle)</span>
         <label class="toggle-switch">
           <input type="checkbox" id="momentum-filter-toggle" />
           <span class="toggle-slider"></span>
         </label>
         <span id="momentum-filter-label" class="toggle-status dim">OFF</span>
+        <input type="number" id="momentum-filter-threshold" class="neon-input" value="7" min="1" max="30" step="1" style="width:60px;margin-left:10px;" title="Dump threshold in percentage points. Entry is blocked if the token dropped more than this in the last ~30-60s cycle." />
+        <span class="field-label" style="margin-left:4px;">pp</span>
       </div>
       <div class="row-2">
         <div>

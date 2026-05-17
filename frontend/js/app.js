@@ -99,7 +99,8 @@ const PERSIST_FIELDS = [
   ["eth-maker-price",     "value"],
   ["sol-maker-price",     "value"],
   ["xrp-maker-price",     "value"],
-  ["momentum-filter-toggle", "checked"],
+  ["momentum-filter-toggle",     "checked"],
+  ["momentum-filter-threshold",  "value"],
 ];
 
 function saveSettings() {
@@ -207,7 +208,8 @@ function initSetup() {
       aiMaker:       $("#ai-maker-toggle")?.checked ?? false,
       emergencyFillExit: $("#emergency-fill-exit-toggle")?.checked ?? false,
       selectiveMode:     $("#selective-mode-toggle")?.checked ?? false,
-      momentumFilter:    $("#momentum-filter-toggle")?.checked ?? false,
+      momentumFilter:          $("#momentum-filter-toggle")?.checked ?? false,
+      momentumFilterThreshold: parseFloat($("#momentum-filter-threshold")?.value) || 7,
       btcMakerPrice: parseFloat($("#btc-maker-price")?.value) || 50,
       ethMakerPrice: parseFloat($("#eth-maker-price")?.value) || 50,
       solMakerPrice: parseFloat($("#sol-maker-price")?.value) || 50,
@@ -233,7 +235,8 @@ function checkEntryMomentum(asset, conditionId, signal) {
   const upDelta = newest.up - oldest.up;
   // entryTokenDelta: the direction we'd be buying — positive is good, negative is a dump
   const entryTokenDelta = signal === "BUY_UP" ? upDelta : -upDelta;
-  if (entryTokenDelta < -0.07) {
+  const threshold = -((state.config?.momentumFilterThreshold ?? 7) / 100);
+  if (entryTokenDelta < threshold) {
     return { ok: false, delta: entryTokenDelta, elapsedSecs };
   }
   return { ok: true, delta: entryTokenDelta };
