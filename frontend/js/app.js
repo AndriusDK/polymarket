@@ -820,6 +820,19 @@ const priceStream = (() => {
           const trailArmPct   = (parseFloat($("#trail-arm-pct")?.value)   || state.config?.trailArmPct   || 15) / 100;
           const trailLockPct  = (parseFloat($("#trail-lock-pct")?.value)  || state.config?.trailLockPct  || 40) / 100;
           const stopGraceMs = (parseFloat($("#stop-grace-sec")?.value) ?? state.config?.stopGraceSec ?? 10) * 1_000;
+          // Conviction exit runs FIRST — catches straight-down losses before the full stop fires.
+          if (state.config?.convictionExit) {
+            const threshold = (state.config?.convictionExitThreshold ?? 20) / 100;
+            const toConvictionExit = state.trades.filter(t => {
+              if (t.tokenId !== tokenId) return false;
+              if (Date.now() - t.entryTime < 10_000) return false;
+              const crowdMove = t.currentPrice - t.entryPrice;
+              const peakMoved = t.peakPrice > t.entryPrice + 0.02;
+              return crowdMove <= -threshold && !peakMoved;
+            });
+            for (const t of toConvictionExit) closePosition(t, "CONVICTION EXIT");
+          }
+
           const toStopLoss = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             if (t.totalSecs < 45) return false;
@@ -846,21 +859,6 @@ const priceStream = (() => {
             return t.unrealizedPnl <= -t.amount * effectiveStop;
           });
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
-
-          // Conviction exit: crowd moved hard against us and price never went in our favour —
-          // exit early rather than waiting for the full stop loss to fire.
-          if (state.config?.convictionExit) {
-            const threshold = (state.config?.convictionExitThreshold ?? 20) / 100;
-            const toConvictionExit = state.trades.filter(t => {
-              if (t.tokenId !== tokenId) return false;
-              if (Date.now() - t.entryTime < 20_000) return false;
-              const crowdMove = t.currentPrice - t.entryPrice;
-              const peakMoved = t.peakPrice > t.entryPrice + 0.02;
-              return crowdMove <= -threshold && !peakMoved;
-            });
-            for (const t of toConvictionExit) closePosition(t, "CONVICTION EXIT");
-          }
-
           const toTakeProfit = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             // Low-fill trades (GTC maker filled below 40¢ via price improvement) got in cheap
