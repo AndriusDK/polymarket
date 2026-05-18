@@ -134,6 +134,24 @@
         <input type="number" id="momentum-filter-threshold" class="neon-input" value="7" min="1" max="30" step="1" style="width:60px;margin-left:10px;" title="Dump threshold in percentage points. Entry is blocked if the token dropped more than this in the last ~30-60s cycle." />
         <span class="field-label" style="margin-left:4px;">pp</span>
       </div>
+      <div class="switch-row">
+        <span class="field-label">Conviction Exit — A/B (exit early if crowd moves ≥20pp against entry and price never went in our favour)</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="conviction-exit-toggle" />
+          <span class="toggle-slider"></span>
+        </label>
+        <span id="conviction-exit-label" class="toggle-status dim">OFF</span>
+        <input type="number" id="conviction-exit-threshold" class="neon-input" value="20" min="5" max="50" step="5" style="width:60px;margin-left:10px;" title="Exit if CROWD MOVE drops below this many pp and peak never exceeded entry. Lower = more aggressive exit." />
+        <span class="field-label" style="margin-left:4px;">pp</span>
+      </div>
+      <div class="switch-row">
+        <span class="field-label">Stop Cooldown — A/B (skip next window after 2 consecutive stop losses)</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="stop-cooldown-toggle" />
+          <span class="toggle-slider"></span>
+        </label>
+        <span id="stop-cooldown-label" class="toggle-status dim">OFF</span>
+      </div>
       <div class="row-2">
         <div>
           <label class="field-label">Min Gap % (0 = off)</label>

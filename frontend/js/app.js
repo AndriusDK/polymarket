@@ -23,6 +23,8 @@ const state = {
   tradeHistory: [],    // { ts, pnl, asset, reason } — every closed position, used by profit chart
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
+  consecutiveStops: 0, // count of consecutive stop losses — resets on any non-stop close
+  stopCooldownActive: false, // true = skip next 1 trade window (crash phase circuit breaker)
   chainlinkPrices:   { btc: null, eth: null, sol: null, xrp: null }, // live Chainlink prices from RTDS
   chainlinkPricesAt: { btc: 0,    eth: 0,    sol: 0,    xrp: 0    }, // epoch ms of last update per asset
 };
@@ -99,8 +101,11 @@ const PERSIST_FIELDS = [
   ["eth-maker-price",     "value"],
   ["sol-maker-price",     "value"],
   ["xrp-maker-price",     "value"],
-  ["momentum-filter-toggle",     "checked"],
-  ["momentum-filter-threshold",  "value"],
+  ["momentum-filter-toggle",      "checked"],
+  ["momentum-filter-threshold",   "value"],
+  ["conviction-exit-toggle",      "checked"],
+  ["conviction-exit-threshold",   "value"],
+  ["stop-cooldown-toggle",        "checked"],
 ];
 
 function saveSettings() {
@@ -129,7 +134,9 @@ function loadSettings() {
   syncToggleLabel("ai-maker-toggle",    "ai-maker-label",     ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("emergency-fill-exit-toggle", "emergency-fill-exit-label", ["ON","amber"], ["OFF","dim"]);
   syncToggleLabel("selective-mode-toggle", "selective-mode-label", ["ON","green"], ["OFF","dim"]);
-  syncToggleLabel("momentum-filter-toggle", "momentum-filter-label", ["ON","green"], ["OFF","dim"]);
+  syncToggleLabel("momentum-filter-toggle",  "momentum-filter-label",  ["ON","green"], ["OFF","dim"]);
+  syncToggleLabel("conviction-exit-toggle",  "conviction-exit-label",  ["ON","amber"], ["OFF","dim"]);
+  syncToggleLabel("stop-cooldown-toggle",    "stop-cooldown-label",    ["ON","amber"], ["OFF","dim"]);
 }
 
 function syncToggleLabel(toggleId, labelId, onState, offState) {
@@ -164,6 +171,10 @@ function initSetup() {
     syncToggleLabel("selective-mode-toggle", "selective-mode-label", ["ON","green"], ["OFF","dim"]));
   $("#momentum-filter-toggle")?.addEventListener("change", () =>
     syncToggleLabel("momentum-filter-toggle", "momentum-filter-label", ["ON","green"], ["OFF","dim"]));
+  $("#conviction-exit-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("conviction-exit-toggle", "conviction-exit-label", ["ON","amber"], ["OFF","dim"]));
+  $("#stop-cooldown-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("stop-cooldown-toggle", "stop-cooldown-label", ["ON","amber"], ["OFF","dim"]));
 
   $("#btn-launch").addEventListener("click", () => {
     $("#setup-error").textContent = "";
@@ -202,6 +213,9 @@ function initSetup() {
       xrpMaxBet:     parseFloat($("#xrp-max-bet")?.value) || 5,
       xrpMinEdge:    parseFloat($("#xrp-min-edge")?.value) || 0.04,
       startupCooldown: parseInt($("#startup-cooldown")?.value) || 90,
+      convictionExit:  $("#conviction-exit-toggle")?.checked ?? false,
+      convictionExitThreshold: parseFloat($("#conviction-exit-threshold")?.value) || 20,
+      stopCooldown:    $("#stop-cooldown-toggle")?.checked ?? false,
       trendSweep:      $("#trend-sweep-toggle")?.checked ?? false,
       trendSweepPrice: parseFloat($("#trend-sweep-price")?.value) || 50,  // cents
       trendSweepSize:  parseFloat($("#trend-sweep-size")?.value)  || 2,   // USDC
@@ -832,6 +846,21 @@ const priceStream = (() => {
             return t.unrealizedPnl <= -t.amount * effectiveStop;
           });
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
+
+          // Conviction exit: crowd moved hard against us and price never went in our favour —
+          // exit early rather than waiting for the full stop loss to fire.
+          if (state.config?.convictionExit) {
+            const threshold = (state.config?.convictionExitThreshold ?? 20) / 100;
+            const toConvictionExit = state.trades.filter(t => {
+              if (t.tokenId !== tokenId) return false;
+              if (Date.now() - t.entryTime < 20_000) return false;
+              const crowdMove = t.currentPrice - t.entryPrice;
+              const peakMoved = t.peakPrice > t.entryPrice + 0.02;
+              return crowdMove <= -threshold && !peakMoved;
+            });
+            for (const t of toConvictionExit) closePosition(t, "CONVICTION EXIT");
+          }
+
           const toTakeProfit = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             // Low-fill trades (GTC maker filled below 40¢ via price improvement) got in cheap
@@ -1017,6 +1046,17 @@ function closePosition(trade, reason) {
   const idx = state.trades.indexOf(trade);
   if (idx === -1) return;
   state.trades.splice(idx, 1);
+
+  // Consecutive stop tracking for crash-phase cooldown
+  if (reason === "STOP LOSS") {
+    state.consecutiveStops = (state.consecutiveStops ?? 0) + 1;
+    if ((state.config?.stopCooldown) && state.consecutiveStops >= 2) {
+      state.stopCooldownActive = true;
+      logEntry("warn", `  ⚠ Stop cooldown armed — ${state.consecutiveStops} consecutive stops, skipping next window`);
+    }
+  } else {
+    state.consecutiveStops = 0;
+  }
 
   // Freeze the PEAK DOM element to the true final peak — refreshBtcCards won't touch
   // this trade anymore (it's removed from state.trades), so we write it once here so
@@ -2226,6 +2266,13 @@ async function _runCryptoCycleInner(asset) {
     const momentumTradeBypass = (analysis.momentumTrade === true || autoMomentumTrade) &&
                                 analysis.confidence === "HIGH" &&
                                 analysis.signal !== "SKIP";
+
+    // Stop cooldown circuit breaker: skip one window after 2 consecutive stops
+    if (c.stopCooldown && state.stopCooldownActive) {
+      state.stopCooldownActive = false;
+      logEntry("amber", `  ⚠ Stop cooldown active — skipping window after consecutive stops`);
+      continue;
+    }
 
     const qualifies = c.aiMaker
       ? (
