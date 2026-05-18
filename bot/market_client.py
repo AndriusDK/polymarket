@@ -417,7 +417,7 @@ class PolymarketClient:
         """Cancel a single open order by ID."""
         client = self._get_clob_client()
         try:
-            response = client.cancel_order(order_id)
+            response = client.cancel_orders([order_id])
             logger.info("Cancelled order %s: %s", order_id[:12], response)
             return response
         except Exception as e:
