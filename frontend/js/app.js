@@ -1705,6 +1705,19 @@ function stopCryptoMode(asset) {
 const startBtcMode = () => startCryptoMode("btc");
 const stopBtcMode  = () => stopCryptoMode("btc");
 
+function getWindowDurationMins(question) {
+  const m = question.match(/(\d+):(\d+)\s*(AM|PM)-(\d+):(\d+)\s*(AM|PM)/i);
+  if (!m) return null;
+  let [, sh, sm, sp, eh, em, ep] = m;
+  sh = parseInt(sh); sm = parseInt(sm); eh = parseInt(eh); em = parseInt(em);
+  if (sp.toUpperCase() === "PM" && sh !== 12) sh += 12;
+  if (sp.toUpperCase() === "AM" && sh === 12) sh = 0;
+  if (ep.toUpperCase() === "PM" && eh !== 12) eh += 12;
+  if (ep.toUpperCase() === "AM" && eh === 12) eh = 0;
+  const start = sh * 60 + sm, end = eh * 60 + em;
+  return (end < start ? end + 1440 : end) - start;
+}
+
 async function runCryptoCycle(asset) {
   if (state[asset].running) return;  // prevent concurrent cycles
   state[asset].running = true;
@@ -1945,6 +1958,14 @@ async function _runCryptoCycleInner(asset) {
       if (snap) state[asset].analyzed.set(market.conditionId, snap);
       state[asset].gapPending.delete(market.conditionId);
       logEntry("dim", `  → <${timeRemaining}s left — too close to resolution, skipping`);
+      continue;
+    }
+
+    // 15-min window early-entry gate: too much time for BTC to flip mid-window.
+    // Only enter when ≤4 minutes remain (gap is settled by then).
+    const windowMins = getWindowDurationMins(market.question);
+    if (windowMins === 15 && timeRemaining > 4 * 60) {
+      logEntry("dim", `  → 15-min window, ${Math.ceil(timeRemaining / 60)}m left — waiting until ≤4m`);
       continue;
     }
 
