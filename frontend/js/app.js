@@ -616,7 +616,7 @@ function addCryptoCard(trade) {
         </div>
         <div class="btc-kv">
           <span class="btc-k">TP TARGET</span>
-          <span class="btc-v" style="${trade.aiMakerFill && trade.entryPrice < 0.40 ? 'color:var(--amber)' : 'opacity:0.5'}">${trade.aiMakerFill && trade.entryPrice < 0.40 ? `${parseFloat($("#scalp-tp-pct")?.value) || state.config?.scalpTpPct || 3}% (SCALP)` : `${Math.round((parseFloat($("#take-profit-pct")?.value) || state.config?.takeProfitPct || 50))}%`}</span>
+          <span class="btc-v" style="${trade.aiMakerFill && trade.entryPrice <= 0.40 ? 'color:var(--amber)' : 'opacity:0.5'}">${trade.aiMakerFill && trade.entryPrice <= 0.40 ? `${parseFloat($("#scalp-tp-pct")?.value) || state.config?.scalpTpPct || 3}% (SCALP)` : `${Math.round((parseFloat($("#take-profit-pct")?.value) || state.config?.takeProfitPct || 50))}%`}</span>
         </div>
         <div class="btc-kv">
           <span class="btc-k">UNREAL. PnL</span>
@@ -860,7 +860,7 @@ const priceStream = (() => {
             // Exception: low-odds gap-flip entries (<40%) are momentum-only bets with no real gap
             // cushion — capping at 35% limits the max loss instead of allowing a 60-70% drawdown.
             const effectiveStop = t.signalAgainstGap
-              ? (t.entryPrice < 0.40 ? Math.max(stopLossPct, 0.35) : Math.max(stopLossPct, 0.60))
+              ? (t.entryPrice <= 0.40 ? Math.max(stopLossPct, 0.35) : Math.max(stopLossPct, 0.60))
               : stopLossPct;
             return t.unrealizedPnl <= -t.amount * effectiveStop;
           });
@@ -871,11 +871,11 @@ const priceStream = (() => {
             // precisely because the crowd disagrees — take a quick 3% gain and exit rather than
             // waiting for the normal 50% TP that may never arrive.
             const scalpTpPct   = (parseFloat($("#scalp-tp-pct")?.value) || state.config?.scalpTpPct || 3) / 100;
-            const effectiveTp = (t.aiMakerFill && t.entryPrice < 0.40) ? scalpTpPct : takeProfitPct;
+            const effectiveTp = (t.aiMakerFill && t.entryPrice <= 0.40) ? scalpTpPct : takeProfitPct;
             return t.unrealizedPnl >= t.amount * effectiveTp;
           });
           for (const t of toTakeProfit) {
-            const reason = (t.aiMakerFill && t.entryPrice < 0.40) ? "SCALP EXIT" : "TAKE PROFIT";
+            const reason = (t.aiMakerFill && t.entryPrice <= 0.40) ? "SCALP EXIT" : "TAKE PROFIT";
             closePosition(t, reason);
           }
           const toTrailStop = state.trades.filter(t => {
