@@ -613,6 +613,10 @@ function addCryptoCard(trade) {
           <span class="btc-v dim" id="stopdepth-${trade.id}">—</span>
         </div>
         <div class="btc-kv">
+          <span class="btc-k">TP TARGET</span>
+          <span class="btc-v" style="${trade.aiMakerFill && trade.entryPrice < 0.40 ? 'color:var(--amber)' : 'opacity:0.5'}">${trade.aiMakerFill && trade.entryPrice < 0.40 ? '3% (SCALP)' : `${Math.round((parseFloat($("#take-profit-pct")?.value) || state.config?.takeProfitPct || 50))}%`}</span>
+        </div>
+        <div class="btc-kv">
           <span class="btc-k">UNREAL. PnL</span>
           <span class="btc-v dim" id="pnl-${trade.id}">+$0.00</span>
         </div>
