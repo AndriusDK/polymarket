@@ -1961,11 +1961,11 @@ async function _runCryptoCycleInner(asset) {
       continue;
     }
 
-    // 15-min window early-entry gate: too much time for BTC to flip mid-window.
+    // Non-5-min window early-entry gate: too much time for BTC to flip mid-window.
     // Only enter when ≤4 minutes remain (gap is settled by then).
     const windowMins = getWindowDurationMins(market.question);
-    if (windowMins === 15 && timeRemaining > 4 * 60) {
-      logEntry("dim", `  → 15-min window, ${Math.ceil(timeRemaining / 60)}m left — waiting until ≤4m`);
+    if (windowMins !== null && windowMins > 5 && timeRemaining > 4 * 60) {
+      logEntry("dim", `  → ${windowMins}-min window, ${Math.ceil(timeRemaining / 60)}m left — waiting until ≤4m`);
       continue;
     }
 
