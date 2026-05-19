@@ -1966,10 +1966,18 @@ async function _runCryptoCycleInner(asset) {
     const updatedOdds = [{ up: market.upPrice, ts: Date.now() }, ...prevOdds].slice(0, 3);
     oddsHist.set(market.conditionId, updatedOdds);
 
+    let polyOrderBook = null;
+    if (market.upTokenId) {
+      try {
+        const pr = await fetch(`/price?token_id=${encodeURIComponent(market.upTokenId)}`);
+        if (pr.ok) polyOrderBook = await pr.json();
+      } catch {}
+    }
+
     let analysis;
     try {
       analysis = await analyzeCryptoMarket(
-        market, { spot, candles, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds, momentumFilterThreshold: c.momentumFilterThreshold ?? 7 }, c.anthropicKey, { model: c.model }, asset
+        market, { spot, candles, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds, momentumFilterThreshold: c.momentumFilterThreshold ?? 7, polyOrderBook }, c.anthropicKey, { model: c.model }, asset
       );
     } catch (err) {
       logEntry("error", `  ${cfg.ticker} analysis failed: ${err.message}`);

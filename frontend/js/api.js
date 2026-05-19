@@ -437,6 +437,9 @@ const CRYPTO_PROMPT = [
   "── FUTURES FUNDING RATE ───────────────────────────────────────────",
   "{fundingBlock}",
   "",
+  "── POLYMARKET ORDER BOOK (UP token CLOB) ─────────────────────────",
+  "{polyOrderBookBlock}",
+  "",
   "── POLYMARKET ODDS ────────────────────────────────────────────────",
   "UP price  : {upPrice} ({upPct}% implied)",
   "DOWN price: {downPrice} ({downPct}% implied)",
@@ -476,6 +479,14 @@ const CRYPTO_PROMPT = [
   "    Hard dump (UP fell sharply): strong contra-signal for BUY_UP — if candles/momentum are ambiguous or also bearish, prefer BUY_DOWN over SKIP.",
   "    Hard pump (UP rose sharply): strong contra-signal for BUY_DOWN — if ambiguous, prefer BUY_UP.",
   "    Do NOT blindly follow gap direction when the token is moving violently against it — the crowd is seeing something the spot gap hasn't priced yet.",
+  "14. POLYMARKET ORDER BOOK: Shows where participants INSIDE this market are positioned right now.",
+  "    Imbalance > 65% bids = crowd actively buying UP → reinforces BUY_UP signal.",
+  "    Imbalance < 35% bids = crowd actively selling UP (buying DOWN) → reinforces BUY_DOWN signal.",
+  "    Spread < 3pp = confident, liquid market. Spread > 8pp = thin/uncertain book — weight less.",
+  "    Bid or ask walls > $50 at key levels act as support/resistance for token price movement.",
+  "    BINANCE vs POLYMARKET disagreement: Binance bearish but Polymarket heavy bids = crowd is fading the dump → higher BUY_UP confidence. Agreement = strongest signal.",
+  "    Thin book (total liquidity < $50) = ignore — data is noise.",
+  "",
   "13. MOMENTUM TRADE (zero/tiny gap): When |gap| < 0.05% of price BUT |expectedDrift| > 0.15% of price AND 4+ of the last 5 candles align with the momentum direction, this is a valid MOMENTUM TRADE.",
   "    The Polymarket token price tracks the underlying asset live — even before resolution, if {ticker} moves strongly in one direction, that token will rise 20-30%, hitting take-profit before the market closes.",
   "    You are NOT predicting the final resolution. You are predicting that the TOKEN PRICE will swing enough to take profit.",
@@ -498,7 +509,7 @@ const CRYPTO_PROMPT = [
 
 async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "claude-haiku-4-5-20251001", signal } = {}, asset = "btc") {
   const cfg = CRYPTO_CONFIG[asset];
-  const { candles, spot, priceToBeat, oddsHistory, momentumFilterThreshold = 7 } = cryptoData;
+  const { candles, spot, priceToBeat, oddsHistory, momentumFilterThreshold = 7, polyOrderBook = null } = cryptoData;
   const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
   const gap       = spot - priceToBeat;
   const gapPct    = ((gap / priceToBeat) * 100);
@@ -612,6 +623,32 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     fundingBlock = `${frPct}%/8h → ${frSignal}`;
   }
 
+  let polyOrderBookBlock = "N/A (unavailable)";
+  if (polyOrderBook && polyOrderBook.bids && polyOrderBook.asks) {
+    const { bids, asks } = polyOrderBook;
+    const bidNotional = bids.reduce((s, l) => s + l.price * l.size, 0);
+    const askNotional = asks.reduce((s, l) => s + l.price * l.size, 0);
+    const total = bidNotional + askNotional;
+    const bestBid = bids.length > 0 ? (bids[0].price * 100).toFixed(1) : "—";
+    const bestAsk = asks.length > 0 ? (asks[0].price * 100).toFixed(1) : "—";
+    const spread  = (bids.length > 0 && asks.length > 0) ? ((asks[0].price - bids[0].price) * 100).toFixed(1) : "—";
+    const imbalPct = total > 0 ? (bidNotional / total * 100) : 50;
+    let imbalSignal;
+    if      (imbalPct > 65) imbalSignal = "heavy BUY pressure → bullish";
+    else if (imbalPct > 55) imbalSignal = "mild BUY pressure → slightly bullish";
+    else if (imbalPct < 35) imbalSignal = "heavy SELL pressure → bearish";
+    else if (imbalPct < 45) imbalSignal = "mild SELL pressure → slightly bearish";
+    else                    imbalSignal = "balanced → neutral";
+    const bidWalls = bids.filter(l => l.price * l.size > 50).map(l => `${(l.price*100).toFixed(1)}¢ ($${(l.price*l.size).toFixed(0)})`);
+    const askWalls = asks.filter(l => l.price * l.size > 50).map(l => `${(l.price*100).toFixed(1)}¢ ($${(l.price*l.size).toFixed(0)})`);
+    polyOrderBookBlock = [
+      `Best bid: ${bestBid}¢ | Best ask: ${bestAsk}¢ | Spread: ${spread}pp`,
+      `Bid liquidity: $${bidNotional.toFixed(0)} | Ask liquidity: $${askNotional.toFixed(0)} | Imbalance: ${imbalPct.toFixed(1)}% bids → ${imbalSignal}`,
+      bidWalls.length > 0 ? `Bid walls: ${bidWalls.join(", ")}` : "No notable bid walls",
+      askWalls.length > 0 ? `Ask walls: ${askWalls.join(", ")}` : "No notable ask walls",
+    ].join("\n");
+  }
+
   const prompt = CRYPTO_PROMPT
     .replace(/{label}/g,            cfg.label)
     .replace(/{ticker}/g,           cfg.ticker)
@@ -637,6 +674,7 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
     .replace("{oddsTrendBlock}",    oddsTrendBlock)
     .replace("{volumeBlock}",       volumeBlock)
     .replace("{fundingBlock}",      fundingBlock)
+    .replace("{polyOrderBookBlock}", polyOrderBookBlock)
     .replace("{upPrice}",           market.upPrice.toFixed(3))
     .replace("{upPct}",             (market.upPrice * 100).toFixed(1))
     .replace("{downPrice}",         market.downPrice.toFixed(3))
