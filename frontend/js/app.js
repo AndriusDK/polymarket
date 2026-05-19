@@ -75,6 +75,7 @@ const PERSIST_FIELDS = [
   ["trail-arm-pct",       "value"],
   ["trail-lock-pct",      "value"],
   ["stop-grace-sec",      "value"],
+  ["min-close-sec",       "value"],
   ["min-market-volume",   "value"],
   ["min-gap-pct",         "value"],
   ["min-entry-odds",      "value"],
@@ -1948,12 +1949,10 @@ async function _runCryptoCycleInner(asset) {
       if (isGapPending) logEntry("dim", `  → gap confirmed ${gap >= 0 ? "+" : ""}$${gap.toFixed(pd)} — running analysis`);
     }
 
-    // Hard block: < 90s remaining — book is empty, FOK always fails, stop-loss can't
-    // protect.  At 60–90s the DOWN/UP token with losing probability has essentially no
-    // liquidity so a market BUY fills at catastrophically low prices (e.g. 72.5% → 7.9%).
-    // Raised from 60s after BTC at 64s and ETH at 63s both filled at 4.6%/26% (vs 59.5%/58.5%).
-    // Mark analyzed so we don't retry this market again.
-    if (timeRemaining < 90) {
+    // Hard block: too close to resolution — book gets thin, stop-loss can't protect.
+    // Threshold is configurable (default 60s). Mark analyzed so we don't retry this market.
+    const minCloseSec = parseFloat($("#min-close-sec")?.value) || state.config?.minCloseSec || 60;
+    if (timeRemaining < minCloseSec) {
       const snap = state[asset].gapPending.get(market.conditionId) ?? state[asset].analyzed.get(market.conditionId);
       if (snap) state[asset].analyzed.set(market.conditionId, snap);
       state[asset].gapPending.delete(market.conditionId);
@@ -2097,7 +2096,7 @@ async function _runCryptoCycleInner(asset) {
     // Short-window MEDIUM guard: <120s left is high-volatility endgame territory.
     // A single price candle can flip everything — only HIGH confidence is worth the risk.
     // 120-200s MEDIUM signals with adequate market odds have sufficient time buffer.
-    const shortWindowMedium = timeRemaining < 90 && analysis.confidence !== "HIGH";
+    const shortWindowMedium = timeRemaining < minCloseSec && analysis.confidence !== "HIGH";
 
     // SOL mid-window MEDIUM guard: SOL has higher intra-candle volatility than ETH/BTC.
     // Session data shows MEDIUM-confidence SOL entries with >400s remaining stop out in 1-3 min
@@ -2152,7 +2151,7 @@ async function _runCryptoCycleInner(asset) {
     // (e.g. BUY_DOWN but price moving up at +1/min), there is no time to reverse and flip.
     // Applies at any confidence level — the AI can see bearish candles but momentum rules endgame.
     const nearResGapFlipMomOpposed = signalAgainstGap &&
-                                     timeRemaining < 90 &&
+                                     timeRemaining < minCloseSec &&
                                      ((analysis.signal === "BUY_DOWN" && (analysis.momentum ?? 0) > 0.5) ||
                                       (analysis.signal === "BUY_UP"  && (analysis.momentum ?? 0) < -0.5));
 
@@ -3360,12 +3359,13 @@ async function pollPendingLimitOrders() {
       } else {
         // Order is still live — now apply cancellation policies.
 
-        // Cancel near resolution: at <90s a fill leaves little time to manage the position.
+        // Cancel near resolution: fill leaves too little time to manage the position.
         // IMPORTANT: the CLOB order-status API can lag 30-50s after an actual fill, so
         // we cannot trust "not filled" from the status poll alone.  After sending the
         // cancel we wait 12s and cross-check the wallet positions API, which reflects
         // on-chain state faster than the CLOB order-book API.
-        if (secsToEnd < 90) {
+        const minCloseSecGtc = parseFloat($("#min-close-sec")?.value) || state.config?.minCloseSec || 60;
+        if (secsToEnd < minCloseSecGtc) {
           state[asset].pendingLimitOrders.delete(conditionId);
           const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";
 
