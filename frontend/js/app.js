@@ -3359,6 +3359,20 @@ async function pollPendingLimitOrders() {
       } else {
         // Order is still live — now apply cancellation policies.
 
+        // Cancel if market price collapsed below minEntryOdds while order was pending.
+        // Protects against GTC fills at 2¢ when the crowd has already priced in the opposite outcome.
+        try {
+          const priceResp = await fetch(`/price?token_id=${encodeURIComponent(pending.tokenId)}`);
+          if (priceResp.ok) {
+            const { best_ask: liveAsk } = await priceResp.json();
+            const minOddsThreshold = (parseFloat($("#min-entry-odds")?.value) || state.config?.minEntryOdds || 32) / 100;
+            if (liveAsk > 0 && liveAsk < minOddsThreshold) {
+              cancelTrendSweepOrder(asset, conditionId, `token collapsed to ${(liveAsk*100).toFixed(1)}¢ — below min odds ${(minOddsThreshold*100).toFixed(0)}¢`);
+              continue;
+            }
+          }
+        } catch {}
+
         // Cancel near resolution: fill leaves too little time to manage the position.
         // IMPORTANT: the CLOB order-status API can lag 30-50s after an actual fill, so
         // we cannot trust "not filled" from the status poll alone.  After sending the
