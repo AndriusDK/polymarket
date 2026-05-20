@@ -391,12 +391,10 @@ async function fetchCryptoMarkets(asset, { maxMinutes = 20, minVolume = 1000 } =
     if (!parsed) continue;
     nParsed++;
 
-    // Skip the volume minimum for markets with ≥ 2 minutes remaining — fresh windows
-    // start at $0 volume and build over their 5-min life. Only enforce the floor on
-    // near-expiry markets (<2 min left) where low volume signals a truly dead market.
-    const timeLeftMs = new Date(parsed.endDate).getTime() - now;
-    const isFresh    = timeLeftMs >= 2 * 60_000;
-    if (!isFresh && parsed.volume < minVolume) { nVolDrop++; continue; }
+    // Always enforce the UI volume minimum — low-volume markets ($22 etc.) have
+    // manipulable prices and no liquidity to exit. The active=false fix above is
+    // what lets fresh-but-liquid windows through; the volume floor stays in place.
+    if (parsed.volume < minVolume) { nVolDrop++; continue; }
 
     markets.push(parsed);
   }
