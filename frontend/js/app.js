@@ -859,9 +859,13 @@ const priceStream = (() => {
             // Use a wider 60% base stop for gap-flip entries to survive the pre-crossing dip.
             // Exception: low-odds gap-flip entries (<40%) are momentum-only bets with no real gap
             // cushion — capping at 35% limits the max loss instead of allowing a 60-70% drawdown.
+            // High-entry trades (>65¢) are near-certain binary bets — a 30% flat stop fires at 49¢
+            // but the token can gap 40pp in a single tick before recovering to 97¢. Widen to 65%
+            // so the stop only triggers on a true collapse (~24.5¢ on a 70¢ entry).
+            const highEntryWide = (!t.signalAgainstGap && t.entryPrice > 0.65) ? Math.max(stopLossPct, 0.65) : null;
             const effectiveStop = t.signalAgainstGap
               ? (t.entryPrice <= 0.40 ? Math.max(stopLossPct, 0.35) : Math.max(stopLossPct, 0.60))
-              : stopLossPct;
+              : (highEntryWide ?? stopLossPct);
             return t.unrealizedPnl <= -t.amount * effectiveStop;
           });
           for (const t of toStopLoss) closePosition(t, "STOP LOSS");
