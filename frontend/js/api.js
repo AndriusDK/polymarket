@@ -403,18 +403,11 @@ async function fetchCryptoMarkets(asset, { maxMinutes = 20, minVolume = 1000 } =
     // not the trading window start, so the difference is always hours or days.
     if (!/\d:\d\d\s*[AaPp][Mm]/.test(m.question || "")) { nVolDrop++; continue; }
 
-    // Always enforce the UI volume minimum — low-volume markets ($22 etc.) have
-    // manipulable prices and no liquidity to exit. The active=false fix above is
-    // what lets fresh-but-liquid windows through; the volume floor stays in place.
-    // Exception: for the CURRENT active window (≤5 min to resolution), accept markets
-    // with as little as $50 — thin evening markets never reach $200 in 5 min, causing
-    // the system to skip entire windows. MIN ENTRY REJECT at 50¢ bounds the downside
-    // if the fill comes in at a bad price on a low-liquidity book.
-    const timeLeftMs   = new Date(parsed.endDate).getTime() - now;
-    const volFloor     = (timeLeftMs > 0 && timeLeftMs <= 5 * 60_000)
-                         ? Math.min(minVolume, 50)   // current window: floor at $50
-                         : minVolume;                 // upcoming windows: full UI setting
-    if (parsed.volume < volFloor) { nVolDrop++; continue; }
+    // NOTE: Polymarket Gamma API has a known bug where volumeNum reports 0 for
+    // actively-trading markets. Volume filtering is disabled until this is fixed.
+    // MIN ENTRY REJECT (min-entry-odds ≥ 50¢) is the active protection against
+    // bad fills on truly illiquid markets.
+    // if (parsed.volume < minVolume) { nVolDrop++; continue; }
 
     markets.push(parsed);
   }
