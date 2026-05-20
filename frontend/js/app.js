@@ -3299,6 +3299,29 @@ async function pollPendingLimitOrders() {
               `(bid was ${(pending.price*100).toFixed(1)}¢ — price improvement)`
             );
           }
+
+          // Reject fills where price improvement went below the min-entry-odds floor.
+          // GTC bids at 70¢ can fill at 24-38¢ via price improvement — bypassing the
+          // min-entry check that ran at analysis time. Cancel the position here instead.
+          const minEntryFloor = (parseFloat($("#min-entry-odds")?.value) || state.config?.minEntryOdds || 32) / 100;
+          if (actualFillPrice < minEntryFloor) {
+            const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";
+            logEntry("warn",
+              `  ◈ ${pTag} fill at ${(actualFillPrice*100).toFixed(1)}¢ REJECTED — below min entry ` +
+              `${(minEntryFloor*100).toFixed(0)}¢. Closing via market sell.`
+            );
+            state[asset].pendingLimitOrders.delete(conditionId);
+            // Convert briefly so closePosition can fire the sell order.
+            const filledUsdc0    = filledShares * actualFillPrice;
+            const filledPending0 = { ...pending, shares: filledShares, sizeUsd: filledUsdc0, price: actualFillPrice,
+                                     aiMakerFill: true };
+            convertFilledSweepToTrade(asset, filledPending0, actualFillPrice);
+            const rejTrade = [...state.trades].reverse()
+              .find(x => x.tokenId === pending.tokenId && x.aiMakerFill && !x.exitPrice);
+            if (rejTrade) closePosition(rejTrade, "MIN ENTRY REJECT");
+            continue;
+          }
+
           const filledUsdc    = filledShares * actualFillPrice;
           const filledPending = { ...pending, shares: filledShares, sizeUsd: filledUsdc, price: actualFillPrice,
                                   aiMakerFill: true };
@@ -3418,6 +3441,20 @@ async function pollPendingLimitOrders() {
               if (match) {
                 const avgPrice  = parseFloat(match.avgPrice ?? match.averagePrice ?? "0") || pending.price;
                 const fillShares = parseFloat(match.size ?? "0") || pending.shares;
+                const minEntryFloorCR = (parseFloat($("#min-entry-odds")?.value) || state.config?.minEntryOdds || 32) / 100;
+                if (avgPrice < minEntryFloorCR) {
+                  logEntry("warn",
+                    `  ◈ ${pTag} cancel-race fill at ${(avgPrice*100).toFixed(1)}¢ REJECTED — ` +
+                    `below min entry ${(minEntryFloorCR*100).toFixed(0)}¢. Closing via market sell.`
+                  );
+                  const rjPending = { ...pending, shares: fillShares, sizeUsd: fillShares * avgPrice,
+                                      price: avgPrice, aiMakerFill: true };
+                  convertFilledSweepToTrade(asset, rjPending, avgPrice);
+                  const rejTr = [...state.trades].reverse()
+                    .find(x => x.tokenId === pending.tokenId && x.aiMakerFill && !x.exitPrice);
+                  if (rejTr) closePosition(rejTr, "MIN ENTRY REJECT");
+                  continue;
+                }
                 logEntry("amber",
                   `  ◈ ${pTag} cancel-race recovered — filled at ${(avgPrice*100).toFixed(1)}¢ ` +
                   `(CLOB lag masked the fill during poll window)`
