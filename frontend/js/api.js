@@ -365,8 +365,9 @@ async function fetchCryptoMarkets(asset, { maxMinutes = 20, minVolume = 1000 } =
   const now    = Date.now();
   const maxEnd = new Date(now + maxMinutes * 60_000).toISOString();
 
+  // Drop `active: true` — pre-open windows (created 10-20 min early by Polymarket)
+  // may carry active=false until trading opens. Date range + closed=false is sufficient.
   const params = new URLSearchParams({
-    active:       "true",
     closed:       "false",
     limit:        "500",
     end_date_min: new Date(now).toISOString(),
@@ -378,12 +379,7 @@ async function fetchCryptoMarkets(asset, { maxMinutes = 20, minVolume = 1000 } =
   if (!resp.ok) throw new Error(`${cfg.ticker} markets ${resp.status}`);
   const raw = await resp.json();
 
-  // Debug: log first few questions so we can see what the API returns
-  if (raw.length > 0 && raw.length < 10) {
-    console.log(`[${cfg.ticker}] sample questions:`, raw.slice(0, 3).map(m => m.question));
-  }
-
-  let nAsset = 0, nParsed = 0;
+  let nAsset = 0, nParsed = 0, nVolDrop = 0;
   const markets = [];
 
   for (const m of raw) {
@@ -394,13 +390,25 @@ async function fetchCryptoMarkets(asset, { maxMinutes = 20, minVolume = 1000 } =
     const parsed = parseCryptoMarket(m);
     if (!parsed) continue;
     nParsed++;
-    if (parsed.volume < minVolume) continue;
+
+    // Skip the volume minimum for markets with ≥ 2 minutes remaining — fresh windows
+    // start at $0 volume and build over their 5-min life. Only enforce the floor on
+    // near-expiry markets (<2 min left) where low volume signals a truly dead market.
+    const timeLeftMs = new Date(parsed.endDate).getTime() - now;
+    const isFresh    = timeLeftMs >= 2 * 60_000;
+    if (!isFresh && parsed.volume < minVolume) { nVolDrop++; continue; }
+
     markets.push(parsed);
+  }
+
+  console.log(`[${cfg.ticker}] markets API: total=${raw.length} keyword=${nAsset} parsed=${nParsed} volDrop=${nVolDrop} final=${markets.length}`);
+  if (markets.length > 0) {
+    console.log(`[${cfg.ticker}] candidates:`, markets.map(m => `"${m.question.slice(0,55)}" vol=$${Math.round(m.volume)} ${Math.round((new Date(m.endDate)-now)/60000)}min`));
   }
 
   return {
     markets: markets.sort((a, b) => new Date(a.endDate) - new Date(b.endDate)),
-    debug: { total: raw.length, asset: nAsset, inWindow: nAsset, parsed: nParsed, filtered: markets.length },
+    debug: { total: raw.length, asset: nAsset, inWindow: nAsset, parsed: nParsed, volDrop: nVolDrop, filtered: markets.length },
   };
 }
 
