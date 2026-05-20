@@ -406,7 +406,15 @@ async function fetchCryptoMarkets(asset, { maxMinutes = 20, minVolume = 1000 } =
     // Always enforce the UI volume minimum — low-volume markets ($22 etc.) have
     // manipulable prices and no liquidity to exit. The active=false fix above is
     // what lets fresh-but-liquid windows through; the volume floor stays in place.
-    if (parsed.volume < minVolume) { nVolDrop++; continue; }
+    // Exception: for the CURRENT active window (≤5 min to resolution), accept markets
+    // with as little as $50 — thin evening markets never reach $200 in 5 min, causing
+    // the system to skip entire windows. MIN ENTRY REJECT at 50¢ bounds the downside
+    // if the fill comes in at a bad price on a low-liquidity book.
+    const timeLeftMs   = new Date(parsed.endDate).getTime() - now;
+    const volFloor     = (timeLeftMs > 0 && timeLeftMs <= 5 * 60_000)
+                         ? Math.min(minVolume, 50)   // current window: floor at $50
+                         : minVolume;                 // upcoming windows: full UI setting
+    if (parsed.volume < volFloor) { nVolDrop++; continue; }
 
     markets.push(parsed);
   }
