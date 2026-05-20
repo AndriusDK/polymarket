@@ -1617,6 +1617,19 @@ function _handleNewMarketEvent(msg) {
   const question = (msg.market?.question || msg.question || "").toLowerCase();
   if (!question) return;
 
+  // Polymarket pre-creates next-day (and next-week) markets in advance, generating
+  // new_market WS events for slots that are many hours away. Ignore them — the 30s
+  // poll handles current windows. Only trigger a cycle for markets ending within
+  // 12 minutes (i.e. the current or immediately upcoming 5-min slot).
+  const rawEnd = msg.market?.endDate ?? msg.market?.end_date ?? msg.endDate ?? msg.end_date;
+  if (rawEnd) {
+    const msToEnd = new Date(rawEnd).getTime() - Date.now();
+    if (msToEnd > 12 * 60_000) {
+      console.log(`[WS] new_market ignored (endDate ${Math.round(msToEnd/60000)}m away): ${question.slice(0, 60)}`);
+      return;
+    }
+  }
+
   for (const [asset, kws] of Object.entries(WS_KEYWORDS)) {
     if (!state[asset].timer) continue;
     if (!kws.some(kw => kw.test(question))) continue;
