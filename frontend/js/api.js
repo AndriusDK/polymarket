@@ -396,15 +396,12 @@ async function fetchCryptoMarkets(asset, { maxMinutes = 20, minVolume = 1000 } =
     if (!parsed) continue;
     nParsed++;
 
-    // Exclude hourly, daily, and other long-duration markets.
-    // Only 5-min (windowMins ≈ 5) and 15-min (windowMins ≈ 15) markets are tradeable
-    // with this GTC strategy. Hourly markets (60 min) behave completely differently —
-    // the crowd has more time to price in the outcome and fills come in at extreme
-    // price-improvement levels (e.g. 17¢ on a near-resolved hourly token).
-    if (parsed.startDate && parsed.endDate) {
-      const windowMins = (new Date(parsed.endDate) - new Date(parsed.startDate)) / 60_000;
-      if (windowMins > 20 || windowMins < 1) { nVolDrop++; continue; }
-    }
+    // Exclude hourly/daily markets. 5-min and 15-min questions always contain a time
+    // in HH:MM format (e.g. "4:30PM-4:35PM"). Hourly markets use "4PM ET" with no
+    // colon+minutes — they don't match this pattern and should be skipped.
+    // Note: can't use endDate-startDate because startDate is the market creation date,
+    // not the trading window start, so the difference is always hours or days.
+    if (!/\d:\d\d\s*[AaPp][Mm]/.test(m.question || "")) { nVolDrop++; continue; }
 
     // Always enforce the UI volume minimum — low-volume markets ($22 etc.) have
     // manipulable prices and no liquidity to exit. The active=false fix above is
