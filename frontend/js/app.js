@@ -1617,15 +1617,17 @@ function _handleNewMarketEvent(msg) {
   const question = (msg.market?.question || msg.question || "").toLowerCase();
   if (!question) return;
 
-  // Polymarket pre-creates next-day (and next-week) markets in advance, generating
-  // new_market WS events for slots that are many hours away. Ignore them — the 30s
-  // poll handles current windows. Only trigger a cycle for markets ending within
-  // 12 minutes (i.e. the current or immediately upcoming 5-min slot).
-  const rawEnd = msg.market?.endDate ?? msg.market?.end_date ?? msg.endDate ?? msg.end_date;
-  if (rawEnd) {
-    const msToEnd = new Date(rawEnd).getTime() - Date.now();
-    if (msToEnd > 12 * 60_000) {
-      console.log(`[WS] new_market ignored (endDate ${Math.round(msToEnd/60000)}m away): ${question.slice(0, 60)}`);
+  // Polymarket batch-creates next-day and next-week slots in advance, sending
+  // new_market WS events for markets whose date is tomorrow or later. Ignore them.
+  // Parse the date from the question title (e.g. "may 21") and compare to today in ET.
+  const dateM = question.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})/i);
+  if (dateM) {
+    const MON = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
+    const mMon = MON[dateM[1].slice(0,3).toLowerCase()] ?? -1;
+    const mDay = parseInt(dateM[2], 10);
+    const etNow = new Date(Date.now() - 4 * 3600_000); // ET = UTC-4
+    if (mMon !== etNow.getUTCMonth() || mDay !== etNow.getUTCDate()) {
+      console.log(`[WS] new_market ignored — future date (${dateM[0].trim()}): ${question.slice(0,60)}`);
       return;
     }
   }
