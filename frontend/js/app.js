@@ -1540,12 +1540,14 @@ const ASSET_COLORS = { btc: "amber", eth: "eth", sol: "sol", xrp: "xrp" };
 // ── Market WebSocket — instant new_market detection ──────────────
 
 const WS_MARKET_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
-// Word-boundary regexes for WS matching — prevents "eth" matching "wetherholt" etc.
+// Match the same keywords as CRYPTO_CONFIG so only "up or down" markets trigger a cycle.
+// Broad terms like /\bbitcoin\b/ also match "bitcoin above X" markets which are a
+// completely different type and flood the signal log with spurious cycle triggers.
 const WS_KEYWORDS = {
-  btc: [/\bbitcoin\b/, /\bbtc\b/],
-  eth: [/\bethereum\b/, /\beth\b/],
-  sol: [/\bsolana\b/, /\bsol\b/],
-  xrp: [/\bxrp\b/, /\bripple\b/],
+  btc: [/\bbitcoin up or down\b/, /\bbtc up or down\b/],
+  eth: [/\bethereum up or down\b/, /\beth up or down\b/],
+  sol: [/\bsolana up or down\b/, /\bsol up or down\b/],
+  xrp: [/\bxrp up or down\b/, /\bripple up or down\b/],
 };
 
 let _marketWs = null;

@@ -375,7 +375,12 @@ async function fetchCryptoMarkets(asset, { maxMinutes = 20, minVolume = 1000 } =
     _order:       "end_date_asc",
   });
 
-  const resp = await fetch(`${PROXY_URL}?${params}`);
+  // Retry once on 502/503 — Polymarket's Gamma API is intermittently flaky.
+  let resp = await fetch(`${PROXY_URL}?${params}`);
+  if (!resp.ok && (resp.status === 502 || resp.status === 503)) {
+    await new Promise(r => setTimeout(r, 2_000));
+    resp = await fetch(`${PROXY_URL}?${params}`);
+  }
   if (!resp.ok) throw new Error(`${cfg.ticker} markets ${resp.status}`);
   const raw = await resp.json();
 
