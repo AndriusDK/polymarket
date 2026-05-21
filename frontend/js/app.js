@@ -2287,23 +2287,24 @@ async function _runCryptoCycleInner(asset) {
       logEntry("amber", `  🪞 mirror — flipped ${orig} → ${analysis.signal}`);
     }
 
-    // Favorite mode: override signal to whichever side the crowd has above 50¢.
-    // Theory: the crowd is more calibrated than our gap signal — buying the favorite
-    // (e.g. 90¢ side that wins 90% of the time) is the +EV side when the rule fires.
-    // Requires a clear favorite — skips when both sides are within 5pp of 50¢.
+    // Favorite mode: override signal to whichever side the crowd has above 80¢.
+    // Theory: the crowd is most calibrated when very confident — 80¢+ favorites
+    // win >80% of the time, and one stop-out at 50% loss (~$2) only erases ~4
+    // wins at 10¢/share. Below 80¢ the R/R inverts (72¢ loss = -$1.95 wiped two wins).
     if (c.favoriteMode && analysis.signal !== "SKIP") {
       const up = market.upPrice ?? 0.5;
       const dn = market.downPrice ?? 0.5;
-      if (Math.abs(up - dn) < 0.05) {
-        logEntry("dim", `  ⭐ favorite — no clear favorite (UP ${(up*100).toFixed(0)}¢ vs DOWN ${(dn*100).toFixed(0)}¢) — skipping`);
+      const favPrice = Math.max(up, dn);
+      if (favPrice < 0.80) {
+        logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ < 80¢ floor — skipping`);
         analysis = { ...analysis, signal: "SKIP" };
       } else {
         const favSignal = up >= dn ? "BUY_UP" : "BUY_DOWN";
         if (favSignal !== analysis.signal) {
-          logEntry("amber", `  ⭐ favorite — overriding ${analysis.signal} → ${favSignal} (crowd ${(Math.max(up,dn)*100).toFixed(0)}¢)`);
+          logEntry("amber", `  ⭐ favorite — overriding ${analysis.signal} → ${favSignal} (crowd ${(favPrice*100).toFixed(0)}¢)`);
           analysis = { ...analysis, signal: favSignal };
         } else {
-          logEntry("dim", `  ⭐ favorite — signal already on favorite side (${(Math.max(up,dn)*100).toFixed(0)}¢)`);
+          logEntry("dim", `  ⭐ favorite — signal already on favorite side (${(favPrice*100).toFixed(0)}¢)`);
         }
       }
     }
@@ -2334,8 +2335,8 @@ async function _runCryptoCycleInner(asset) {
     // Low-odds exception: HIGH conf + ≥15% edge can enter down to 43% — strong directional signal
     // with clear mispricing justifies bypassing the crowd-sentiment floor.
     const highConfLowOdds  = analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= 0.15 && entryOdds >= 0.43;
-    // Favorite mode targets >50¢ favorites (often 85-95¢) — bypass odds caps.
-    const favoriteBypass = c.favoriteMode && entryOdds > 0.50;
+    // Favorite mode targets ≥80¢ favorites — bypass odds caps for those.
+    const favoriteBypass = c.favoriteMode && entryOdds >= 0.80;
     const oddsOk      = analysis.signal === "SKIP" || favoriteBypass || ((entryOdds >= minOdds || highConfLowOdds) && (entryOdds <= maxOdds || highConfHighOdds || nearResHighConf));
 
     // Gap-crossing guard: only applies when signal bets AGAINST the current gap direction.
