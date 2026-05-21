@@ -790,6 +790,141 @@ function refreshBtcCards() {
 // priceStream can detect significant crowd-odds shifts and re-trigger analysis.
 const _marketTokenWatch = new Map();
 
+// ── Frontrun: Binance velocity-based fast entry ──────────────────────────
+// Subscribes to Binance @aggTrade for each asset and fires a maker bid the
+// instant spot velocity widens the gap or crosses the target — before the
+// Polymarket crowd has had time to reprice. Bypasses AI analysis entirely.
+// conditionId → { asset, priceToBeat, endDateMs, upTokenId, downTokenId, market }
+const _marketTargets = new Map();
+
+const _frontrun = {
+  ws:             null,
+  reconnectTimer: null,
+  ticks:          { btc: [], eth: [], sol: [], xrp: [] }, // rolling ~15s
+  lastFireAt:     new Map(),                              // conditionId → ms
+};
+
+const _FRONTRUN_SYM_BY_ASSET = { btc: "BTCUSDT", eth: "ETHUSDT", sol: "SOLUSDT", xrp: "XRPUSDT" };
+const _FRONTRUN_ASSET_BY_SYM = { BTCUSDT: "btc", ETHUSDT: "eth", SOLUSDT: "sol", XRPUSDT: "xrp" };
+
+function startFrontrun() {
+  if (_frontrun.ws) return;
+  const streams = Object.values(_FRONTRUN_SYM_BY_ASSET).map(s => s.toLowerCase() + "@aggTrade").join("/");
+  let ws;
+  try { ws = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`); }
+  catch (err) { logEntry("warn", `frontrun WS open failed: ${err.message}`); return; }
+  _frontrun.ws = ws;
+
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    const d = msg.data;
+    if (!d || !d.s || !d.p) return;
+    const asset = _FRONTRUN_ASSET_BY_SYM[d.s];
+    if (!asset) return;
+    const price = parseFloat(d.p);
+    if (!isFinite(price) || price <= 0) return;
+    const t   = d.T ?? Date.now();
+    const buf = _frontrun.ticks[asset];
+    buf.push({ t, p: price });
+    const cutoff = t - 15_000;
+    while (buf.length && buf[0].t < cutoff) buf.shift();
+    _frontrunEvaluate(asset, price, t);
+  };
+  ws.onclose = () => {
+    _frontrun.ws = null;
+    clearTimeout(_frontrun.reconnectTimer);
+    _frontrun.reconnectTimer = setTimeout(startFrontrun, 2_000);
+  };
+  ws.onerror = () => { try { ws.close(); } catch {} };
+}
+
+function _frontrunEvaluate(asset, latestPrice, latestT) {
+  if (state.config?.frontrun === false) return;
+  const buf = _frontrun.ticks[asset];
+  if (buf.length < 3) return;
+
+  // Price ~5s ago: walk forward, keep last tick at or before (latestT - 5s).
+  const target5s = latestT - 5_000;
+  let priceThen = null;
+  for (const tick of buf) {
+    if (tick.t <= target5s) priceThen = tick.p;
+    else break;
+  }
+  if (priceThen == null) return;
+
+  // Velocity threshold: 0.05% in 5s. On BTC@$78k that's ~$39 — well above tick noise.
+  const VELOCITY_FRAC = 0.0005;
+  const moveFrac      = (latestPrice - priceThen) / priceThen;
+  if (Math.abs(moveFrac) < VELOCITY_FRAC) return;
+
+  const nowMs = Date.now();
+  for (const [conditionId, info] of _marketTargets) {
+    if (info.asset !== asset) continue;
+    const secsLeft = Math.round((info.endDateMs - nowMs) / 1000);
+    if (secsLeft < 30 || secsLeft > 240) continue;
+
+    const last = _frontrun.lastFireAt.get(conditionId) ?? 0;
+    if (nowMs - last < 30_000) continue;
+
+    if (state[asset].pendingLimitOrders.has(conditionId)) continue;
+    if (state[asset].sweptWindows.has(conditionId))       continue;
+    if (state.trades.some(tr => tr.conditionId === conditionId && !tr.exitPrice)) continue;
+
+    const gapNow    = latestPrice - info.priceToBeat;
+    const gapBefore = priceThen   - info.priceToBeat;
+    const crossed   = gapBefore !== 0 && Math.sign(gapNow) !== Math.sign(gapBefore);
+    const widening  = (gapNow > 0 && gapNow > gapBefore) || (gapNow < 0 && gapNow < gapBefore);
+    if (!crossed && !widening) continue;
+
+    const signal  = gapNow > 0 ? "BUY_UP" : "BUY_DOWN";
+    const tokenId = signal === "BUY_UP" ? info.upTokenId : info.downTokenId;
+    if (!tokenId) continue;
+
+    // Crowd already repriced? If our side is already ≥50%, the edge is gone.
+    const liveWatchPrice = _marketTokenWatch.get(tokenId)?.lastPrice
+                        ?? (signal === "BUY_UP" ? info.market.upPrice : info.market.downPrice);
+    if (liveWatchPrice == null || liveWatchPrice >= 0.50) continue;
+    // And don't frontrun deep-resolved markets — those fill at ask anyway.
+    if (liveWatchPrice >= 0.45) continue;
+
+    _frontrun.lastFireAt.set(conditionId, nowMs);
+
+    const analysis = {
+      signal,
+      confidence:       "MEDIUM",
+      edge:             0.12,
+      absEdge:          0.12,
+      gap:              gapNow,
+      reasoning:        `FRONTRUN: Binance ${moveFrac >= 0 ? "+" : ""}${(moveFrac*100).toFixed(3)}%/5s ` +
+                        `${crossed ? "crossed target" : "widened gap"} ` +
+                        `($${priceThen.toFixed(2)}→$${latestPrice.toFixed(2)} vs target $${info.priceToBeat.toFixed(2)}), ` +
+                        `crowd ${(liveWatchPrice*100).toFixed(1)}% lagging`,
+      signalAgainstGap: false,
+      momentum:         null,
+      volatility:       null,
+      volSpikeRatio:    null,
+    };
+
+    logEntry("amber",
+      `⚡ FRONTRUN ${asset.toUpperCase()} <span class="${signal === "BUY_UP" ? "green" : "red"}">${signal}</span> — ` +
+      `Binance ${moveFrac >= 0 ? "+" : ""}${(moveFrac*100).toFixed(3)}%/5s ` +
+      `${crossed ? "crossed" : "widening"}, crowd ${(liveWatchPrice*100).toFixed(1)}%`
+    );
+
+    placeAiMakerBid(asset, analysis, {
+      market:      info.market,
+      tokenId,
+      amount:      1.50,
+      price:       0.75,
+      spot:        latestPrice,
+      priceToBeat: info.priceToBeat,
+    }).catch(err => logEntry("warn", `frontrun fire failed: ${err.message}`));
+
+    return; // one fire per evaluate
+  }
+}
+
 // ── Real-time price stream via Polymarket WebSocket ──────────────
 
 const POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
@@ -1724,6 +1859,7 @@ function startCryptoMode(asset) {
   logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — WS instant detection + 15s safety poll`);
 
   startMarketWS();
+  startFrontrun();
   runCryptoCycle(asset);
   state[asset].timer = setInterval(() => runCryptoCycle(asset), 15_000);
 
@@ -1817,6 +1953,11 @@ async function _runCryptoCycleInner(asset) {
     if (endDateMs > 0 && endDateMs < nowMs && !state.trades.some(t => t.tokenId === tokenId && !t.exitPrice)) {
       priceStream.unsubscribe(tokenId); _marketTokenWatch.delete(tokenId);
     }
+  }}
+
+  // Drop expired frontrun targets
+  { const nowMs = Date.now(); for (const [conditionId, info] of _marketTargets) {
+    if (info.endDateMs < nowMs) { _marketTargets.delete(conditionId); _frontrun.lastFireAt.delete(conditionId); }
   }}
 
   const freshCount = markets.filter(m => !state[asset].analyzed.has(m.conditionId)).length;
@@ -1955,6 +2096,17 @@ async function _runCryptoCycleInner(asset) {
       } catch { /* fall through */ }
     }
     if (!priceToBeat) priceToBeat = candles[candles.length - 1]?.open ?? spot;
+
+    // Register this market for frontrun: Binance velocity-based fast entry.
+    // Refreshed every cycle so live crowd prices on the market object stay current.
+    _marketTargets.set(market.conditionId, {
+      asset,
+      priceToBeat,
+      endDateMs:   new Date(market.endDate).getTime(),
+      upTokenId:   market.upTokenId,
+      downTokenId: market.downTokenId,
+      market,
+    });
 
     const gap = spot - priceToBeat;
 
