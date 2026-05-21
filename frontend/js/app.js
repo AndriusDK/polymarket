@@ -2649,7 +2649,7 @@ async function _runCryptoCycleInner(asset) {
           (!midWindowSmallGap || momentumTradeBypass) &&
           !solLargeGapUp &&
           !assetPositionOpen &&
-          (analysis.confidence === "HIGH" || analysis.absEdge >= minEdge) &&
+          (analysis.confidence === "HIGH" || analysis.absEdge >= minEdge || c.favoriteMode) &&
           state.stats.spent < c.maxDaily
         );
 
@@ -2735,9 +2735,9 @@ async function _runCryptoCycleInner(asset) {
       if (solLargeGapUp) reasons.push(`SOL large-gap BUY_UP — SOL ${(stallGapPct * 100).toFixed(1)}% above target with vol spike ${(analysis.volSpikeRatio ?? 0).toFixed(2)}× — fresh pump reversal risk`);
       if (assetPositionOpen) reasons.push(`${asset.toUpperCase()} position already open — max 1 per asset (correlated stop risk)`);
       if (analysis.confidence === "LOW") reasons.push("confidence LOW");
-      else if (analysis.confidence === "MEDIUM" && analysis.absEdge < minEdge)
+      else if (analysis.confidence === "MEDIUM" && analysis.absEdge < minEdge && !c.favoriteMode)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}% required for MEDIUM`);
-      if (analysis.absEdge < minEdge)
+      if (analysis.absEdge < minEdge && !c.favoriteMode)
         reasons.push(`edge ${(analysis.absEdge * 100).toFixed(1)}% < minEdge ${(minEdge * 100).toFixed(1)}%`);
       if (state.stats.spent >= c.maxDaily)
         reasons.push("daily budget exhausted");
@@ -2831,7 +2831,9 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   // AI Maker mode: post the full UI bet size as a resting GTC bid.  None of the FAK
   // sizing scalers apply — there's no slippage on a maker fill, and the bid only fills
   // if the market crashes to our price (so a bigger bet here is bigger gain on fill).
-  const rawAmount = c.aiMaker
+  // Favorite mode uses maxBet directly (like aiMaker) — odds dampener kills 80c+ entries
+  // (1.0 × 0.40 = $0.40 from $1 maxBet), pushing computed size below the $1 Polymarket min.
+  const rawAmount = (c.aiMaker || c.favoriteMode)
     ? Math.min(maxBet, c.maxDaily - state.stats.spent)
     : Math.min(maxBet * timeFraction * oddsFraction * confidenceFraction, c.maxDaily - state.stats.spent);
   // Near-resolution size cap: prediction markets become illiquid in the final 120s and a stop
