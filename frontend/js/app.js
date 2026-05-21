@@ -99,6 +99,7 @@ const PERSIST_FIELDS = [
   ["ai-maker-toggle",     "checked"],
   ["emergency-fill-exit-toggle", "checked"],
   ["selective-mode-toggle", "checked"],
+  ["rule-decider-toggle",   "checked"],
   ["btc-maker-price",     "value"],
   ["eth-maker-price",     "value"],
   ["sol-maker-price",     "value"],
@@ -136,6 +137,7 @@ function loadSettings() {
   syncToggleLabel("ai-maker-toggle",    "ai-maker-label",     ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("emergency-fill-exit-toggle", "emergency-fill-exit-label", ["ON","amber"], ["OFF","dim"]);
   syncToggleLabel("selective-mode-toggle", "selective-mode-label", ["ON","green"], ["OFF","dim"]);
+  syncToggleLabel("rule-decider-toggle",   "rule-decider-label",   ["ON","cyan"],  ["OFF","dim"]);
   syncToggleLabel("momentum-filter-toggle",  "momentum-filter-label",  ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("conviction-exit-toggle",  "conviction-exit-label",  ["ON","amber"], ["OFF","dim"]);
   syncToggleLabel("stop-cooldown-toggle",    "stop-cooldown-label",    ["ON","amber"], ["OFF","dim"]);
@@ -171,6 +173,12 @@ function initSetup() {
     syncToggleLabel("emergency-fill-exit-toggle", "emergency-fill-exit-label", ["ON","amber"], ["OFF","dim"]));
   $("#selective-mode-toggle")?.addEventListener("change", () =>
     syncToggleLabel("selective-mode-toggle", "selective-mode-label", ["ON","green"], ["OFF","dim"]));
+  $("#rule-decider-toggle")?.addEventListener("change", (e) => {
+    syncToggleLabel("rule-decider-toggle", "rule-decider-label", ["ON","cyan"], ["OFF","dim"]);
+    if (state.config) state.config.useRuleDecider = !!e.target.checked;
+    logEntry(e.target.checked ? "cyan" : "dim",
+      `→ decider switched to ${e.target.checked ? "RULE (deterministic ~1ms)" : "AI (Claude ~5-8s)"}`);
+  });
   $("#momentum-filter-toggle")?.addEventListener("change", () =>
     syncToggleLabel("momentum-filter-toggle", "momentum-filter-label", ["ON","green"], ["OFF","dim"]));
   $("#conviction-exit-toggle")?.addEventListener("change", () =>
@@ -224,6 +232,7 @@ function initSetup() {
       aiMaker:       $("#ai-maker-toggle")?.checked ?? false,
       emergencyFillExit: $("#emergency-fill-exit-toggle")?.checked ?? false,
       selectiveMode:     $("#selective-mode-toggle")?.checked ?? false,
+      useRuleDecider:    $("#rule-decider-toggle")?.checked ?? false,
       momentumFilter:          $("#momentum-filter-toggle")?.checked ?? false,
       momentumFilterThreshold: parseFloat($("#momentum-filter-threshold")?.value) || 7,
       btcMakerPrice: parseFloat($("#btc-maker-price")?.value) || 50,
