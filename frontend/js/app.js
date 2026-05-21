@@ -815,6 +815,7 @@ function startFrontrun() {
   catch (err) { logEntry("warn", `frontrun WS open failed: ${err.message}`); return; }
   _frontrun.ws = ws;
 
+  ws.onopen  = () => logEntry("dim", "⚡ frontrun WS connected — Binance tick stream active");
   ws.onmessage = (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
@@ -853,8 +854,8 @@ function _frontrunEvaluate(asset, latestPrice, latestT) {
   }
   if (priceThen == null) return;
 
-  // Velocity threshold: 0.05% in 5s. On BTC@$78k that's ~$39 — well above tick noise.
-  const VELOCITY_FRAC = 0.0005;
+  // Velocity threshold: 0.03% in 5s. On BTC@$78k that's ~$23 — above noise, below previous 0.05%.
+  const VELOCITY_FRAC = 0.0003;
   const moveFrac      = (latestPrice - priceThen) / priceThen;
   if (Math.abs(moveFrac) < VELOCITY_FRAC) return;
 
@@ -881,12 +882,10 @@ function _frontrunEvaluate(asset, latestPrice, latestT) {
     const tokenId = signal === "BUY_UP" ? info.upTokenId : info.downTokenId;
     if (!tokenId) continue;
 
-    // Crowd already repriced? If our side is already ≥50%, the edge is gone.
+    // Crowd already repriced? If our side is already ≥55%, the edge is gone.
     const liveWatchPrice = _marketTokenWatch.get(tokenId)?.lastPrice
                         ?? (signal === "BUY_UP" ? info.market.upPrice : info.market.downPrice);
-    if (liveWatchPrice == null || liveWatchPrice >= 0.50) continue;
-    // And don't frontrun deep-resolved markets — those fill at ask anyway.
-    if (liveWatchPrice >= 0.45) continue;
+    if (liveWatchPrice == null || liveWatchPrice >= 0.55) continue;
 
     _frontrun.lastFireAt.set(conditionId, nowMs);
 
@@ -915,7 +914,7 @@ function _frontrunEvaluate(asset, latestPrice, latestT) {
     placeAiMakerBid(asset, analysis, {
       market:      info.market,
       tokenId,
-      amount:      1.50,
+      amount:      3.00,
       price:       0.75,
       spot:        latestPrice,
       priceToBeat: info.priceToBeat,
@@ -2706,6 +2705,17 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
 
   const entryPrice = isUp ? market.upPrice   : market.downPrice;
   const tokenId    = isUp ? market.upTokenId : market.downTokenId;
+
+  // Cheap-entry filter: only take AI Maker positions where our side is priced ≤35¢.
+  // At 35¢ entry the stop-loss costs ~$0.75 while a correct resolution pays ~$3.25 — asymmetric.
+  // Above 35¢ (coin-flip territory) the stop and TP are roughly symmetric and expectancy turns negative.
+  if (c.aiMaker && entryPrice > 0.35) {
+    logEntry("dim",
+      `  ↳ <span class="dim">cheap-skip</span> — ${(entryPrice*100).toFixed(1)}¢ > 35¢ max ` +
+      `(stop ≈ ${(entryPrice*0.25*100).toFixed(0)}¢ loss vs ${((1-entryPrice)*100).toFixed(0)}¢ upside — unfavourable at this price)`
+    );
+    return;
+  }
 
   // Scale bet size by time remaining — more time = more uncertainty = smaller bet.
   // Near-res markets are illiquid: large FOK orders fail and exit slippage is severe.
