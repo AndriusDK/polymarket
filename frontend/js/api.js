@@ -761,7 +761,13 @@ function analyzeCryptoRule(market, cryptoData) {
     ? refCandles.reduce((s, c) => s + (c.high - c.low), 0) / refCandles.length
     : 0;
 
-  const expectedDrift = momentum * (timeRemaining / 60);
+  // Drift cap: prevent tiny gaps from being amplified by big momentum.
+  // Cap |drift| at 1.5× |gap| (with a $10 floor so near-zero gaps aren't
+  // completely frozen). Without this, a +$11 gap with +$36/min momentum
+  // projects effGap=+$133 and fires HIGH conf, but BTC mean-reverts.
+  const rawDrift     = momentum * (timeRemaining / 60);
+  const driftCap     = Math.max(Math.abs(gap) * 1.5, 10);
+  const expectedDrift = Math.sign(rawDrift) * Math.min(Math.abs(rawDrift), driftCap);
   const effectiveGap  = gap + expectedDrift;
 
   const skip = (reason) => ({
