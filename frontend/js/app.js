@@ -3106,20 +3106,6 @@ async function placeAiMakerBid(asset, analysis, { market, tokenId, amount, price
         analysis, spot, priceToBeat,
       };
       logEntry("info", `  ◈ AI MAKER placed: order ${String(orderId).slice(0, 12)}…`);
-      // Reject fills where price improvement landed below the min-entry floor.
-      // Use a 0.5¢ tolerance so exact-threshold fills (e.g. 0.41999 ≈ 42¢) aren't rejected.
-      const minFloorIM = (parseFloat($("#min-entry-odds")?.value) || state.config?.minEntryOdds || 32) / 100;
-      if (immediateFill < minFloorIM - 0.005) {
-        logEntry("warn",
-          `  ◈ AI MAKER instant fill at ${(immediateFill*100).toFixed(1)}¢ REJECTED — ` +
-          `below min entry ${(minFloorIM*100).toFixed(0)}¢. Closing via market sell.`
-        );
-        convertFilledSweepToTrade(asset, filledPending, immediateFill);
-        const rejTrade = [...state.trades].reverse()
-          .find(x => x.tokenId === tokenId && x.aiMakerFill && !x.exitPrice);
-        if (rejTrade) closePosition(rejTrade, "MIN ENTRY REJECT");
-        return;
-      }
       convertFilledSweepToTrade(asset, filledPending, immediateFill);
       return;
     }
@@ -3330,25 +3316,6 @@ async function pollPendingLimitOrders() {
               `(bid was ${(pending.price*100).toFixed(1)}¢ — price improvement)`
             );
           }
-          // Reject fills below min-entry floor. 0.5¢ tolerance handles floating-point
-          // representation of exact-threshold fills (0.41999 displays as 42.0¢).
-          const minFloorPoll = (parseFloat($("#min-entry-odds")?.value) || state.config?.minEntryOdds || 32) / 100;
-          if (actualFillPrice < minFloorPoll - 0.005) {
-            const pTag = pending.aiMaker ? "AI MAKER" : "SWEEP";
-            logEntry("warn",
-              `  ◈ ${pTag} fill at ${(actualFillPrice*100).toFixed(1)}¢ REJECTED — ` +
-              `below min entry ${(minFloorPoll*100).toFixed(0)}¢. Closing via market sell.`
-            );
-            const filledUsdc0    = filledShares * actualFillPrice;
-            const filledPending0 = { ...pending, shares: filledShares, sizeUsd: filledUsdc0,
-                                     price: actualFillPrice, aiMakerFill: true };
-            state[asset].pendingLimitOrders.delete(conditionId);
-            convertFilledSweepToTrade(asset, filledPending0, actualFillPrice);
-            const rejTrade = [...state.trades].reverse()
-              .find(x => x.tokenId === pending.tokenId && x.aiMakerFill && !x.exitPrice);
-            if (rejTrade) closePosition(rejTrade, "MIN ENTRY REJECT");
-            continue;
-          }
           const filledUsdc    = filledShares * actualFillPrice;
           const filledPending = { ...pending, shares: filledShares, sizeUsd: filledUsdc, price: actualFillPrice,
                                   aiMakerFill: true };
@@ -3468,22 +3435,10 @@ async function pollPendingLimitOrders() {
               if (match) {
                 const avgPrice  = parseFloat(match.avgPrice ?? match.averagePrice ?? "0") || pending.price;
                 const fillShares = parseFloat(match.size ?? "0") || pending.shares;
-                const minFloorCR = (parseFloat($("#min-entry-odds")?.value) || state.config?.minEntryOdds || 32) / 100;
                 const filledPendingCR = {
                   ...pending, shares: fillShares,
                   sizeUsd: fillShares * avgPrice, price: avgPrice, aiMakerFill: true,
                 };
-                if (avgPrice < minFloorCR - 0.005) {
-                  logEntry("warn",
-                    `  ◈ ${pTag} cancel-race fill at ${(avgPrice*100).toFixed(1)}¢ REJECTED — ` +
-                    `below min entry ${(minFloorCR*100).toFixed(0)}¢. Closing via market sell.`
-                  );
-                  convertFilledSweepToTrade(asset, filledPendingCR, avgPrice);
-                  const rejTr = [...state.trades].reverse()
-                    .find(x => x.tokenId === pending.tokenId && x.aiMakerFill && !x.exitPrice);
-                  if (rejTr) closePosition(rejTr, "MIN ENTRY REJECT");
-                  continue;
-                }
                 logEntry("amber",
                   `  ◈ ${pTag} cancel-race recovered — filled at ${(avgPrice*100).toFixed(1)}¢ ` +
                   `(CLOB lag masked the fill during poll window)`
