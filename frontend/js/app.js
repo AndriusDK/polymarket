@@ -1859,6 +1859,7 @@ function startCryptoMode(asset) {
   }
 
   logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — WS instant detection + 15s safety poll`);
+  logEntry("dim", `  decider: ${state.config?.useRuleDecider ? "RULE (deterministic, ~1ms)" : "AI (Claude API, ~5-8s)"}`);
 
   startMarketWS();
   startFrontrun();
@@ -2223,9 +2224,13 @@ async function _runCryptoCycleInner(asset) {
 
     let analysis;
     try {
-      analysis = await analyzeCryptoMarket(
-        market, { spot, candles, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds, momentumFilterThreshold: c.momentumFilterThreshold ?? 7, polyOrderBook }, c.anthropicKey, { model: c.model }, asset
-      );
+      if (c.useRuleDecider) {
+        analysis = analyzeCryptoRule(market, { spot, candles, priceToBeat });
+      } else {
+        analysis = await analyzeCryptoMarket(
+          market, { spot, candles, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds, momentumFilterThreshold: c.momentumFilterThreshold ?? 7, polyOrderBook }, c.anthropicKey, { model: c.model }, asset
+        );
+      }
     } catch (err) {
       logEntry("error", `  ${cfg.ticker} analysis failed: ${err.message}`);
       continue;
@@ -3887,6 +3892,14 @@ window.addEventListener('beforeunload', (e) => {
   // Modern browsers show their own generic message; setting returnValue triggers the dialog
   e.returnValue = 'The bot is still running — positions may be open. Leave anyway?';
 });
+
+// ── Console helpers for live A/B toggle ──────────────────────────
+window.useRule = (on = true) => {
+  state.config.useRuleDecider = !!on;
+  logEntry(on ? "cyan" : "dim", `→ decider switched to ${on ? "RULE (deterministic)" : "AI (Claude)"}`);
+  return state.config.useRuleDecider;
+};
+window.useAI = () => window.useRule(false);
 
 // ── Boot ─────────────────────────────────────────────────────────
 

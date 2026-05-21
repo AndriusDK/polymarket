@@ -743,6 +743,70 @@ async function analyzeCryptoMarket(market, cryptoData, anthropicKey, { model = "
 
 const analyzeBtcMarket = (market, data, key, opts) => analyzeCryptoMarket(market, data, key, opts, "btc");
 
+// ── Rule-based decider (no AI call) ─────────────────────────────
+// Deterministic CONFIRM/FADE decider using Binance + Polymarket data only.
+// Runs in <1ms vs ~5-8s for the AI path. Returns the same {signal, confidence,
+// edge, ...} shape so it's a drop-in replacement for analyzeCryptoMarket().
+function analyzeCryptoRule(market, cryptoData) {
+  const { candles, spot, priceToBeat } = cryptoData;
+  const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
+  const gap           = spot - priceToBeat;
+
+  // Match analyzeCryptoMarket's momentum/volatility math so confidence/edge stay comparable.
+  const refCandles = candles.slice(1, 4);
+  const momentum   = refCandles.length
+    ? refCandles.reduce((s, c) => s + (c.close - c.open), 0) / refCandles.length
+    : 0;
+  const volatility = refCandles.length
+    ? refCandles.reduce((s, c) => s + (c.high - c.low), 0) / refCandles.length
+    : 0;
+
+  const expectedDrift = momentum * (timeRemaining / 60);
+  const effectiveGap  = gap + expectedDrift;
+
+  const skip = (reason) => ({
+    market, signal: "SKIP", confidence: "LOW", edge: 0, absEdge: 0,
+    reasoning: `RULE: ${reason}`,
+    timeRemaining, gap, priceToBeat, spot, momentum, volatility, volSpikeRatio: null,
+  });
+
+  // Drift would erase or flip the gap before resolution → no edge, skip.
+  if (gap !== 0 && Math.sign(effectiveGap) !== Math.sign(gap)) {
+    return skip(`drift flips gap (gap=${gap.toFixed(1)} drift=${expectedDrift.toFixed(1)} eff=${effectiveGap.toFixed(1)})`);
+  }
+  if (effectiveGap === 0) return skip("effective gap is zero");
+
+  const signal         = effectiveGap > 0 ? "BUY_UP" : "BUY_DOWN";
+  const sideCrowdPrice = signal === "BUY_UP" ? market.upPrice : market.downPrice;
+
+  // Cumulative drift-noise scales with sqrt(time): a 1-min volatility of $30
+  // becomes ~$30 * sqrt(4) = $60 of expected wander over 4 minutes.
+  const expectedNoise = volatility * Math.sqrt(Math.max(60, timeRemaining) / 60);
+  const safetyRatio   = expectedNoise > 0 ? Math.abs(effectiveGap) / expectedNoise : 0;
+
+  let confidence;
+  if (safetyRatio > 2.0)      confidence = "HIGH";
+  else if (safetyRatio > 1.2) confidence = "MEDIUM";
+  else return skip(`thin buffer (effGap ${effectiveGap.toFixed(1)} vs noise ±${expectedNoise.toFixed(1)}, ratio ${safetyRatio.toFixed(2)})`);
+
+  // True-probability estimate, clipped to [0.55, 0.95].
+  const trueProb = Math.max(0.55, Math.min(0.95, 0.5 + 0.18 * safetyRatio));
+  const edge     = trueProb - sideCrowdPrice;
+
+  // FADE bonus: if the crowd leader is on the opposite side of our effective gap,
+  // the crowd is mispriced — boost confidence one notch when safetyRatio justifies it.
+  const crowdLeaderSide = market.upPrice >= market.downPrice ? "BUY_UP" : "BUY_DOWN";
+  if (crowdLeaderSide !== signal && safetyRatio > 1.5 && confidence === "MEDIUM") {
+    confidence = "HIGH";
+  }
+
+  return {
+    market, signal, confidence, edge, absEdge: Math.abs(edge),
+    reasoning: `RULE: gap=${gap >= 0 ? "+" : ""}${gap.toFixed(1)} drift=${expectedDrift >= 0 ? "+" : ""}${expectedDrift.toFixed(1)} effGap=${effectiveGap >= 0 ? "+" : ""}${effectiveGap.toFixed(1)} noise±${expectedNoise.toFixed(1)} ratio=${safetyRatio.toFixed(2)} → ${signal} ${confidence} | crowd ${(sideCrowdPrice*100).toFixed(1)}¢ true ${(trueProb*100).toFixed(1)}% edge ${(edge*100 >= 0 ? "+" : "")}${(edge*100).toFixed(1)}%`,
+    timeRemaining, gap, priceToBeat, spot, momentum, volatility, volSpikeRatio: null,
+  };
+}
+
 function analyzeCryptoHeuristic(market, { gap, volatility, timeRemaining, momentum, spot }) {
   const expectedDrift  = momentum * (timeRemaining / 60);
   const effectiveGap   = gap + expectedDrift;
