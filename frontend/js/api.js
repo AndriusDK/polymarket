@@ -748,7 +748,7 @@ const analyzeBtcMarket = (market, data, key, opts) => analyzeCryptoMarket(market
 // Runs in <1ms vs ~5-8s for the AI path. Returns the same {signal, confidence,
 // edge, ...} shape so it's a drop-in replacement for analyzeCryptoMarket().
 function analyzeCryptoRule(market, cryptoData) {
-  const { candles, spot, priceToBeat } = cryptoData;
+  const { candles, spot, priceToBeat, gapHistory } = cryptoData;
   const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
   const gap           = spot - priceToBeat;
 
@@ -781,6 +781,30 @@ function analyzeCryptoRule(market, cryptoData) {
     return skip(`drift flips gap (gap=${gap.toFixed(1)} drift=${expectedDrift.toFixed(1)} eff=${effectiveGap.toFixed(1)})`);
   }
   if (effectiveGap === 0) return skip("effective gap is zero");
+
+  // Gap-momentum filter: if the gap has been SHRINKING over the last ~2-3 minutes,
+  // BTC is drifting toward priceToBeat and the cheap underdog side is likely losing.
+  // Compare current |gap| to gap from ~2 minutes ago; skip if it's shrunk >40%.
+  // Only applied when we have ≥90s of history (avoid noisy snapshot effects).
+  if (Array.isArray(gapHistory) && gapHistory.length >= 2) {
+    const nowT = Date.now();
+    const target = nowT - 120_000;
+    let pastGap = null;
+    for (const h of gapHistory) {
+      if (h.t <= target) pastGap = h.gap;
+      else break;
+    }
+    // Fallback: use oldest sample if we don't have 2-min history yet but it's ≥60s old.
+    if (pastGap == null && gapHistory.length >= 2 && (nowT - gapHistory[0].t) >= 60_000) {
+      pastGap = gapHistory[0].gap;
+    }
+    if (pastGap != null && Math.sign(pastGap) === Math.sign(gap) && Math.abs(pastGap) > 0) {
+      const shrinkFrac = (Math.abs(pastGap) - Math.abs(gap)) / Math.abs(pastGap);
+      if (shrinkFrac > 0.40) {
+        return skip(`gap shrinking — was ${pastGap >= 0 ? "+" : ""}${pastGap.toFixed(1)} now ${gap >= 0 ? "+" : ""}${gap.toFixed(1)} (-${(shrinkFrac*100).toFixed(0)}%)`);
+      }
+    }
+  }
 
   const signal         = effectiveGap > 0 ? "BUY_UP" : "BUY_DOWN";
   const sideCrowdPrice = signal === "BUY_UP" ? market.upPrice : market.downPrice;

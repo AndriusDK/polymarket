@@ -2125,8 +2125,18 @@ async function _runCryptoCycleInner(asset) {
     }
     if (!priceToBeat) priceToBeat = candles[candles.length - 1]?.open ?? spot;
 
+    const gap = spot - priceToBeat;
+
     // Register this market for frontrun: Binance velocity-based fast entry.
     // Refreshed every cycle so live crowd prices on the market object stay current.
+    // Preserve gapHistory across refreshes — it powers the gap-momentum filter.
+    const prevTarget = _marketTargets.get(market.conditionId);
+    const gapHistory = prevTarget?.gapHistory ?? [];
+    gapHistory.push({ t: Date.now(), gap });
+    // Keep last 10 minutes only.
+    const gapCutoff = Date.now() - 600_000;
+    while (gapHistory.length && gapHistory[0].t < gapCutoff) gapHistory.shift();
+
     _marketTargets.set(market.conditionId, {
       asset,
       priceToBeat,
@@ -2134,9 +2144,8 @@ async function _runCryptoCycleInner(asset) {
       upTokenId:   market.upTokenId,
       downTokenId: market.downTokenId,
       market,
+      gapHistory,
     });
-
-    const gap = spot - priceToBeat;
 
     // Skip near-zero gaps — use 0.05% floor to absorb Binance↔Chainlink inter-source delta.
     // If minGapPct is explicitly set (including 0 = fully disabled), that overrides auto value.
@@ -2250,7 +2259,7 @@ async function _runCryptoCycleInner(asset) {
     let analysis;
     try {
       if (c.useRuleDecider) {
-        analysis = analyzeCryptoRule(market, { spot, candles, priceToBeat });
+        analysis = analyzeCryptoRule(market, { spot, candles, priceToBeat, gapHistory });
       } else {
         analysis = await analyzeCryptoMarket(
           market, { spot, candles, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds, momentumFilterThreshold: c.momentumFilterThreshold ?? 7, polyOrderBook }, c.anthropicKey, { model: c.model }, asset
