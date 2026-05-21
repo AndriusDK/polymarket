@@ -2289,22 +2289,31 @@ async function _runCryptoCycleInner(asset) {
 
     // Favorite mode: override signal to whichever side the crowd has above 80¢.
     // Theory: the crowd is most calibrated when very confident — 80¢+ favorites
-    // win >80% of the time, and one stop-out at 50% loss (~$2) only erases ~4
-    // wins at 10¢/share. Below 80¢ the R/R inverts (72¢ loss = -$1.95 wiped two wins).
+    // win >80% of the time, and each stop-out is bounded to ~50% loss (~$2) only
+    // erases ~4 wins at 10¢/share. Below 80¢ the R/R inverts.
+    // IMPORTANT: only apply when the favorite agrees with the gap direction.
+    // If the crowd says DOWN at 80¢ but the gap is positive (BTC above target),
+    // that's a gap-flip bet — the crowd is predicting reversal. Our rule already
+    // assigns BUY_UP in that case; overriding it means betting against the gap
+    // at high stakes. Those resolve at 3¢ and cost -$3+ per stop-out.
     if (c.favoriteMode && analysis.signal !== "SKIP") {
       const up = market.upPrice ?? 0.5;
       const dn = market.downPrice ?? 0.5;
-      const favPrice = Math.max(up, dn);
+      const favPrice  = Math.max(up, dn);
+      const favSignal = up >= dn ? "BUY_UP" : "BUY_DOWN";
+      const gapSignal = gap > 0 ? "BUY_UP" : "BUY_DOWN";
       if (favPrice < 0.80) {
         logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ < 80¢ floor — skipping`);
         analysis = { ...analysis, signal: "SKIP" };
+      } else if (favSignal !== gapSignal) {
+        logEntry("dim", `  ⭐ favorite — favorite (${favSignal} ${(favPrice*100).toFixed(0)}¢) opposes gap (${gapSignal} ${gap >= 0 ? "+" : ""}${gap.toFixed(0)}) — skipping gap-flip`);
+        analysis = { ...analysis, signal: "SKIP" };
       } else {
-        const favSignal = up >= dn ? "BUY_UP" : "BUY_DOWN";
         if (favSignal !== analysis.signal) {
-          logEntry("amber", `  ⭐ favorite — overriding ${analysis.signal} → ${favSignal} (crowd ${(favPrice*100).toFixed(0)}¢)`);
+          logEntry("amber", `  ⭐ favorite — overriding ${analysis.signal} → ${favSignal} (crowd ${(favPrice*100).toFixed(0)}¢, gap aligned)`);
           analysis = { ...analysis, signal: favSignal };
         } else {
-          logEntry("dim", `  ⭐ favorite — signal already on favorite side (${(favPrice*100).toFixed(0)}¢)`);
+          logEntry("dim", `  ⭐ favorite — signal already on favorite side (${(favPrice*100).toFixed(0)}¢, gap aligned)`);
         }
       }
     }
