@@ -2723,6 +2723,16 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   const entryPrice = isUp ? market.upPrice   : market.downPrice;
   const tokenId    = isUp ? market.upTokenId : market.downTokenId;
 
+  // Cheap-entry filter: at >40¢ our upside is <60¢ but stop is ~10pp away — symmetric R/R.
+  // Below 40¢ the win pays >60¢ while the stop costs ~10pp, giving asymmetric upside.
+  if (c.aiMaker && entryPrice > 0.40) {
+    logEntry("dim",
+      `  ↳ <span class="dim">cheap-skip</span> — ${(entryPrice*100).toFixed(1)}¢ > 40¢ cap ` +
+      `(${((1-entryPrice)*100).toFixed(0)}¢ upside vs ~${(entryPrice*0.25*100).toFixed(0)}¢ stop — not worth it)`
+    );
+    return;
+  }
+
   // Scale bet size by time remaining — more time = more uncertainty = smaller bet.
   // Near-res markets are illiquid: large FOK orders fail and exit slippage is severe.
   // Use smaller sizes in the final 150s to match available book depth (~$3-5).
