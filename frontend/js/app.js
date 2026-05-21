@@ -109,6 +109,7 @@ const PERSIST_FIELDS = [
   ["conviction-exit-toggle",      "checked"],
   ["conviction-exit-threshold",   "value"],
   ["stop-cooldown-toggle",        "checked"],
+  ["mirror-signal-toggle",        "checked"],
 ];
 
 function saveSettings() {
@@ -141,6 +142,7 @@ function loadSettings() {
   syncToggleLabel("momentum-filter-toggle",  "momentum-filter-label",  ["ON","green"], ["OFF","dim"]);
   syncToggleLabel("conviction-exit-toggle",  "conviction-exit-label",  ["ON","amber"], ["OFF","dim"]);
   syncToggleLabel("stop-cooldown-toggle",    "stop-cooldown-label",    ["ON","amber"], ["OFF","dim"]);
+  syncToggleLabel("mirror-signal-toggle",    "mirror-signal-label",    ["ON 🪞","red"], ["OFF","dim"]);
 }
 
 function syncToggleLabel(toggleId, labelId, onState, offState) {
@@ -185,6 +187,8 @@ function initSetup() {
     syncToggleLabel("conviction-exit-toggle", "conviction-exit-label", ["ON","amber"], ["OFF","dim"]));
   $("#stop-cooldown-toggle")?.addEventListener("change", () =>
     syncToggleLabel("stop-cooldown-toggle", "stop-cooldown-label", ["ON","amber"], ["OFF","dim"]));
+  $("#mirror-signal-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("mirror-signal-toggle", "mirror-signal-label", ["ON 🪞","red"], ["OFF","dim"]));
 
   $("#btn-launch").addEventListener("click", () => {
     $("#setup-error").textContent = "";
@@ -235,6 +239,7 @@ function initSetup() {
       useRuleDecider:    $("#rule-decider-toggle")?.checked ?? false,
       momentumFilter:          $("#momentum-filter-toggle")?.checked ?? false,
       momentumFilterThreshold: parseFloat($("#momentum-filter-threshold")?.value) || 7,
+      mirrorSignal:            $("#mirror-signal-toggle")?.checked ?? false,
       btcMakerPrice: parseFloat($("#btc-maker-price")?.value) || 50,
       ethMakerPrice: parseFloat($("#eth-maker-price")?.value) || 50,
       solMakerPrice: parseFloat($("#sol-maker-price")?.value) || 50,
@@ -2268,6 +2273,13 @@ async function _runCryptoCycleInner(asset) {
     } catch (err) {
       logEntry("error", `  ${cfg.ticker} analysis failed: ${err.message}`);
       continue;
+    }
+
+    // Mirror mode: flip BUY_UP↔BUY_DOWN to test whether the opposite direction wins more.
+    if (c.mirrorSignal && analysis.signal !== "SKIP") {
+      const orig = analysis.signal;
+      analysis = { ...analysis, signal: orig === "BUY_UP" ? "BUY_DOWN" : "BUY_UP" };
+      logEntry("amber", `  🪞 mirror — flipped ${orig} → ${analysis.signal}`);
     }
 
     const sigColor = analysis.signal === "BUY_UP" ? "green"
