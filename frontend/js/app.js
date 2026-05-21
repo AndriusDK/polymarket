@@ -2723,17 +2723,6 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   const entryPrice = isUp ? market.upPrice   : market.downPrice;
   const tokenId    = isUp ? market.upTokenId : market.downTokenId;
 
-  // Cheap-entry filter: only take AI Maker positions where our side is priced ≤35¢.
-  // At 35¢ entry the stop-loss costs ~$0.75 while a correct resolution pays ~$3.25 — asymmetric.
-  // Above 35¢ (coin-flip territory) the stop and TP are roughly symmetric and expectancy turns negative.
-  if (c.aiMaker && entryPrice > 0.35) {
-    logEntry("dim",
-      `  ↳ <span class="dim">cheap-skip</span> — ${(entryPrice*100).toFixed(1)}¢ > 35¢ max ` +
-      `(stop ≈ ${(entryPrice*0.25*100).toFixed(0)}¢ loss vs ${((1-entryPrice)*100).toFixed(0)}¢ upside — unfavourable at this price)`
-    );
-    return;
-  }
-
   // Scale bet size by time remaining — more time = more uncertainty = smaller bet.
   // Near-res markets are illiquid: large FOK orders fail and exit slippage is severe.
   // Use smaller sizes in the final 150s to match available book depth (~$3-5).
