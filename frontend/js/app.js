@@ -16,10 +16,10 @@ const state = {
   losses: 0,
   sessionStart: Date.now(),
   bootTime: null,      // set when first asset starts; used for startup cooldown
-  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map(), pendingLimitOrders: new Map(), sweptWindows: new Set() },  // conditionId → endDateMs
-  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map(), pendingLimitOrders: new Map(), sweptWindows: new Set() },
-  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map(), pendingLimitOrders: new Map(), sweptWindows: new Set() },
-  xrp: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map(), pendingLimitOrders: new Map(), sweptWindows: new Set() },
+  btc: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map(), pendingLimitOrders: new Map(), sweptWindows: new Set(), oddsShiftTimer: null },  // conditionId → endDateMs
+  eth: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map(), pendingLimitOrders: new Map(), sweptWindows: new Set(), oddsShiftTimer: null },
+  sol: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map(), pendingLimitOrders: new Map(), sweptWindows: new Set(), oddsShiftTimer: null },
+  xrp: { timer: null, analyzed: new Map(), gapWatch: new Map(), gapPending: new Map(), pendingCheckTimer: null, accelTimer: null, running: false, oddsHistory: new Map(), volTrack: new Map(), pendingLimitOrders: new Map(), sweptWindows: new Set(), oddsShiftTimer: null },
   tradeHistory: [],    // { ts, pnl, asset, reason } — every closed position, used by profit chart
   recentStops: [],     // timestamps of recent stop-loss events (any asset) for stress detection
   stressHoldUntil: 0, // epoch ms: new entries blocked until this time (market-stress cool-down)
@@ -785,6 +785,11 @@ function refreshBtcCards() {
   }
 }
 
+// tokenId → { asset, conditionId, side: "up"|"down", lastPrice }
+// Tracks UP/DOWN token IDs for markets currently under analysis watch so the
+// priceStream can detect significant crowd-odds shifts and re-trigger analysis.
+const _marketTokenWatch = new Map();
+
 // ── Real-time price stream via Polymarket WebSocket ──────────────
 
 const POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
@@ -807,7 +812,25 @@ const priceStream = (() => {
         // Polymarket order books momentarily show best_bid ≈ 0 when no bids are queued.
         // A bid of <5¢ on a ~50-80% odds token is clearly a stale/empty-book artefact —
         // using it would spike unrealizedPnl to near -$amount and trigger a phantom stop.
-        if (!tokenId || bid < 0.05) continue;
+        if (!tokenId || bid < 0.02) continue;
+
+        // Live crowd-odds watch: if this token belongs to a market we're monitoring,
+        // update its cached price. If the shift is ≥3pp, schedule a re-analysis
+        // via gapWatch so the next cycle picks it up with fresh crowd data.
+        const mw = _marketTokenWatch.get(tokenId);
+        if (mw && bid >= 0.02) {
+          const prev = mw.lastPrice ?? bid;
+          mw.lastPrice = bid;
+          if (Math.abs(bid - prev) >= 0.03) {
+            const { asset, conditionId } = mw;
+            clearTimeout(state[asset].oddsShiftTimer);
+            state[asset].oddsShiftTimer = setTimeout(() => {
+              state[asset].oddsShiftTimer = null;
+              state[asset].gapWatch.set(conditionId, Date.now());
+              runCryptoCycle(asset);
+            }, 2_000); // debounce 2s so a fast-moving market doesn't spam cycles
+          }
+        }
         let changed = false;
         for (const t of state.trades) {
           if (t.tokenId !== tokenId) continue;
@@ -1696,11 +1719,11 @@ function startCryptoMode(asset) {
     _startCooldownOverlay(coolSecs);
   }
 
-  logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — WS instant detection + 30s safety poll`);
+  logEntry("cyan", `⚡ ${cfg.ticker} MODE ON — WS instant detection + 15s safety poll`);
 
   startMarketWS();
   runCryptoCycle(asset);
-  state[asset].timer = setInterval(() => runCryptoCycle(asset), 30_000);
+  state[asset].timer = setInterval(() => runCryptoCycle(asset), 15_000);
 
   // Start polling pending GTC limit orders (trend sweep and/or AI maker)
   if (state.config?.trendSweep || state.config?.aiMaker) startPendingLimitPoll();
@@ -1766,6 +1789,33 @@ async function _runCryptoCycleInner(asset) {
 
   // Expire gapPending entries whose market has already resolved
   { const nowMs = Date.now(); for (const [id, d] of state[asset].gapPending) { if ((d.endDateMs ?? 0) < nowMs) state[asset].gapPending.delete(id); } }
+
+  // Subscribe UP/DOWN token IDs to the price stream so we get live crowd-odds updates
+  // between cycles. Merge any already-received live prices back into the market objects
+  // so the AI sees the freshest possible crowd data at analysis time.
+  for (const market of markets) {
+    for (const [tokenId, side] of [[market.upTokenId, "up"], [market.downTokenId, "down"]]) {
+      if (!tokenId) continue;
+      if (!_marketTokenWatch.has(tokenId)) {
+        _marketTokenWatch.set(tokenId, { asset, conditionId: market.conditionId, side, lastPrice: side === "up" ? market.upPrice : market.downPrice });
+        priceStream.subscribe(tokenId);
+      }
+      const livePrice = _marketTokenWatch.get(tokenId)?.lastPrice;
+      if (livePrice != null) {
+        if (side === "up")   market.upPrice   = livePrice;
+        else                 market.downPrice  = livePrice;
+      }
+    }
+  }
+
+  // Clean up watches for markets no longer in the query window and without active positions
+  { const nowMs = Date.now(); for (const [tokenId, mw] of _marketTokenWatch) {
+    const snap = state[mw.asset].analyzed.get(mw.conditionId);
+    const endDateMs = snap?.endDateMs ?? 0;
+    if (endDateMs > 0 && endDateMs < nowMs && !state.trades.some(t => t.tokenId === tokenId && !t.exitPrice)) {
+      priceStream.unsubscribe(tokenId); _marketTokenWatch.delete(tokenId);
+    }
+  }}
 
   const freshCount = markets.filter(m => !state[asset].analyzed.has(m.conditionId)).length;
 
