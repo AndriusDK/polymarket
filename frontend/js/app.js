@@ -110,6 +110,7 @@ const PERSIST_FIELDS = [
   ["conviction-exit-threshold",   "value"],
   ["stop-cooldown-toggle",        "checked"],
   ["mirror-signal-toggle",        "checked"],
+  ["favorite-mode-toggle",        "checked"],
 ];
 
 function saveSettings() {
@@ -143,6 +144,7 @@ function loadSettings() {
   syncToggleLabel("conviction-exit-toggle",  "conviction-exit-label",  ["ON","amber"], ["OFF","dim"]);
   syncToggleLabel("stop-cooldown-toggle",    "stop-cooldown-label",    ["ON","amber"], ["OFF","dim"]);
   syncToggleLabel("mirror-signal-toggle",    "mirror-signal-label",    ["ON 🪞","red"], ["OFF","dim"]);
+  syncToggleLabel("favorite-mode-toggle",    "favorite-mode-label",    ["ON ⭐","green"], ["OFF","dim"]);
 }
 
 function syncToggleLabel(toggleId, labelId, onState, offState) {
@@ -189,6 +191,8 @@ function initSetup() {
     syncToggleLabel("stop-cooldown-toggle", "stop-cooldown-label", ["ON","amber"], ["OFF","dim"]));
   $("#mirror-signal-toggle")?.addEventListener("change", () =>
     syncToggleLabel("mirror-signal-toggle", "mirror-signal-label", ["ON 🪞","red"], ["OFF","dim"]));
+  $("#favorite-mode-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("favorite-mode-toggle", "favorite-mode-label", ["ON ⭐","green"], ["OFF","dim"]));
 
   $("#btn-launch").addEventListener("click", () => {
     $("#setup-error").textContent = "";
@@ -240,6 +244,7 @@ function initSetup() {
       momentumFilter:          $("#momentum-filter-toggle")?.checked ?? false,
       momentumFilterThreshold: parseFloat($("#momentum-filter-threshold")?.value) || 7,
       mirrorSignal:            $("#mirror-signal-toggle")?.checked ?? false,
+      favoriteMode:            $("#favorite-mode-toggle")?.checked ?? false,
       btcMakerPrice: parseFloat($("#btc-maker-price")?.value) || 50,
       ethMakerPrice: parseFloat($("#eth-maker-price")?.value) || 50,
       solMakerPrice: parseFloat($("#sol-maker-price")?.value) || 50,
@@ -2282,6 +2287,27 @@ async function _runCryptoCycleInner(asset) {
       logEntry("amber", `  🪞 mirror — flipped ${orig} → ${analysis.signal}`);
     }
 
+    // Favorite mode: override signal to whichever side the crowd has above 50¢.
+    // Theory: the crowd is more calibrated than our gap signal — buying the favorite
+    // (e.g. 90¢ side that wins 90% of the time) is the +EV side when the rule fires.
+    // Requires a clear favorite — skips when both sides are within 5pp of 50¢.
+    if (c.favoriteMode && analysis.signal !== "SKIP") {
+      const up = market.upPrice ?? 0.5;
+      const dn = market.downPrice ?? 0.5;
+      if (Math.abs(up - dn) < 0.05) {
+        logEntry("dim", `  ⭐ favorite — no clear favorite (UP ${(up*100).toFixed(0)}¢ vs DOWN ${(dn*100).toFixed(0)}¢) — skipping`);
+        analysis = { ...analysis, signal: "SKIP" };
+      } else {
+        const favSignal = up >= dn ? "BUY_UP" : "BUY_DOWN";
+        if (favSignal !== analysis.signal) {
+          logEntry("amber", `  ⭐ favorite — overriding ${analysis.signal} → ${favSignal} (crowd ${(Math.max(up,dn)*100).toFixed(0)}¢)`);
+          analysis = { ...analysis, signal: favSignal };
+        } else {
+          logEntry("dim", `  ⭐ favorite — signal already on favorite side (${(Math.max(up,dn)*100).toFixed(0)}¢)`);
+        }
+      }
+    }
+
     const sigColor = analysis.signal === "BUY_UP" ? "green"
                    : analysis.signal === "BUY_DOWN" ? "red" : "dim";
     logEntry("info",
@@ -2308,7 +2334,9 @@ async function _runCryptoCycleInner(asset) {
     // Low-odds exception: HIGH conf + ≥15% edge can enter down to 43% — strong directional signal
     // with clear mispricing justifies bypassing the crowd-sentiment floor.
     const highConfLowOdds  = analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= 0.15 && entryOdds >= 0.43;
-    const oddsOk      = analysis.signal === "SKIP" || ((entryOdds >= minOdds || highConfLowOdds) && (entryOdds <= maxOdds || highConfHighOdds || nearResHighConf));
+    // Favorite mode targets >50¢ favorites (often 85-95¢) — bypass odds caps.
+    const favoriteBypass = c.favoriteMode && entryOdds > 0.50;
+    const oddsOk      = analysis.signal === "SKIP" || favoriteBypass || ((entryOdds >= minOdds || highConfLowOdds) && (entryOdds <= maxOdds || highConfHighOdds || nearResHighConf));
 
     // Gap-crossing guard: only applies when signal bets AGAINST the current gap direction.
     // (BUY_UP when price is below target, or BUY_DOWN when price is above target)
@@ -2762,7 +2790,8 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
 
   // Cheap-entry filter: at >40¢ our upside is <60¢ but stop is ~10pp away — symmetric R/R.
   // Below 40¢ the win pays >60¢ while the stop costs ~10pp, giving asymmetric upside.
-  if (c.aiMaker && entryPrice > 0.40) {
+  // Favorite mode intentionally targets >50¢ entries — bypass cheap-skip for it.
+  if (c.aiMaker && entryPrice > 0.40 && !c.favoriteMode) {
     logEntry("dim",
       `  ↳ <span class="dim">cheap-skip</span> — ${(entryPrice*100).toFixed(1)}¢ > 40¢ cap ` +
       `(${((1-entryPrice)*100).toFixed(0)}¢ upside vs ~${(entryPrice*0.25*100).toFixed(0)}¢ stop — not worth it)`
@@ -2825,7 +2854,11 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
 
   // ─── AI Maker Mode: post GTC limit bid instead of FAK ─────────────────
   if (c.aiMaker) {
-    const priceCt = Math.max(20, Math.min(80, c[`${asset}MakerPrice`] ?? 50));
+    // Favorite mode targets 70-95¢ entries — bid 95¢ so we fill at the ask.
+    // Polymarket fills GTC bids at the actual ask via price improvement, so
+    // a 95¢ bid on a 90¢ ask fills at 90¢.
+    const defaultPriceCt = Math.max(20, Math.min(80, c[`${asset}MakerPrice`] ?? 50));
+    const priceCt        = c.favoriteMode ? 95 : defaultPriceCt;
 
     // Selective Mode: skip the two patterns most strongly correlated with losses.
     // (1) Expensive bid + long window + weak edge → asymmetric loss (≥18¢ down, ≤10¢ up)
