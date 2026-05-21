@@ -837,7 +837,7 @@ function startFrontrun() {
     const t   = d.T ?? Date.now();
     const buf = _frontrun.ticks[asset];
     buf.push({ t, p: price });
-    const cutoff = t - 15_000;
+    const cutoff = t - 35_000;
     while (buf.length && buf[0].t < cutoff) buf.shift();
     _frontrunEvaluate(asset, price, t);
   };
@@ -868,6 +868,21 @@ function _frontrunEvaluate(asset, latestPrice, latestT) {
   const moveFrac      = (latestPrice - priceThen) / priceThen;
   if (Math.abs(moveFrac) < VELOCITY_FRAC) return;
 
+  // Trend gate: require the same direction over the last ~30s, not just 5s.
+  // A +0.03%/5s blip in a downtrend is a bounce, not a breakout — those reverse
+  // and we get filled at the top of the bounce.
+  const target30s = latestT - 30_000;
+  let price30s = null;
+  for (const tick of buf) {
+    if (tick.t <= target30s) price30s = tick.p;
+    else break;
+  }
+  if (price30s == null) return;
+  const trendFrac = (latestPrice - price30s) / price30s;
+  const TREND_FRAC = 0.0005; // 0.05% over 30s
+  if (Math.sign(trendFrac) !== Math.sign(moveFrac)) return;
+  if (Math.abs(trendFrac) < TREND_FRAC) return;
+
   const nowMs = Date.now();
   for (const [conditionId, info] of _marketTargets) {
     if (info.asset !== asset) continue;
@@ -891,10 +906,11 @@ function _frontrunEvaluate(asset, latestPrice, latestT) {
     const tokenId = signal === "BUY_UP" ? info.upTokenId : info.downTokenId;
     if (!tokenId) continue;
 
-    // Crowd already repriced? If our side is already ≥45%, the edge is gone.
+    // Crowd already repriced? If our side is ≥25%, the move is already partially priced
+    // and we're not actually frontrunning — tightened from 45% after late entries underperformed.
     const liveWatchPrice = _marketTokenWatch.get(tokenId)?.lastPrice
                         ?? (signal === "BUY_UP" ? info.market.upPrice : info.market.downPrice);
-    if (liveWatchPrice == null || liveWatchPrice >= 0.45) continue;
+    if (liveWatchPrice == null || liveWatchPrice >= 0.25) continue;
 
     _frontrun.lastFireAt.set(conditionId, nowMs);
 
