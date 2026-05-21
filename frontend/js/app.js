@@ -882,10 +882,10 @@ function _frontrunEvaluate(asset, latestPrice, latestT) {
     const tokenId = signal === "BUY_UP" ? info.upTokenId : info.downTokenId;
     if (!tokenId) continue;
 
-    // Crowd already repriced? If our side is already ≥55%, the edge is gone.
+    // Crowd already repriced? If our side is already ≥45%, the edge is gone.
     const liveWatchPrice = _marketTokenWatch.get(tokenId)?.lastPrice
                         ?? (signal === "BUY_UP" ? info.market.upPrice : info.market.downPrice);
-    if (liveWatchPrice == null || liveWatchPrice >= 0.55) continue;
+    if (liveWatchPrice == null || liveWatchPrice >= 0.45) continue;
 
     _frontrun.lastFireAt.set(conditionId, nowMs);
 
@@ -911,11 +911,14 @@ function _frontrunEvaluate(asset, latestPrice, latestT) {
       `${crossed ? "crossed" : "widening"}, crowd ${(liveWatchPrice*100).toFixed(1)}%`
     );
 
+    // Bid at 35¢ enforces the cheap-entry rule: if other bots reprice the ask above
+    // 35¢ before our order lands, we simply don't fill — no loss. When we do fill,
+    // the entry is ≤35¢ where the stop costs ~$0.75 and a correct call pays ~$3.25.
     placeAiMakerBid(asset, analysis, {
       market:      info.market,
       tokenId,
       amount:      3.00,
-      price:       0.75,
+      price:       0.35,
       spot:        latestPrice,
       priceToBeat: info.priceToBeat,
     }).catch(err => logEntry("warn", `frontrun fire failed: ${err.message}`));
