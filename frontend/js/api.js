@@ -748,7 +748,7 @@ const analyzeBtcMarket = (market, data, key, opts) => analyzeCryptoMarket(market
 // Runs in <1ms vs ~5-8s for the AI path. Returns the same {signal, confidence,
 // edge, ...} shape so it's a drop-in replacement for analyzeCryptoMarket().
 function analyzeCryptoRule(market, cryptoData) {
-  const { candles, spot, priceToBeat, gapHistory } = cryptoData;
+  const { candles, spot, priceToBeat, gapHistory, favoriteMode } = cryptoData;
   const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
   const gap           = spot - priceToBeat;
 
@@ -814,9 +814,14 @@ function analyzeCryptoRule(market, cryptoData) {
   const expectedNoise = volatility * Math.sqrt(Math.max(60, timeRemaining) / 60);
   const safetyRatio   = expectedNoise > 0 ? Math.abs(effectiveGap) / expectedNoise : 0;
 
+  // Favorite mode uses a softer ratio floor (1.0 instead of 1.2) — we're not relying
+  // on the gap alone for confidence, the crowd's 80c+ pricing is the primary signal.
+  // This lets the rule fire when the crowd is at 80-85c (book has depth), rather than
+  // waiting until 98-99c where the book is empty and FAK orders can't fill.
+  const ratioFloor = favoriteMode ? 1.0 : 1.2;
   let confidence;
-  if (safetyRatio > 2.0)      confidence = "HIGH";
-  else if (safetyRatio > 1.2) confidence = "MEDIUM";
+  if (safetyRatio > 2.0)           confidence = "HIGH";
+  else if (safetyRatio > ratioFloor) confidence = "MEDIUM";
   else return skip(`thin buffer (effGap ${effectiveGap.toFixed(1)} vs noise ±${expectedNoise.toFixed(1)}, ratio ${safetyRatio.toFixed(2)})`);
 
   // True-probability estimate, clipped to [0.55, 0.95].

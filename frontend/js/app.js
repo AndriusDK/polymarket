@@ -2272,7 +2272,7 @@ async function _runCryptoCycleInner(asset) {
     let analysis;
     try {
       if (c.useRuleDecider) {
-        analysis = analyzeCryptoRule(market, { spot, candles, priceToBeat, gapHistory });
+        analysis = analyzeCryptoRule(market, { spot, candles, priceToBeat, gapHistory, favoriteMode: c.favoriteMode });
       } else {
         analysis = await analyzeCryptoMarket(
           market, { spot, candles, priceToBeat, orderBook, fundingRate, oddsHistory: updatedOdds, momentumFilterThreshold: c.momentumFilterThreshold ?? 7, polyOrderBook }, c.anthropicKey, { model: c.model }, asset
