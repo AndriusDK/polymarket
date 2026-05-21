@@ -861,6 +861,9 @@ function startFrontrun() {
 
 function _frontrunEvaluate(asset, latestPrice, latestT) {
   if (state.config?.frontrun === false) return;
+  // Frontrun targets the <25c underdog side (opposite of favorite mode's >80c thesis).
+  // When favorite mode is on, frontrun would post shadow-buys on the wrong side.
+  if (state.config?.favoriteMode) return;
   const buf = _frontrun.ticks[asset];
   if (buf.length < 3) return;
 
