@@ -815,17 +815,19 @@ const priceStream = (() => {
         if (!tokenId || bid < 0.02) continue;
 
         // Live crowd-odds watch: if this token belongs to a market we're monitoring,
-        // update its cached price. If the shift is ≥3pp, schedule a re-analysis
-        // via gapWatch so the next cycle picks it up with fresh crowd data.
+        // update its cached price. If the shift is ≥6pp and no order is pending,
+        // schedule a re-analysis via gapWatch so the next cycle picks it up with fresh crowd data.
         const mw = _marketTokenWatch.get(tokenId);
         if (mw && bid >= 0.02) {
           const prev = mw.lastPrice ?? bid;
           mw.lastPrice = bid;
-          if (Math.abs(bid - prev) >= 0.03) {
+          if (Math.abs(bid - prev) >= 0.06) {
             const { asset, conditionId } = mw;
+            if (state[asset].pendingLimitOrders.has(conditionId)) return;
             clearTimeout(state[asset].oddsShiftTimer);
             state[asset].oddsShiftTimer = setTimeout(() => {
               state[asset].oddsShiftTimer = null;
+              if (state[asset].pendingLimitOrders.has(conditionId)) return;
               state[asset].gapWatch.set(conditionId, Date.now());
               runCryptoCycle(asset);
             }, 2_000); // debounce 2s so a fast-moving market doesn't spam cycles
