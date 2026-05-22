@@ -111,6 +111,7 @@ const PERSIST_FIELDS = [
   ["stop-cooldown-toggle",        "checked"],
   ["mirror-signal-toggle",        "checked"],
   ["favorite-mode-toggle",        "checked"],
+  ["binance-exit-toggle",         "checked"],
 ];
 
 function saveSettings() {
@@ -145,6 +146,7 @@ function loadSettings() {
   syncToggleLabel("stop-cooldown-toggle",    "stop-cooldown-label",    ["ON","amber"], ["OFF","dim"]);
   syncToggleLabel("mirror-signal-toggle",    "mirror-signal-label",    ["ON 🪞","red"], ["OFF","dim"]);
   syncToggleLabel("favorite-mode-toggle",    "favorite-mode-label",    ["ON ⭐","green"], ["OFF","dim"]);
+  syncToggleLabel("binance-exit-toggle",     "binance-exit-label",     ["ON 📡","green"], ["OFF","dim"]);
 }
 
 function syncToggleLabel(toggleId, labelId, onState, offState) {
@@ -193,6 +195,8 @@ function initSetup() {
     syncToggleLabel("mirror-signal-toggle", "mirror-signal-label", ["ON 🪞","red"], ["OFF","dim"]));
   $("#favorite-mode-toggle")?.addEventListener("change", () =>
     syncToggleLabel("favorite-mode-toggle", "favorite-mode-label", ["ON ⭐","green"], ["OFF","dim"]));
+  $("#binance-exit-toggle")?.addEventListener("change", () =>
+    syncToggleLabel("binance-exit-toggle", "binance-exit-label", ["ON 📡","green"], ["OFF","dim"]));
 
   $("#btn-launch").addEventListener("click", () => {
     $("#setup-error").textContent = "";
@@ -245,6 +249,7 @@ function initSetup() {
       momentumFilterThreshold: parseFloat($("#momentum-filter-threshold")?.value) || 7,
       mirrorSignal:            $("#mirror-signal-toggle")?.checked ?? false,
       favoriteMode:            $("#favorite-mode-toggle")?.checked ?? false,
+      binanceExit:             $("#binance-exit-toggle")?.checked ?? false,
       btcMakerPrice: parseFloat($("#btc-maker-price")?.value) || 50,
       ethMakerPrice: parseFloat($("#eth-maker-price")?.value) || 50,
       solMakerPrice: parseFloat($("#sol-maker-price")?.value) || 50,
@@ -823,6 +828,9 @@ const _frontrun = {
   lastFireAt:     new Map(),                              // conditionId → ms
 };
 
+// Latest Binance spot price per asset — used by binanceExit to detect gap reversals.
+const _lastSpot = { btc: null, eth: null, sol: null, xrp: null };
+
 const _FRONTRUN_SYM_BY_ASSET = { btc: "BTCUSDT", eth: "ETHUSDT", sol: "SOLUSDT", xrp: "XRPUSDT" };
 const _FRONTRUN_ASSET_BY_SYM = { BTCUSDT: "btc", ETHUSDT: "eth", SOLUSDT: "sol", XRPUSDT: "xrp" };
 
@@ -1042,6 +1050,8 @@ const priceStream = (() => {
           const toStopLoss = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             if (t.totalSecs < 45) return false;
+            // Binance exit owns the exit decision via the periodic timer — skip price stop.
+            if (state.config?.binanceExit) return false;
             // AI Maker fills need 90s grace — they may have gotten price improvement
             // (filled at 19¢ on a 50¢ bid) and the entry price might still be updating.
             const grace = t.aiMakerFill ? Math.max(stopGraceMs, 20_000) : stopGraceMs;
@@ -2023,6 +2033,7 @@ async function _runCryptoCycleInner(asset) {
     setStat(`${asset}-status`, "ERROR", "red");
     return;
   }
+  _lastSpot[asset] = spot;
 
   // Binance is always used as spot for the direction signal. Chainlink oracle has a
   // 0.5% deviation threshold — for BTC that's ~$400, so the oracle can sit $47+ stale
@@ -3809,10 +3820,25 @@ function startCryptoCountdown() {
     const trailArmPct  = (parseFloat($("#trail-arm-pct")?.value)  || state.config?.trailArmPct  || 15) / 100;
     const trailLockPct = (parseFloat($("#trail-lock-pct")?.value) || state.config?.trailLockPct || 40) / 100;
     const stopGraceMs  = (parseFloat($("#stop-grace-sec")?.value) ?? state.config?.stopGraceSec ?? 10) * 1_000;
+    const binanceExit = state.config?.binanceExit;
     for (const t of [...cryptoTrades]) {
       if (t.totalSecs < 45) continue;
       const grace = t.aiMakerFill ? Math.max(stopGraceMs, 20_000) : stopGraceMs;
       if (Date.now() - t.entryTime < grace) continue;
+      // Binance exit: exit when BTC gap flips against the trade direction.
+      // Uses real underlying price instead of Polymarket book noise — the book can
+      // briefly drop 40pp while BTC is still well above target, only to resolve at 99¢.
+      // Exit only on a true reversal: signalDir × gap <= 0.
+      if (binanceExit && _lastSpot[t.type] != null && t.priceToBeat) {
+        const gap    = _lastSpot[t.type] - t.priceToBeat;
+        const sigDir = t.signal === "BUY_UP" ? 1 : -1;
+        if (gap * sigDir <= 0) {
+          logEntry("amber", `  📡 binance exit — gap reversed (spot $${_lastSpot[t.type].toFixed(0)} vs target $${t.priceToBeat.toFixed(0)})`);
+          closePosition(t, "STOP LOSS"); refreshBtcCards(); updatePnlStat(); continue;
+        }
+        // When binanceExit is on, skip the price-based stop entirely.
+        continue;
+      }
       // Gap-flip trades use a wider 60% base stop — token oscillates before price crosses target.
       // HIGH confidence + high entry (>70¢) use 65% — same as primary WS checker — to avoid
       // firing on brief dips that recover to 97¢ resolution.
