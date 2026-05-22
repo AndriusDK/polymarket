@@ -809,6 +809,11 @@ function refreshBtcCards() {
 // priceStream can detect significant crowd-odds shifts and re-trigger analysis.
 const _marketTokenWatch = new Map();
 
+// conditionId → highest crowd price (max of upPrice/downPrice) seen during market lifetime.
+// Used to require peak-conviction confirmation before entering — markets that touched 90¢+
+// at some point have proven crowd conviction; markets stuck at 85-89¢ may be first-time spikes.
+const _marketPeakCrowd = new Map();
+
 // ── Frontrun: Binance velocity-based fast entry ──────────────────────────
 // Subscribes to Binance @aggTrade for each asset and fires a maker bid the
 // instant spot velocity widens the gap or crosses the target — before the
@@ -2065,6 +2070,13 @@ async function _runCryptoCycleInner(asset) {
     const timeRemaining = Math.round((new Date(market.endDate) - Date.now()) / 1000);
     const windowSecs    = windowMs / 1000;
 
+    // Track the highest crowd price seen for this market across all cycles.
+    {
+      const crowdNow = Math.max(market.upPrice ?? 0, market.downPrice ?? 0);
+      const prev     = _marketPeakCrowd.get(market.conditionId) ?? 0;
+      if (crowdNow > prev) _marketPeakCrowd.set(market.conditionId, crowdNow);
+    }
+
     // Pre-window gate — Polymarket lists markets 10–20 minutes before their window opens.
     // Entering pre-window is wrong for two reasons:
     //   1. priceToBeat captured before the window = wrong reference price
@@ -2286,11 +2298,18 @@ async function _runCryptoCycleInner(asset) {
       const favSignal = up >= dn ? "BUY_UP" : "BUY_DOWN";
       const gapSignal = gap > 0 ? "BUY_UP" : "BUY_DOWN";
       const mktVol    = market.volume ?? 0;
+      const peakSeen = _marketPeakCrowd.get(market.conditionId) ?? 0;
       if (favPrice < 0.85) {
         logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ < 85¢ floor — skipping`);
         analysis = { ...analysis, signal: "SKIP" };
       } else if (mktVol < 150) {
         logEntry("dim", `  ⭐ favorite — market vol $${Math.round(mktVol)} < $150 — skipping thin book`);
+        analysis = { ...analysis, signal: "SKIP" };
+      } else if (peakSeen < 0.90) {
+        logEntry("dim", `  ⭐ favorite — peak crowd ${(peakSeen*100).toFixed(0)}¢ never hit 90¢ — no conviction confirmation`);
+        analysis = { ...analysis, signal: "SKIP" };
+      } else if (timeRemaining > 120) {
+        logEntry("dim", `  ⭐ favorite — ${timeRemaining}s left > 120s — waiting for late window`);
         analysis = { ...analysis, signal: "SKIP" };
       } else if (favSignal !== gapSignal) {
         logEntry("dim", `  ⭐ favorite — favorite (${favSignal} ${(favPrice*100).toFixed(0)}¢) opposes gap (${gapSignal} ${gap >= 0 ? "+" : ""}${gap.toFixed(0)}) — skipping gap-flip`);
