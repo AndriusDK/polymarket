@@ -3814,7 +3814,11 @@ function startCryptoCountdown() {
       const grace = t.aiMakerFill ? Math.max(stopGraceMs, 20_000) : stopGraceMs;
       if (Date.now() - t.entryTime < grace) continue;
       // Gap-flip trades use a wider 60% base stop — token oscillates before price crosses target.
-      const effectiveStop = t.signalAgainstGap ? Math.max(stopLossPct, 0.60) : stopLossPct;
+      // HIGH confidence + high entry (>70¢) use 65% — same as primary WS checker — to avoid
+      // firing on brief dips that recover to 97¢ resolution.
+      const effectiveStop = t.signalAgainstGap             ? Math.max(stopLossPct, 0.60)
+        : (t.confidence === "HIGH" && t.entryPrice > 0.70) ? Math.max(stopLossPct, 0.65)
+        : stopLossPct;
       if (t.unrealizedPnl <= -t.amount * effectiveStop) { closePosition(t, "STOP LOSS"); refreshBtcCards(); updatePnlStat(); continue; }
       // Trailing stop safety net (same logic as WS handler, covers frozen price streams)
       if (trailArmPct > 0) {
