@@ -2290,33 +2290,28 @@ async function _runCryptoCycleInner(asset) {
       logEntry("amber", `  🪞 mirror — flipped ${orig} → ${analysis.signal}`);
     }
 
-    // Favorite mode: override signal to whichever side the crowd has above 80¢.
-    // Theory: the crowd is most calibrated when very confident — 80¢+ favorites
-    // win >80% of the time, and each stop-out is bounded to ~50% loss (~$2) only
-    // erases ~4 wins at 10¢/share. Below 80¢ the R/R inverts.
+    // Favorite mode: override signal to whichever side the crowd has above 85¢.
+    // Theory: the crowd is most calibrated when very confident — 85¢+ favorites
+    // win >85% of the time, and each stop-out is bounded to ~50% loss (~$2) only
+    // erases ~4 wins at 10¢/share. Below 85¢ the R/R inverts.
     // IMPORTANT: only apply when the favorite agrees with the gap direction.
-    // If the crowd says DOWN at 80¢ but the gap is positive (BTC above target),
+    // If the crowd says DOWN at 85¢ but the gap is positive (BTC above target),
     // that's a gap-flip bet — the crowd is predicting reversal. Our rule already
     // assigns BUY_UP in that case; overriding it means betting against the gap
     // at high stakes. Those resolve at 3¢ and cost -$3+ per stop-out.
-    // Overnight (10PM-8AM ET): raise floor to 85¢ and require VOL ≥ $150.
-    // Thin overnight books + volatile BTC turn 80-84¢ entries into coin-flips.
+    // Also require minimum $150 market volume — thin books amplify reversals.
     if (c.favoriteMode && analysis.signal !== "SKIP") {
       const up = market.upPrice ?? 0.5;
       const dn = market.downPrice ?? 0.5;
       const favPrice  = Math.max(up, dn);
       const favSignal = up >= dn ? "BUY_UP" : "BUY_DOWN";
       const gapSignal = gap > 0 ? "BUY_UP" : "BUY_DOWN";
-      const etHour    = new Date(Date.now() - 4 * 3600_000).getUTCHours();
-      const isOvernight = etHour >= 22 || etHour < 8;
-      const floor       = isOvernight ? 0.85 : 0.80;
-      const minVol      = isOvernight ? 150 : 0;
-      const mktVol      = market.volume ?? 0;
-      if (favPrice < floor) {
-        logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ < ${(floor*100).toFixed(0)}¢ floor${isOvernight ? " (overnight)" : ""} — skipping`);
+      const mktVol    = market.volume ?? 0;
+      if (favPrice < 0.85) {
+        logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ < 85¢ floor — skipping`);
         analysis = { ...analysis, signal: "SKIP" };
-      } else if (isOvernight && mktVol < minVol) {
-        logEntry("dim", `  ⭐ favorite — overnight vol $${Math.round(mktVol)} < $${minVol} — skipping thin book`);
+      } else if (mktVol < 150) {
+        logEntry("dim", `  ⭐ favorite — market vol $${Math.round(mktVol)} < $150 — skipping thin book`);
         analysis = { ...analysis, signal: "SKIP" };
       } else if (favSignal !== gapSignal) {
         logEntry("dim", `  ⭐ favorite — favorite (${favSignal} ${(favPrice*100).toFixed(0)}¢) opposes gap (${gapSignal} ${gap >= 0 ? "+" : ""}${gap.toFixed(0)}) — skipping gap-flip`);
@@ -2357,8 +2352,8 @@ async function _runCryptoCycleInner(asset) {
     // Low-odds exception: HIGH conf + ≥15% edge can enter down to 43% — strong directional signal
     // with clear mispricing justifies bypassing the crowd-sentiment floor.
     const highConfLowOdds  = analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= 0.15 && entryOdds >= 0.43;
-    // Favorite mode targets ≥80¢ favorites — bypass odds caps for those.
-    const favoriteBypass = c.favoriteMode && entryOdds >= 0.80;
+    // Favorite mode targets ≥85¢ favorites — bypass odds caps for those.
+    const favoriteBypass = c.favoriteMode && entryOdds >= 0.85;
     const oddsOk      = analysis.signal === "SKIP" || favoriteBypass || ((entryOdds >= minOdds || highConfLowOdds) && (entryOdds <= maxOdds || highConfHighOdds || nearResHighConf));
 
     // Gap-crossing guard: only applies when signal bets AGAINST the current gap direction.
