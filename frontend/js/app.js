@@ -2299,14 +2299,24 @@ async function _runCryptoCycleInner(asset) {
     // that's a gap-flip bet — the crowd is predicting reversal. Our rule already
     // assigns BUY_UP in that case; overriding it means betting against the gap
     // at high stakes. Those resolve at 3¢ and cost -$3+ per stop-out.
+    // Overnight (10PM-8AM ET): raise floor to 85¢ and require VOL ≥ $150.
+    // Thin overnight books + volatile BTC turn 80-84¢ entries into coin-flips.
     if (c.favoriteMode && analysis.signal !== "SKIP") {
       const up = market.upPrice ?? 0.5;
       const dn = market.downPrice ?? 0.5;
       const favPrice  = Math.max(up, dn);
       const favSignal = up >= dn ? "BUY_UP" : "BUY_DOWN";
       const gapSignal = gap > 0 ? "BUY_UP" : "BUY_DOWN";
-      if (favPrice < 0.80) {
-        logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ < 80¢ floor — skipping`);
+      const etHour    = new Date(Date.now() - 4 * 3600_000).getUTCHours();
+      const isOvernight = etHour >= 22 || etHour < 8;
+      const floor       = isOvernight ? 0.85 : 0.80;
+      const minVol      = isOvernight ? 150 : 0;
+      const mktVol      = market.volume ?? 0;
+      if (favPrice < floor) {
+        logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ < ${(floor*100).toFixed(0)}¢ floor${isOvernight ? " (overnight)" : ""} — skipping`);
+        analysis = { ...analysis, signal: "SKIP" };
+      } else if (isOvernight && mktVol < minVol) {
+        logEntry("dim", `  ⭐ favorite — overnight vol $${Math.round(mktVol)} < $${minVol} — skipping thin book`);
         analysis = { ...analysis, signal: "SKIP" };
       } else if (favSignal !== gapSignal) {
         logEntry("dim", `  ⭐ favorite — favorite (${favSignal} ${(favPrice*100).toFixed(0)}¢) opposes gap (${gapSignal} ${gap >= 0 ? "+" : ""}${gap.toFixed(0)}) — skipping gap-flip`);
