@@ -1044,6 +1044,10 @@ const priceStream = (() => {
             for (const t of toConvictionExit) closePosition(t, "CONVICTION EXIT");
           }
 
+          // Max-lock at 99¢: token is near binary resolution — grab it before any dip can steal the win.
+          const toMaxLock = state.trades.filter(t => t.tokenId === tokenId && bid >= 0.99);
+          for (const t of toMaxLock) closePosition(t, "MAX LOCK");
+
           const toStopLoss = state.trades.filter(t => {
             if (t.tokenId !== tokenId) return false;
             if (t.totalSecs < 45) return false;
@@ -3809,6 +3813,8 @@ function startCryptoCountdown() {
     const stopGraceMs  = (parseFloat($("#stop-grace-sec")?.value) ?? state.config?.stopGraceSec ?? 10) * 1_000;
     for (const t of [...cryptoTrades]) {
       if (t.totalSecs < 45) continue;
+      // Max-lock at 99¢: safety net for frozen WS — grab the near-resolution win.
+      if (t.currentPrice >= 0.99) { closePosition(t, "MAX LOCK"); refreshBtcCards(); updatePnlStat(); continue; }
       const grace = t.aiMakerFill ? Math.max(stopGraceMs, 20_000) : stopGraceMs;
       if (Date.now() - t.entryTime < grace) continue;
       const effectiveStop = stopLossPct;
