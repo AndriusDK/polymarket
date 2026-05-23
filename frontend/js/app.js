@@ -2309,11 +2309,11 @@ async function _runCryptoCycleInner(asset) {
       } else if (mktVol < 150) {
         logEntry("dim", `  ⭐ favorite — market vol $${Math.round(mktVol)} < $150 — skipping thin book`);
         analysis = { ...analysis, signal: "SKIP" };
-      } else if (peakSeen < 0.90) {
-        logEntry("dim", `  ⭐ favorite — peak crowd ${(peakSeen*100).toFixed(0)}¢ never hit 90¢ — no conviction confirmation`);
+      } else if (peakSeen < 0.87) {
+        logEntry("dim", `  ⭐ favorite — peak crowd ${(peakSeen*100).toFixed(0)}¢ never hit 87¢ — no conviction confirmation`);
         analysis = { ...analysis, signal: "SKIP" };
-      } else if (timeRemaining > 120) {
-        logEntry("dim", `  ⭐ favorite — ${timeRemaining}s left > 120s — waiting for late window`);
+      } else if (timeRemaining > 150) {
+        logEntry("dim", `  ⭐ favorite — ${timeRemaining}s left > 150s — waiting for late window`);
         analysis = { ...analysis, signal: "SKIP" };
       } else if (favSignal !== gapSignal) {
         logEntry("dim", `  ⭐ favorite — favorite (${favSignal} ${(favPrice*100).toFixed(0)}¢) opposes gap (${gapSignal} ${gap >= 0 ? "+" : ""}${gap.toFixed(0)}) — skipping gap-flip`);
