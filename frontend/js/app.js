@@ -245,6 +245,7 @@ function initSetup() {
       momentumFilterThreshold: parseFloat($("#momentum-filter-threshold")?.value) || 7,
       mirrorSignal:            $("#mirror-signal-toggle")?.checked ?? false,
       favoriteMode:            $("#favorite-mode-toggle")?.checked ?? false,
+      favFloorPct:             parseFloat($("#fav-floor-pct")?.value) || 85,
       btcMakerPrice: parseFloat($("#btc-maker-price")?.value) || 50,
       ethMakerPrice: parseFloat($("#eth-maker-price")?.value) || 50,
       solMakerPrice: parseFloat($("#sol-maker-price")?.value) || 50,
@@ -2303,14 +2304,16 @@ async function _runCryptoCycleInner(asset) {
       const gapSignal = gap > 0 ? "BUY_UP" : "BUY_DOWN";
       const mktVol    = market.volume ?? 0;
       const peakSeen = _marketPeakCrowd.get(market.conditionId) ?? 0;
-      if (favPrice < 0.85) {
-        logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ < 85¢ floor — skipping`);
+      const favFloor = (c.favFloorPct ?? 85) / 100;
+      const favPeak  = Math.max(favFloor + 0.02, 0.62);   // conviction bar = floor+2¢, min 62¢
+      if (favPrice < favFloor) {
+        logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ < ${(favFloor*100).toFixed(0)}¢ floor — skipping`);
         analysis = { ...analysis, signal: "SKIP" };
       } else if (mktVol < 150) {
         logEntry("dim", `  ⭐ favorite — market vol $${Math.round(mktVol)} < $150 — skipping thin book`);
         analysis = { ...analysis, signal: "SKIP" };
-      } else if (peakSeen < 0.87) {
-        logEntry("dim", `  ⭐ favorite — peak crowd ${(peakSeen*100).toFixed(0)}¢ never hit 87¢ — no conviction confirmation`);
+      } else if (peakSeen < favPeak) {
+        logEntry("dim", `  ⭐ favorite — peak crowd ${(peakSeen*100).toFixed(0)}¢ never hit ${(favPeak*100).toFixed(0)}¢ — no conviction confirmation`);
         analysis = { ...analysis, signal: "SKIP" };
       } else if (timeRemaining > 150) {
         logEntry("dim", `  ⭐ favorite — ${timeRemaining}s left > 150s — waiting for late window`);
@@ -2354,8 +2357,8 @@ async function _runCryptoCycleInner(asset) {
     // Low-odds exception: HIGH conf + ≥15% edge can enter down to 43% — strong directional signal
     // with clear mispricing justifies bypassing the crowd-sentiment floor.
     const highConfLowOdds  = analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= 0.15 && entryOdds >= 0.43;
-    // Favorite mode targets ≥85¢ favorites — bypass odds caps for those.
-    const favoriteBypass = c.favoriteMode && entryOdds >= 0.85;
+    // Favorite mode targets ≥floor¢ favorites — bypass odds caps for those.
+    const favoriteBypass = c.favoriteMode && entryOdds >= (c.favFloorPct ?? 85) / 100;
     const oddsOk      = analysis.signal === "SKIP" || favoriteBypass || ((entryOdds >= minOdds || highConfLowOdds) && (entryOdds <= maxOdds || highConfHighOdds || nearResHighConf));
 
     // Gap-crossing guard: only applies when signal bets AGAINST the current gap direction.
