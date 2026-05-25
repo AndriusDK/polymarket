@@ -832,6 +832,25 @@ const _frontrun = {
 const _FRONTRUN_SYM_BY_ASSET = { btc: "BTCUSDT", eth: "ETHUSDT", sol: "SOLUSDT", xrp: "XRPUSDT" };
 const _FRONTRUN_ASSET_BY_SYM = { BTCUSDT: "btc", ETHUSDT: "eth", SOLUSDT: "sol", XRPUSDT: "xrp" };
 
+// Aggressive buy/sell flow imbalance over the last `windowMs` of Binance aggTrades.
+// Returns { imbalance: -1..+1, buyVol, sellVol } or null if no data.
+// Positive = net aggressive buying (taker lifting asks), negative = net selling.
+// Passive metric only — never gates a trade.
+function frontrunFlowImbalance(asset, windowMs = 30_000) {
+  const buf = _frontrun.ticks[asset];
+  if (!buf || !buf.length) return null;
+  const cutoff = Date.now() - windowMs;
+  let buyVol = 0, sellVol = 0;
+  for (const tick of buf) {
+    if (tick.t < cutoff || tick.q == null) continue;
+    if (tick.m) sellVol += tick.q;   // buyer is maker → aggressor sold
+    else        buyVol  += tick.q;   // seller is maker → aggressor bought
+  }
+  const total = buyVol + sellVol;
+  if (total <= 0) return null;
+  return { imbalance: (buyVol - sellVol) / total, buyVol, sellVol };
+}
+
 function startFrontrun() {
   if (_frontrun.ws) return;
   const streams = Object.values(_FRONTRUN_SYM_BY_ASSET).map(s => s.toLowerCase() + "@aggTrade").join("/");
@@ -852,7 +871,9 @@ function startFrontrun() {
     if (!isFinite(price) || price <= 0) return;
     const t   = d.T ?? Date.now();
     const buf = _frontrun.ticks[asset];
-    buf.push({ t, p: price });
+    // q = trade qty, m = "buyer is maker" → true means the aggressor SOLD into the bid,
+    // false means the aggressor BOUGHT from the ask. Captured passively for flow imbalance.
+    buf.push({ t, p: price, q: parseFloat(d.q) || 0, m: d.m === true });
     const cutoff = t - 35_000;
     while (buf.length && buf[0].t < cutoff) buf.shift();
     _frontrunEvaluate(asset, price, t);
@@ -2934,7 +2955,9 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
   const secsLeft     = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
   const peakAtEntry  = (_marketPeakCrowd?.get(market.conditionId) ?? 0);
   const momStr       = analysis.momentum != null ? `${analysis.momentum >= 0 ? "+" : ""}${analysis.momentum.toFixed(0)}/m` : "—";
-  const ctxLine      = `t=${secsLeft}s  peak=${(peakAtEntry * 100).toFixed(0)}¢  mom=${momStr}  sl=${c.stopLossPct ?? 25}%${c.favoriteMode ? `  fl=${c.favFloorPct ?? 85}¢` : ""}`;
+  const flow         = frontrunFlowImbalance(asset);
+  const flowStr      = flow ? `${flow.imbalance >= 0 ? "+" : ""}${(flow.imbalance * 100).toFixed(0)}%` : "—";
+  const ctxLine      = `t=${secsLeft}s  peak=${(peakAtEntry * 100).toFixed(0)}¢  mom=${momStr}  flow=${flowStr}  sl=${c.stopLossPct ?? 25}%${c.favoriteMode ? `  fl=${c.favFloorPct ?? 85}¢` : ""}`;
   const searchQ   = cfg.keywords[0].replace(/ /g, "+");
   const marketUrl = market.slug
     ? `https://polymarket.com/event/${market.slug}`
@@ -2967,6 +2990,9 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     momentum:        analysis.momentum ?? null,      // pts/min at entry (for spike detection)
     volatility:      analysis.volatility ?? null,    // ±pts/candle range at entry
     volSpikeRatio:   analysis.volSpikeRatio ?? null, // last candle vol / avg (>2 = spike)
+    flowImbalance:   flow ? flow.imbalance : null,   // Binance aggressive buy/sell flow -1..+1 (passive)
+    flowBuyVol:      flow ? flow.buyVol : null,
+    flowSellVol:     flow ? flow.sellVol : null,
     signalAgainstGap: (analysis.signal === "BUY_UP"   && (analysis.gap ?? 0) < 0) ||
                       (analysis.signal === "BUY_DOWN" && (analysis.gap ?? 0) > 0), // gap-flip?
     priceHistory:    [],
@@ -3488,6 +3514,7 @@ function convertFilledSweepToTrade(asset, pending, fillPrice) {
   const market  = pending.market;
   const isUp    = pending.signal === "BUY_UP";
   const secsLeft = Math.max(1, Math.round((pending.endDateMs - Date.now()) / 1000));
+  const _flow   = frontrunFlowImbalance(asset);
 
   const trade = {
     id:            Date.now() + state.stats.trades,
@@ -3517,7 +3544,8 @@ function convertFilledSweepToTrade(asset, pending, fillPrice) {
       const _peak   = (_marketPeakCrowd?.get(market.conditionId) ?? 0);
       const _mom    = pending.analysis?.momentum;
       const _momStr = _mom != null ? `${_mom >= 0 ? "+" : ""}${_mom.toFixed(0)}/m` : "—";
-      const _ctx    = `t=${secsLeft}s  peak=${(_peak * 100).toFixed(0)}¢  mom=${_momStr}  sl=${c.stopLossPct ?? 25}%${c.favoriteMode ? `  fl=${c.favFloorPct ?? 85}¢` : ""}`;
+      const _flowStr = _flow ? `${_flow.imbalance >= 0 ? "+" : ""}${(_flow.imbalance * 100).toFixed(0)}%` : "—";
+      const _ctx    = `t=${secsLeft}s  peak=${(_peak * 100).toFixed(0)}¢  mom=${_momStr}  flow=${_flowStr}  sl=${c.stopLossPct ?? 25}%${c.favoriteMode ? `  fl=${c.favFloorPct ?? 85}¢` : ""}`;
       const _base   = pending.aiMaker
         ? (pending.analysis?.reasoning ?? `AI maker bid filled at ${(fillPrice*100).toFixed(1)}¢`)
         : `Trend-sweep maker bid filled at ${(fillPrice*100).toFixed(1)}¢`;
@@ -3526,6 +3554,9 @@ function convertFilledSweepToTrade(asset, pending, fillPrice) {
     momentum:      pending.analysis?.momentum ?? null,
     volatility:    pending.analysis?.volatility ?? null,
     volSpikeRatio: pending.analysis?.volSpikeRatio ?? null,
+    flowImbalance: _flow ? _flow.imbalance : null,   // Binance aggressive buy/sell flow -1..+1 (passive)
+    flowBuyVol:    _flow ? _flow.buyVol : null,
+    flowSellVol:   _flow ? _flow.sellVol : null,
     signalAgainstGap: pending.aiMaker
                      ? ((pending.signal === "BUY_UP"   && (pending.analysis?.gap ?? 0) < 0) ||
                         (pending.signal === "BUY_DOWN" && (pending.analysis?.gap ?? 0) > 0))
