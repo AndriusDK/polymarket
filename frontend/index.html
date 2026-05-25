@@ -191,6 +191,10 @@
           <label class="field-label">⭐ Fav Floor (¢)</label>
           <input type="number" id="fav-floor-pct" class="neon-input" value="85" min="60" max="95" step="1" title="Minimum crowd probability (¢) for the top side to qualify as a favorite-mode entry. Lower = earlier entry, bigger potential gain but more false signals." />
         </div>
+        <div>
+          <label class="field-label">⭐ Fav Ceiling (¢)</label>
+          <input type="number" id="fav-ceiling-pct" class="neon-input" value="90" min="80" max="99" step="1" title="Maximum crowd probability (¢) for a favorite-mode entry. Above this the R/R is poor (tiny upside, full downside on a reversal). 90¢ skips the 91-99¢ entries that drive most losses." />
+        </div>
       </div>
 
       <div class="row-2">
@@ -480,6 +484,7 @@
       <button id="btn-sol" class="toolbar-btn sol-btn">◎ SOL MODE</button>
       <button id="btn-xrp" class="toolbar-btn xrp-btn">✦ XRP MODE</button>
       <button id="btn-stop" class="toolbar-btn" disabled>■ STOP</button>
+      <button id="btn-export" class="toolbar-btn" title="Download all closed trades as CSV for offline analysis">⤓ EXPORT CSV</button>
       <button id="btn-settings" class="toolbar-btn danger">◀ SETTINGS</button>
       <div class="toolbar-spacer"></div>
       <span class="toolbar-hint">YYZ · Scroll log ↑↓</span>

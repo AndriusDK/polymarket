@@ -246,6 +246,7 @@ function initSetup() {
       mirrorSignal:            $("#mirror-signal-toggle")?.checked ?? false,
       favoriteMode:            $("#favorite-mode-toggle")?.checked ?? false,
       favFloorPct:             parseFloat($("#fav-floor-pct")?.value) || 85,
+      favCeilingPct:           parseFloat($("#fav-ceiling-pct")?.value) || 90,
       btcMakerPrice: parseFloat($("#btc-maker-price")?.value) || 50,
       ethMakerPrice: parseFloat($("#eth-maker-price")?.value) || 50,
       solMakerPrice: parseFloat($("#sol-maker-price")?.value) || 50,
@@ -423,6 +424,7 @@ function initDashboard() {
   setStat("budget", `$${c.maxDaily.toFixed(2)}`);
 
   $("#btn-stop").addEventListener("click", stopBot);
+  $("#btn-export")?.addEventListener("click", exportTradesCsv);
   $("#btn-settings").addEventListener("click", () => {
     stopBot();
     showScreen("setup-screen");
@@ -1406,7 +1408,29 @@ function closePosition(trade, reason) {
   trade.realizedPnl = realized;  // stored so SELL fill reconciliation can update it
   state.realizedPnl = (state.realizedPnl || 0) + realized;
   if (realized > 0) state.wins++; else if (realized < 0) state.losses++;
-  state.tradeHistory.push({ ts: Date.now(), pnl: realized, asset: trade.type, reason });
+  state.tradeHistory.push({
+    ts: Date.now(), pnl: realized, asset: trade.type, reason,
+    // analysis fields — persisted so the flow/peak/odds signals can be correlated
+    // against outcomes after a session (exported via the CSV button).
+    signal:        trade.signal,
+    entryPrice:    trade.entryPrice,
+    exitPrice:     trade.exitPrice ?? trade.currentPrice,
+    confidence:    trade.confidence,
+    gap:           trade.gap,
+    edge:          trade.edge,
+    momentum:      trade.momentum,
+    volatility:    trade.volatility,
+    volSpikeRatio: trade.volSpikeRatio,
+    flowImbalance: trade.flowImbalance,
+    flowBuyVol:    trade.flowBuyVol,
+    flowSellVol:   trade.flowSellVol,
+    peakEntry:     trade.peakAtEntry ?? null,
+    signalAgainstGap: trade.signalAgainstGap,
+    favoriteMode:  state.config?.favoriteMode ?? false,
+    secsAtClose:   trade.secsAtClose,
+    totalSecs:     trade.totalSecs,
+    mode:          trade.mode,
+  });
 
   if (willShadow) {
     state.shadowTrades = state.shadowTrades || [];
@@ -1558,6 +1582,43 @@ function closePosition(trade, reason) {
 
   setStat("positions", String(state.trades.length));
   updatePnlStat();
+}
+
+// Dump all closed trades (with their passive analysis fields) to a CSV download,
+// so the flow/peak/odds signals can be correlated against win/loss offline.
+function exportTradesCsv() {
+  const rows = state.tradeHistory || [];
+  if (!rows.length) {
+    logEntry("warn", "  ⤓ No closed trades to export yet.");
+    return;
+  }
+  const cols = [
+    "ts", "asset", "mode", "favoriteMode", "signal", "reason",
+    "entryPrice", "exitPrice", "pnl", "confidence",
+    "gap", "edge", "momentum", "volatility", "volSpikeRatio",
+    "flowImbalance", "flowBuyVol", "flowSellVol",
+    "peakEntry", "signalAgainstGap", "secsAtClose", "totalSecs",
+  ];
+  const esc = (v) => {
+    if (v == null) return "";
+    if (typeof v === "number") return String(v);
+    const s = String(v).replace(/"/g, '""');
+    return /[",\n]/.test(s) ? `"${s}"` : s;
+  };
+  const lines = [cols.join(",")];
+  for (const r of rows) {
+    lines.push(cols.map(k => k === "ts" ? new Date(r.ts).toISOString() : esc(r[k])).join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `polymarket-trades-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  logEntry("info", `  ⤓ Exported ${rows.length} closed trades to CSV.`);
 }
 
 function updateResolutionBadge(shadow) {
@@ -2325,10 +2386,14 @@ async function _runCryptoCycleInner(asset) {
       const gapSignal = gap > 0 ? "BUY_UP" : "BUY_DOWN";
       const mktVol    = market.volume ?? 0;
       const peakSeen = _marketPeakCrowd.get(market.conditionId) ?? 0;
-      const favFloor = (c.favFloorPct ?? 85) / 100;
-      const favPeak  = Math.max(favFloor + 0.02, 0.62);   // conviction bar = floor+2¢, min 62¢
+      const favFloor   = (c.favFloorPct ?? 85) / 100;
+      const favCeiling = (c.favCeilingPct ?? 90) / 100;
+      const favPeak    = Math.max(favFloor + 0.02, 0.62);   // conviction bar = floor+2¢, min 62¢
       if (favPrice < favFloor) {
         logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ < ${(favFloor*100).toFixed(0)}¢ floor — skipping`);
+        analysis = { ...analysis, signal: "SKIP" };
+      } else if (favPrice > favCeiling) {
+        logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ > ${(favCeiling*100).toFixed(0)}¢ ceiling — bad R/R, skipping`);
         analysis = { ...analysis, signal: "SKIP" };
       } else if (mktVol < 150) {
         logEntry("dim", `  ⭐ favorite — market vol $${Math.round(mktVol)} < $150 — skipping thin book`);
@@ -2379,7 +2444,7 @@ async function _runCryptoCycleInner(asset) {
     // with clear mispricing justifies bypassing the crowd-sentiment floor.
     const highConfLowOdds  = analysis.confidence === "HIGH" && (analysis.absEdge ?? 0) >= 0.15 && entryOdds >= 0.43;
     // Favorite mode targets ≥floor¢ favorites — bypass odds caps for those.
-    const favoriteBypass = c.favoriteMode && entryOdds >= (c.favFloorPct ?? 85) / 100;
+    const favoriteBypass = c.favoriteMode && entryOdds >= (c.favFloorPct ?? 85) / 100 && entryOdds <= (c.favCeilingPct ?? 90) / 100;
     const oddsOk      = analysis.signal === "SKIP" || favoriteBypass || ((entryOdds >= minOdds || highConfLowOdds) && (entryOdds <= maxOdds || highConfHighOdds || nearResHighConf));
 
     // Gap-crossing guard: only applies when signal bets AGAINST the current gap direction.
@@ -2993,6 +3058,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     flowImbalance:   flow ? flow.imbalance : null,   // Binance aggressive buy/sell flow -1..+1 (passive)
     flowBuyVol:      flow ? flow.buyVol : null,
     flowSellVol:     flow ? flow.sellVol : null,
+    peakAtEntry,                                     // crowd peak before entry (passive analysis)
     signalAgainstGap: (analysis.signal === "BUY_UP"   && (analysis.gap ?? 0) < 0) ||
                       (analysis.signal === "BUY_DOWN" && (analysis.gap ?? 0) > 0), // gap-flip?
     priceHistory:    [],
@@ -3557,6 +3623,7 @@ function convertFilledSweepToTrade(asset, pending, fillPrice) {
     flowImbalance: _flow ? _flow.imbalance : null,   // Binance aggressive buy/sell flow -1..+1 (passive)
     flowBuyVol:    _flow ? _flow.buyVol : null,
     flowSellVol:   _flow ? _flow.sellVol : null,
+    peakAtEntry:   (_marketPeakCrowd?.get(market.conditionId) ?? 0),  // crowd peak before entry (passive)
     signalAgainstGap: pending.aiMaker
                      ? ((pending.signal === "BUY_UP"   && (pending.analysis?.gap ?? 0) < 0) ||
                         (pending.signal === "BUY_DOWN" && (pending.analysis?.gap ?? 0) > 0))
