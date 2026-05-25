@@ -2931,7 +2931,10 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     `Gap: ${analysis.gap >= 0 ? "+" : ""}$${analysis.gap.toFixed(pd)}`
   );
 
-  const secsLeft  = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
+  const secsLeft     = Math.max(1, Math.round((new Date(market.endDate) - Date.now()) / 1000));
+  const peakAtEntry  = (_marketPeakCrowd?.get(market.conditionId) ?? 0);
+  const momStr       = analysis.momentum != null ? `${analysis.momentum >= 0 ? "+" : ""}${analysis.momentum.toFixed(0)}/m` : "—";
+  const ctxLine      = `t=${secsLeft}s  peak=${(peakAtEntry * 100).toFixed(0)}¢  mom=${momStr}  sl=${c.stopLossPct ?? 25}%${c.favoriteMode ? `  fl=${c.favFloorPct ?? 85}¢` : ""}`;
   const searchQ   = cfg.keywords[0].replace(/ /g, "+");
   const marketUrl = market.slug
     ? `https://polymarket.com/event/${market.slug}`
@@ -2960,7 +2963,7 @@ async function placeCryptoTrade(asset, analysis, { spot, priceToBeat }) {
     priceToBeat,
     gap:             analysis.gap,
     edge:            analysis.edge,
-    reasoning:       analysis.reasoning ?? "",
+    reasoning:       (analysis.reasoning ?? "") + "\n" + ctxLine,
     momentum:        analysis.momentum ?? null,      // pts/min at entry (for spike detection)
     volatility:      analysis.volatility ?? null,    // ±pts/candle range at entry
     volSpikeRatio:   analysis.volSpikeRatio ?? null, // last candle vol / avg (>2 = spike)
@@ -3510,9 +3513,16 @@ function convertFilledSweepToTrade(asset, pending, fillPrice) {
     priceToBeat:   pending.priceToBeat ?? null,
     gap:           pending.analysis?.gap ?? null,
     edge:          pending.analysis?.edge ?? null,
-    reasoning:     pending.aiMaker
-                     ? (pending.analysis?.reasoning ?? `AI maker bid filled at ${(fillPrice*100).toFixed(1)}¢`)
-                     : `Trend-sweep maker bid filled at ${(fillPrice*100).toFixed(1)}¢`,
+    reasoning:     (() => {
+      const _peak   = (_marketPeakCrowd?.get(market.conditionId) ?? 0);
+      const _mom    = pending.analysis?.momentum;
+      const _momStr = _mom != null ? `${_mom >= 0 ? "+" : ""}${_mom.toFixed(0)}/m` : "—";
+      const _ctx    = `t=${secsLeft}s  peak=${(_peak * 100).toFixed(0)}¢  mom=${_momStr}  sl=${c.stopLossPct ?? 25}%${c.favoriteMode ? `  fl=${c.favFloorPct ?? 85}¢` : ""}`;
+      const _base   = pending.aiMaker
+        ? (pending.analysis?.reasoning ?? `AI maker bid filled at ${(fillPrice*100).toFixed(1)}¢`)
+        : `Trend-sweep maker bid filled at ${(fillPrice*100).toFixed(1)}¢`;
+      return _base + "\n" + _ctx;
+    })(),
     momentum:      pending.analysis?.momentum ?? null,
     volatility:    pending.analysis?.volatility ?? null,
     volSpikeRatio: pending.analysis?.volSpikeRatio ?? null,
