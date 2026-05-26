@@ -247,6 +247,7 @@ function initSetup() {
       favoriteMode:            $("#favorite-mode-toggle")?.checked ?? false,
       favFloorPct:             parseFloat($("#fav-floor-pct")?.value) || 85,
       favCeilingPct:           parseFloat($("#fav-ceiling-pct")?.value) || 90,
+      favMinGapPct:            parseFloat($("#fav-min-gap-pct")?.value) || 0.05,
       btcMakerPrice: parseFloat($("#btc-maker-price")?.value) || 50,
       ethMakerPrice: parseFloat($("#eth-maker-price")?.value) || 50,
       solMakerPrice: parseFloat($("#sol-maker-price")?.value) || 50,
@@ -2389,11 +2390,16 @@ async function _runCryptoCycleInner(asset) {
       const favFloor   = (c.favFloorPct ?? 85) / 100;
       const favCeiling = (c.favCeilingPct ?? 90) / 100;
       const favPeak    = Math.max(favFloor + 0.02, 0.62);   // conviction bar = floor+2¢, min 62¢
+      const gapPct     = spot > 0 ? Math.abs(gap) / spot * 100 : 0;   // |gap| as % of spot
+      const minGapPct  = c.favMinGapPct ?? 0.05;
       if (favPrice < favFloor) {
         logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ < ${(favFloor*100).toFixed(0)}¢ floor — skipping`);
         analysis = { ...analysis, signal: "SKIP" };
       } else if (favPrice > favCeiling) {
         logEntry("dim", `  ⭐ favorite — top side ${(favPrice*100).toFixed(0)}¢ > ${(favCeiling*100).toFixed(0)}¢ ceiling — bad R/R, skipping`);
+        analysis = { ...analysis, signal: "SKIP" };
+      } else if (gapPct < minGapPct) {
+        logEntry("dim", `  ⭐ favorite — gap ${gapPct.toFixed(3)}% < ${minGapPct}% floor — coinflip, skipping`);
         analysis = { ...analysis, signal: "SKIP" };
       } else if (mktVol < 150) {
         logEntry("dim", `  ⭐ favorite — market vol $${Math.round(mktVol)} < $150 — skipping thin book`);
